@@ -76,6 +76,9 @@ export interface View {
   motion: Motion;
   platform: PlatformFx | null;
   bodyRect: BodyRect | null;
+  /** Standing on a surface (feet snapped onto it) / with a contact shadow. Optional for fakes. */
+  contact?: boolean;
+  shadow?: boolean;
   render(pose: Pose, tick: number): void;
 }
 
@@ -99,6 +102,8 @@ const SPEED: Record<Gait, number> = { walk: 70, run: 180, climb: 82 };
 const ACCEL = 700; // CSS px / s^2
 const MAX_THROW = 3800;
 const CORNER_MS = 380;
+/** Floating down (tail copter / glide): fall speed, CSS px / s. */
+export const FLOAT_FALL = 130;
 
 const now0 = (): CreatureClock => ({
   setTimeout: (fn, ms) => setTimeout(fn, ms),
@@ -142,6 +147,16 @@ interface Flight {
   keepSpin: boolean;
   ledgeId?: number;
   build?: { done: boolean };
+  /** Animation in the air instead of airUp/airDown. */
+  anim?: AnimationName;
+  /** Floating down: terminal speed + a sideways drift (tail copter / glide). */
+  float?: { drift: number };
+  /** Wall-jump kick: stop dead at `to` after `t` s and carry on with the plan from there. */
+  stopAt?: { t: number; to: Vec };
+  /** Stopped mid-air (on a kick) until the next jump. */
+  frozen?: boolean;
+  /** Barely pause after landing. */
+  quick?: boolean;
 }
 
 interface Hold {
@@ -223,7 +238,10 @@ export class Creature {
   private stepIndex = 0;
   private planStarted = 0;
   private loco: Loco | null = null;
-  private corner: { from: Vec; to: Vec; a0: number; a1: number; t0: number; next: { surface: Surface; s: number } } | null = null;
+  /** Turning a corner (or sliding down a window's side: `ms` set, `next` null = let go at the end). */
+  private corner: { from: Vec; to: Vec; a0: number; a1: number; t0: number; ms?: number; next: { surface: Surface; s: number } | null } | null = null;
+  /** Hanging off the edge of a window top: how far below his standing spot (physical px). */
+  private hangDrop = 0;
   private flight: Flight | null = null;
   private hold: Hold | null = null;
   private press: { local: Vec } | null = null;
@@ -604,6 +622,10 @@ export class Creature {
     view.facingLeft = this.facingLeft;
     view.motion = this.motion;
     view.platform = platform;
+    const contact = (this.mode === "stand" || this.mode === "corner") && !this.hangDrop;
+    const shadow = contact && this.mode === "stand" && (this.surface.kind === "floor" || isTop(this.surface));
+    view.contact = contact;
+    view.shadow = shadow;
     const m = this.motion;
     const key = [
       feet.x.toFixed(1),
@@ -615,6 +637,8 @@ export class Creature {
       m.shear.toFixed(3),
       m.ghosts.length,
       platform ? `${platform.build.toFixed(2)}/${platform.fade.toFixed(2)}/${platform.y.toFixed(0)}` : "",
+      contact,
+      shadow,
     ].join(",");
     if (key !== this.placementKey) {
       this.placementKey = key;
@@ -930,7 +954,7 @@ export class Creature {
 
   private stepCorner(now: number): void {
     const c = this.corner!;
-    const t = Math.min(1, (now - c.t0) / CORNER_MS);
+    const t = Math.min(1, (now - c.t0) / (c.ms ?? CORNER_MS));
     const e = t * t * (3 - 2 * t);
     this.body.x = c.from.x + (c.to.x - c.from.x) * e;
     this.body.y = c.from.y + (c.to.y - c.from.y) * e;
@@ -941,6 +965,14 @@ export class Creature {
   private finishCorner(): void {
     const c = this.corner!;
     this.corner = null;
+    this.body.x = c.to.x;
+    this.body.y = c.to.y;
+    if (!c.next) {
+      // The bottom of a window's side: let go and drop onto whatever is below.
+      this.event("slide-off");
+      this.launch({ x: 0, y: 0 }, { planned: true, panic: false });
+      return;
+    }
     this.surface = c.next.surface;
     this.s = c.next.s;
     this.body.x = c.to.x;
@@ -953,7 +985,11 @@ export class Creature {
 
   // ----------------------------------------------------------- flying
 
-  private launch(v: Vec, o: { planned: boolean; panic: boolean; canSplat?: boolean; drag?: boolean; keepSpin?: boolean; ledgeId?: number; build?: boolean }): void {
+  private launch(
+    v: Vec,
+    o: { planned: boolean; panic: boolean; canSplat?: boolean; drag?: boolean; keepSpin?: boolean; ledgeId?: number; build?: boolean; extra?: Partial<Flight> },
+  ): void {
+    this.unhang(false);
     this.mode = "air";
     this.loco = null;
     this.body.vx = v.x;
@@ -967,6 +1003,7 @@ export class Creature {
       keepSpin: o.keepSpin ?? false,
       ledgeId: o.ledgeId,
       build: o.build ? { done: false } : undefined,
+      ...o.extra,
     };
     if (this.pollTimer !== null) this.clock.clearTimeout(this.pollTimer);
     this.pollTimer = null;
@@ -982,9 +1019,28 @@ export class Creature {
     const f = this.flight!;
     const w = this.world!;
     const u = w.scale;
+    if (f.frozen) return; // kicking off a window's side: the next jump launches from here
+    if (f.stopAt && f.airTime + dt >= f.stopAt.t) {
+      this.body.x = f.stopAt.to.x;
+      this.body.y = f.stopAt.to.y;
+      this.body.vx = this.body.vy = 0;
+      f.stopAt = undefined;
+      f.frozen = true;
+      this.motion = CALM;
+      this.event("kick");
+      this.nextStep();
+      return;
+    }
+    if (f.float) {
+      // Floating down: slow fall, a lazy sideways sway.
+      const sway = 0.65 + 0.35 * Math.sin(f.airTime * 2.4);
+      this.body.vx = f.float.drift * u * sway;
+      this.body.vy = Math.min(this.body.vy, FLOAT_FALL * u);
+    }
     const extra = this.platform && !this.platform.breaking ? [this.platform.ledge] : undefined;
     const contacts = stepAir(this.body, w, dt, { drag: f.drag, canSplat: f.canSplat, extra, airTime: f.airTime, keepSpin: f.keepSpin });
     f.airTime += dt;
+    if (f.float) this.body.vy = Math.min(this.body.vy, FLOAT_FALL * u);
     if (f.build && !f.build.done && this.body.vy >= 0) {
       // The top of the build jump: conjure the platform right under his feet.
       f.build.done = true;
@@ -1026,7 +1082,8 @@ export class Creature {
     const f = this.flight;
     if (!f || this.animator.animation === "crouch") return;
     let want: AnimationName;
-    if (f.panic) want = chaosAnim("fall_flail");
+    if (f.anim && !f.panic) want = f.anim;
+    else if (f.panic) want = chaosAnim("fall_flail");
     else if (!f.planned && Math.abs(this.body.spin) > 260) want = "tumble";
     else want = this.body.vy < -60 * this.u ? "airUp" : "airDown";
     if (this.animator.animation !== want) this.animator.play(want);
@@ -1061,7 +1118,7 @@ export class Creature {
       this.animator.play(this.restAnim());
       this.animator.interject((_, base) => landKeys(c.speed, base));
       if (missed) return this.finishPlan();
-      this.wait(260, () => this.nextStep());
+      this.wait(f.quick ? 60 : 260, () => this.nextStep());
       return;
     }
     // Thrown, dropped, or the window under him vanished.
@@ -1304,13 +1361,64 @@ export class Creature {
         return this.nextStep();
       case "jump": {
         const spin = step.spin ?? 0;
-        const jp = planJump(this.body, step.to, w, spin ? 150 : undefined);
-        if (!jp || this.mode !== "stand") return this.finishPlan();
-        this.waitFor("crouch", () => {
+        const kicking = this.mode === "air" && !!this.flight?.frozen;
+        const jp = planJump(this.body, step.to, w, step.height ?? (spin ? 150 : undefined));
+        if (!jp || (this.mode !== "stand" && !kicking)) {
+          if (kicking) this.flight!.frozen = false; // can't go on: drop from the wall
+          return this.finishPlan();
+        }
+        const go = () => {
           this.body.spin = spin ? spin / jp.t : 0;
-          this.launch({ x: jp.vx, y: jp.vy }, { planned: true, panic: false, keepSpin: spin !== 0, ledgeId: step.ledgeId });
-        });
+          this.launch(
+            { x: jp.vx, y: jp.vy },
+            {
+              planned: true,
+              panic: false,
+              keepSpin: spin !== 0,
+              ledgeId: step.ledgeId,
+              extra: { anim: step.anim, quick: step.quick, stopAt: step.touch ? { t: jp.t, to: { ...step.to } } : undefined },
+            },
+          );
+        };
+        if (kicking) {
+          // Off the wall straight away: a quick kick pose, then the next leap.
+          this.animator.play(step.anim ?? "crouch");
+          this.wait(140, go);
+          return;
+        }
+        this.waitFor("crouch", go);
         this.animator.play("crouch", "airUp");
+        return;
+      }
+      case "hang": {
+        if (this.mode !== "stand" || !isTop(this.surface)) return this.nextStep();
+        // Over the edge, hanging on by the paws.
+        this.hangDrop = (2 * HALF - 14) * u;
+        this.body.y += this.hangDrop;
+        this.animator.play(chaosAnim("hang_ledge"));
+        this.place();
+        this.event("hang");
+        this.wait(step.ms, () => {
+          const pull = chaosAnim("pull_up");
+          this.animator.play(pull, this.restAnim());
+          this.wait(ANIMATIONS[pull].once ? 700 : 600, () => {
+            this.unhang();
+            this.animator.play(this.restAnim());
+            this.nextStep();
+          });
+        });
+        return;
+      }
+      case "slide": {
+        if (this.mode !== "stand") return this.finishPlan();
+        const to = { x: step.x, y: step.y };
+        const dist = Math.hypot(to.x - this.body.x, to.y - this.body.y);
+        const next = step.land ? { surface: FLOOR, s: clampTo(FLOOR, step.x, w) } : null;
+        this.corner = { from: { x: this.body.x, y: this.body.y }, to, a0: this.body.angle, a1: 0, t0: this.now, ms: Math.max(350, (dist / (380 * u)) * 1000), next };
+        this.mode = "corner";
+        this.animator.play(chaosAnim("slide_down"));
+        this.event("slide");
+        this.ensureMotion();
         return;
       }
       case "hop":
@@ -1321,6 +1429,14 @@ export class Creature {
         const kind = this.surface.kind;
         if (isStanding(this.surface)) return this.nextStep();
         const push = kind === "left" ? { x: 170 * u, y: -80 * u } : kind === "right" ? { x: -170 * u, y: -80 * u } : { x: 0, y: 30 * u };
+        if (step.float) {
+          // Let go and float down: upright, no tumbling.
+          this.body.spin = 0;
+          this.facingLeft = (step.drift ?? 0) < 0;
+          const anim = chaosAnim(step.float === "copter" ? "tail_copter" : "glide");
+          this.launch({ x: push.x * 0.5, y: -40 * u }, { planned: true, panic: false, drag: false, extra: { anim, float: { drift: step.drift ?? 0 } } });
+          return;
+        }
         this.body.spin = kind === "left" ? -320 : kind === "right" ? 320 : this.rand() < 0.5 ? 300 : -300;
         this.launch(push, { planned: true, panic: true, drag: true });
         return;
@@ -1346,6 +1462,14 @@ export class Creature {
         this.ensureMotion();
         return;
     }
+  }
+
+  /** Back up from hanging off an edge (onto the top again, or nowhere if he's launching). */
+  private unhang(restore = true): void {
+    if (!this.hangDrop) return;
+    if (restore) this.body.y -= this.hangDrop;
+    this.hangDrop = 0;
+    this.place();
   }
 
   private doTeleport(): void {
@@ -1383,8 +1507,14 @@ export class Creature {
       this.loco = null;
       this.motion = CALM;
     }
-    if (this.corner) {
-      const c = this.corner;
+    this.unhang();
+    if (this.corner && !this.corner.next) {
+      // Mid-slide: just let go there.
+      this.corner = null;
+      this.launch({ x: 0, y: 0 }, { planned: false, panic: false });
+    }
+    if (this.corner && this.corner.next) {
+      const c = this.corner as { from: Vec; to: Vec; next: { surface: Surface; s: number } };
       this.corner = null;
       this.surface = c.next.surface;
       this.s = c.next.s;
@@ -1398,7 +1528,13 @@ export class Creature {
       this.animator.play("glitchIn", this.restAnim());
     }
     // In the air he can't stop; the landing just won't continue the plan.
-    if (this.flight) this.flight.planned = false;
+    if (this.flight) {
+      this.flight.planned = false;
+      // Stopped on a wall-jump kick: nothing holds him up any more.
+      this.flight.frozen = false;
+      this.flight.stopAt = undefined;
+      this.flight.float = undefined;
+    }
     this.place();
   }
 

@@ -483,7 +483,8 @@ pub async fn world_snapshot(app: AppHandle) -> Result<WorldSnapshot, UiError> {
     let area = ScreenRect { x: area.x, y: area.y, w: area.w, h: area.h };
     // Room above an edge for Glitch to stand (his body is ~90 CSS px tall).
     let headroom = (120.0 * scale) as i32;
-    let min_width = (90.0 * scale) as i32;
+    // Only edges long enough to read as something to stand on.
+    let min_width = (140.0 * scale) as i32;
     let windows =
         tauri::async_runtime::spawn_blocking(move || crate::world_native::app_windows(scale)).await.unwrap_or_default();
     let ledges = world::ledges(&windows, area, headroom, min_width);

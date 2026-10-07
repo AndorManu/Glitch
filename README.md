@@ -208,10 +208,31 @@ switched off or the chat opens. No files are ever touched. macOS: only the
 harmless acts (notes, paw prints, peeking, chasing); moving other apps'
 windows there would need the Accessibility permission.
 
+**Playful moves** (part of his normal roaming, each with a 1.5 to 2.5 minute
+cooldown): `copter` (climbs a screen edge to the top, lets go and floats down
+with his tail spinning, or glides like a flying squirrel), `hangOn` (hangs off
+the end of a window top by his paws, pulls himself up), `slideDown` (slides
+down a window's side to the taskbar), `trampoline` (bounces on the taskbar,
+higher each time, ending in a flip), `fish` (fishes from a window top),
+`wallJump` (zig-zags up between two windows' sides onto the lower top), and
+the window tops he sits on get `sit_edge_swing`. New art names are used when
+they exist, with fallbacks in `src/mascot/chaos.ts` (`ANIM_FALLBACKS`).
+
+**Standing on windows**: he watches only the window he stands on
+(`SetWinEventHook` on Windows, a 30 Hz poll elsewhere, nothing otherwise). He
+rides along slow moves, the window slides under him on a fast yank if it's
+still under his feet, and he falls for real (flailing, splat or landing) when
+it jumps away, drops away, is dragged far by hand, minimised, closed or
+covered. Only window tops at least 140 px long count, his feet sit exactly on
+the edge, with a 2 px contact shadow.
+
 **Trying it out** (debug builds): `GLITCH_CHAOS_DEBUG=window` (or `push`,
-`chase`, `note`, `paws`, `peek`, `knock`) makes Glitch do that act 8 s after
-start and every 25 s; `GLITCH_CHAOS_FAST=1` shortens the rate limits to 5 s.
-In `npm run tauri dev` the console also has `__glitch.chaos("note")`.
+`chase`, `note`, `paws`, `peek`, `knock`, `perch:<window handle>`, or any
+behaviour such as `copter`, `hangOn`, `slideDown`, `trampoline`, `fish`,
+`wallJump`; comma-separated for a sequence 6 s apart) makes Glitch do that 8 s
+after start and every 25 s; `GLITCH_CHAOS_FAST=1` shortens the rate limits to
+5 s. In `npm run tauri dev` the console also has `__glitch.chaos("note")` and
+`__glitch.play("copter")`.
 
 ---
 

@@ -430,7 +430,9 @@ pub fn chaos_debug_log(what: String) {
     dlog(format_args!("page: {}", what.chars().take(200).collect::<String>()));
 }
 
-/// Debug builds only: `GLITCH_CHAOS_DEBUG=window|cursor|note|paws|peek|knock|push|chase`
+/// Debug builds only: `GLITCH_CHAOS_DEBUG=window|chase|note|paws|peek|knock|push|perch:<hwnd>`
+/// or any behaviour (copter, hangOn, slideDown, trampoline, fish, wallJump...),
+/// comma-separated for a sequence,
 /// makes Glitch do that a few seconds after start (and every 25 s after),
 /// so the behaviours can be checked on a real desktop.
 pub fn debug_trigger(app: &AppHandle) {
@@ -442,8 +444,12 @@ pub fn debug_trigger(app: &AppHandle) {
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(8));
         loop {
-            eprintln!("glitch: debug chaos trigger: {what}");
-            let _ = app.emit("mascot-action", format!("chaos:{what}"));
+            // "perch:123,hangOn": several in a row, 6 s apart.
+            for one in what.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                eprintln!("glitch: debug chaos trigger: {one}");
+                let _ = app.emit("mascot-action", format!("chaos:{one}"));
+                std::thread::sleep(Duration::from_secs(6));
+            }
             std::thread::sleep(Duration::from_secs(25));
         }
     });
