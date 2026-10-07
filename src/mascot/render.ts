@@ -2,6 +2,12 @@
 // props, and the procedural glitch effects (slices, RGB split, corrupted
 // pixels, eye sparks, dissolve) planned in glitchfx.ts.
 //
+// Where the body is in the window and how it is turned comes from
+// `placement` (set by creature.ts from the physics): the feet point in
+// window CSS px and the body angle (0 floor, 90 left wall, 180 ceiling,
+// -90 right wall, anything while spinning). `motion` adds secondary motion
+// (stretch, shear, a ghost trail) and `platform` his glitch block.
+//
 // Plain canvas 2D only (WKWebView has no ctx.filter): tinting uses cached
 // source-in copies made once per frame image; slicing is a few drawImage
 // calls from a scratch canvas. A calm frame is a single drawImage.
@@ -14,11 +20,11 @@ import { PROP_PALETTE, PROP_PX, PROPS, type GridPropName } from "./props";
 
 /** Canvas size in CSS px. Must match the mascot window (tauri.conf.json, windows.rs). */
 export const VIEW_W = 160;
-export const VIEW_H = 110;
+export const VIEW_H = 160;
 /** The art is drawn at this size (the sheet is 2x for sharp high-DPI). */
 const ART_W = 138;
 const ART_H = 90;
-/** Feet sit a little above the bottom edge; the margins leave room for hops and sparks. */
+/** Default feet point: standing, a little above the bottom edge. */
 const FEET_Y = VIEW_H - 4;
 /** One art pixel of the raccoon sheet in CSS px: glitch blocks snap to it. */
 const PX = 3;
@@ -73,6 +79,53 @@ function makeCanvas(w = 1, h = 1): HTMLCanvasElement {
   return c;
 }
 
+/** Feet point in window CSS px and body angle in degrees. */
+export interface Placement {
+  x: number;
+  y: number;
+  angle: number;
+}
+
+/** A faded, tinted copy of the sprite offset by (dx, dy) window CSS px. */
+export interface Ghost {
+  dx: number;
+  dy: number;
+  alpha: number;
+}
+
+/**
+ * Secondary motion from the physics, on top of the keyframe pose, in the
+ * body's own frame: stretch, shear (legs lagging behind) around `pivotY`
+ * (CSS px above the feet, negative = up), and a ghost trail.
+ */
+export interface Motion {
+  sx: number;
+  sy: number;
+  shear: number;
+  pivotY: number;
+  ghosts: Ghost[];
+}
+
+/** His glitch platform under his feet: x0..x1 CSS px from the feet; build 0..1 appears, fade 0..1 breaks up. */
+export interface PlatformFx {
+  x0: number;
+  x1: number;
+  /** Top of the platform, CSS px below the feet (0 = right under them). */
+  y: number;
+  build: number;
+  fade: number;
+}
+
+export const CALM: Motion = { sx: 1, sy: 1, shear: 0, pivotY: -40, ghosts: [] };
+
+/** Window-local CSS px rectangle. */
+export interface BodyRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 export interface RendererOptions {
   /** Device pixels per CSS px (default: window.devicePixelRatio). */
   pixelRatio?: () => number;
@@ -81,6 +134,12 @@ export interface RendererOptions {
 export class Renderer {
   /** Art faces right; mirror everything (sprite, props, sparks) when walking left. */
   facingLeft = false;
+  placement: Placement = { x: VIEW_W / 2, y: FEET_Y, angle: 0 };
+  motion: Motion = CALM;
+  platform: PlatformFx | null = null;
+  /** Drawn body's bounding box (window CSS px) at the last render, for the click hitbox. */
+  bodyRect: BodyRect | null = null;
+  private readonly opaque = new WeakMap<object, [number, number, number, number]>();
   private readonly ctx: CanvasRenderingContext2D;
   private readonly work = makeCanvas();
   private readonly wctx: CanvasRenderingContext2D;
@@ -124,21 +183,20 @@ export class Renderer {
     const { w, h } = this.artSize(img, dpr);
     const face = this.facingLeft ? -1 : 1;
     const mir = pose.flip ? -face : face;
-    // Feet anchor -> pivot rotation -> mirrored scale. All in CSS px, then x dpr.
+    // Feet anchor + surface angle + secondary motion: the body's frame (CSS px).
+    const base = this.baseMatrix();
+    // Then the pose: offset, pivot rotation, mirrored scale. All in CSS px, then x dpr.
     const py = -pose.pivot * h;
-    const m = [
-      scale(dpr, dpr),
-      translate(VIEW_W / 2 + pose.dx * face, FEET_Y + pose.dy),
-      translate(0, py),
-      rotate(pose.rot * mir),
-      translate(0, -py),
-      scale(mir * pose.sx, pose.sy),
-    ].reduce(mul);
+    const css = [base, translate(pose.dx * face, pose.dy), translate(0, py), rotate(pose.rot * mir), translate(0, -py), scale(mir * pose.sx, pose.sy)].reduce(mul);
+    const m = mul(scale(dpr, dpr), css);
+    this.bodyRect = this.boundsOf(css, img, w, h);
 
+    if (this.platform) this.drawPlatform(this.platform, mul(scale(dpr, dpr), base), rand, dpr);
     this.drawProps(pose.props, true, dpr, face);
     if (pose.dissolve < 1) {
+      this.drawGhosts(img, m, w, h, dpr);
       if (pose.glitch <= 0 && pose.dissolve <= 0) this.drawSprite(ctx, img, m, w, h);
-      else this.drawGlitched(img, m, w, h, pose, rand, dpr, face);
+      else this.drawGlitched(img, m, css, w, h, pose, rand, dpr);
     }
     if (pose.dissolve > 0 && pose.dissolve < 1) this.drawScatter(m, h, pose.dissolve, rand, dpr);
     this.drawProps(pose.props, false, dpr, face);
@@ -146,6 +204,68 @@ export class Renderer {
     if (pose.fx) this.drawFx(pose, tick, rand, dpr, face);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
+  }
+
+  /** Feet point -> surface/spin angle -> secondary motion around its pivot. CSS px. */
+  private baseMatrix(): M {
+    const p = this.placement;
+    const mo = this.motion;
+    const shear: M = [1, 0, mo.shear, 1, 0, 0];
+    return [translate(p.x, p.y), rotate(p.angle), translate(0, mo.pivotY), shear, scale(mo.sx, mo.sy), translate(0, -mo.pivotY)].reduce(mul);
+  }
+
+  /** A point in the body's frame (feet origin, +x forward) -> canvas px. */
+  private at(x: number, y: number, dpr: number, face: number): [number, number] {
+    const [cx, cy] = apply(this.baseMatrix(), x * face, y);
+    return [cx * dpr, cy * dpr];
+  }
+
+  /** Axis-aligned box (window CSS px) of the frame's opaque pixels under transform `css`. */
+  private boundsOf(css: M, img: FrameImage, w: number, h: number): BodyRect {
+    const [fx0, fy0, fx1, fy1] = this.opaqueBox(img);
+    const xs: number[] = [];
+    const ys: number[] = [];
+    for (const [fx, fy] of [[fx0, fy0], [fx1, fy0], [fx0, fy1], [fx1, fy1]]) {
+      const [x, y] = apply(css, -w / 2 + fx * w, -h + fy * h);
+      xs.push(x);
+      ys.push(y);
+    }
+    const x0 = Math.max(0, Math.min(...xs));
+    const y0 = Math.max(0, Math.min(...ys));
+    const x1 = Math.min(VIEW_W, Math.max(...xs));
+    const y1 = Math.min(VIEW_H, Math.max(...ys));
+    return { x: x0, y: y0, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) };
+  }
+
+  /** The frame's opaque bounds as fractions of its size (cached; one getImageData per frame image). */
+  private opaqueBox(img: FrameImage): [number, number, number, number] {
+    let box = this.opaque.get(img);
+    if (box) return box;
+    box = [0.08, 0.08, 0.92, 1];
+    try {
+      const c = makeCanvas(img.width, img.height);
+      const t = c.getContext("2d", { willReadFrequently: true } as CanvasRenderingContext2DSettings)!;
+      t.drawImage(img, 0, 0);
+      const data = t.getImageData(0, 0, img.width, img.height).data;
+      let x0 = img.width;
+      let y0 = img.height;
+      let x1 = -1;
+      let y1 = -1;
+      for (let y = 0; y < img.height; y++) {
+        for (let x = 0; x < img.width; x++) {
+          if (data[(y * img.width + x) * 4 + 3] < 100) continue;
+          if (x < x0) x0 = x;
+          if (x > x1) x1 = x;
+          if (y < y0) y0 = y;
+          if (y > y1) y1 = y;
+        }
+      }
+      if (x1 >= x0) box = [x0 / img.width, y0 / img.height, (x1 + 1) / img.width, (y1 + 1) / img.height];
+    } catch {
+      // Tainted canvas or no 2D context: keep the generous default.
+    }
+    this.opaque.set(img, box);
+    return box;
   }
 
   // ------------------------------------------------------------- sprite
@@ -165,14 +285,81 @@ export class Renderer {
     c.setTransform(1, 0, 0, 1, 0, 0);
   }
 
-  /** The sprite's untransformed box in CSS px (good enough to aim noise at). */
-  private spriteBox(pose: Pose, w: number, h: number, face: number): Rect {
-    const sw = w * pose.sx;
-    const sh = h * pose.sy;
-    return { x: VIEW_W / 2 + pose.dx * face - sw / 2, y: FEET_Y + pose.dy - sh, width: sw, height: sh };
+  /** The sprite's box on the canvas in CSS px (axis-aligned, any rotation). Good enough to aim noise at. */
+  private spriteBox(css: M, w: number, h: number): Rect {
+    const xs: number[] = [];
+    const ys: number[] = [];
+    for (const [x, y] of [[-w / 2, -h], [w / 2, -h], [-w / 2, 0], [w / 2, 0]]) {
+      const [px, py] = apply(css, x, y);
+      xs.push(px);
+      ys.push(py);
+    }
+    const x0 = Math.min(...xs);
+    const y0 = Math.min(...ys);
+    return { x: x0, y: y0, width: Math.max(...xs) - x0, height: Math.max(...ys) - y0 };
   }
 
-  private drawGlitched(img: FrameImage, m: M, w: number, h: number, pose: Pose, rand: () => number, dpr: number, face: number): void {
+  /** Afterimages when flying fast: cyan / magenta copies trailing behind. */
+  private drawGhosts(img: FrameImage, m: M, w: number, h: number, dpr: number): void {
+    const ghosts = this.motion.ghosts;
+    for (let i = ghosts.length - 1; i >= 0; i--) {
+      const g = ghosts[i];
+      this.ctx.globalAlpha = g.alpha;
+      this.drawSprite(this.ctx, this.tint(img, i % 2 ? MAGENTA : CYAN), mul(translate(g.dx * dpr, g.dy * dpr), m), w, h);
+    }
+    this.ctx.globalAlpha = 1;
+  }
+
+  /**
+   * His glitch platform: a glowing slab of purple pixels under his feet,
+   * assembling from scattered pixels (build) and tearing apart (fade).
+   */
+  private drawPlatform(p: PlatformFx, m: M, rand: () => number, dpr: number): void {
+    const ctx = this.ctx;
+    const unit = PX;
+    const cols = Math.max(2, Math.round((p.x1 - p.x0) / unit));
+    const rows = 4;
+    const solid = Math.min(1, Math.max(0, p.build)) * (1 - Math.min(1, Math.max(0, p.fade)));
+    ctx.setTransform(...mul(m, translate(0, p.y)));
+    // Soft glow below (two translucent bars).
+    ctx.globalAlpha = 0.18 * solid;
+    ctx.fillStyle = COLORS[1];
+    ctx.fillRect(p.x0 - 4, 1, p.x1 - p.x0 + 8, rows * unit + 6);
+    ctx.globalAlpha = 0.12 * solid;
+    ctx.fillRect(p.x0 + 6, rows * unit + 6, p.x1 - p.x0 - 12, 5);
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        // Each pixel flies in from a scattered spot while building, and out while fading.
+        const seedR = mulberry32(seedFor(c * 7 + r * 131, 77));
+        const sx = (seedR() - 0.5) * 70;
+        const sy = (seedR() - 0.7) * 40;
+        const spread = 1 - Math.min(1, p.build) + Math.min(1, p.fade);
+        if (p.fade > 0 && seedR() < p.fade * 0.8) continue;
+        const x = p.x0 + c * unit + sx * spread * spread;
+        const y = 1 + r * unit + sy * spread * spread + (p.fade > 0 ? p.fade * p.fade * 30 * seedR() : 0);
+        const edge = r === 0 || c === 0 || c === cols - 1;
+        const flick = rand();
+        let color = r === 0 ? COLORS[2] : edge ? COLORS[1] : COLORS[0];
+        if (flick < 0.06) color = CYAN;
+        else if (flick < 0.1) color = MAGENTA;
+        ctx.globalAlpha = (0.55 + 0.45 * (1 - spread)) * (r === rows - 1 ? 0.75 : 1);
+        ctx.fillStyle = color;
+        ctx.fillRect(x, y, unit, unit);
+      }
+    }
+    // A scanline tear now and then.
+    if (rand() < 0.35 * solid) {
+      ctx.globalAlpha = 0.8;
+      ctx.fillStyle = rand() < 0.5 ? CYAN : MAGENTA;
+      const y = 1 + Math.floor(rand() * rows) * unit;
+      ctx.fillRect(p.x0 + (rand() - 0.5) * 10, y, (p.x1 - p.x0) * (0.3 + 0.5 * rand()), 1);
+    }
+    ctx.globalAlpha = 1;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    void dpr;
+  }
+
+  private drawGlitched(img: FrameImage, m: M, css: M, w: number, h: number, pose: Pose, rand: () => number, dpr: number): void {
     const ctx = this.ctx;
     const g = pose.glitch;
     const pw = this.canvas.width;
@@ -188,7 +375,7 @@ export class Renderer {
     wc.clearRect(0, 0, pw, ph);
     this.drawSprite(wc, img, m, w, h);
 
-    const box = this.spriteBox(pose, w, h, face);
+    const box = this.spriteBox(css, w, h);
     const unit = PX * dpr;
     // Corrupted blocks and scanlines only recolour Glitch's own pixels.
     wc.globalCompositeOperation = "source-atop";
@@ -278,10 +465,15 @@ export class Renderer {
     const eye = this.sprites.pixelated || index === undefined ? [0.66, 0.5] : [EYE_BY_INDEX[index][0] / img.width, EYE_BY_INDEX[index][1] / img.height];
     const [ex, ey] = apply(m, (eye[0] - 0.5) * w, (eye[1] - 1) * h);
     const n = pose.glitch > 0 ? 2 + Math.round(5 * pose.glitch) : 3;
+    const r = (this.placement.angle * Math.PI) / 180;
+    const cos = Math.cos(r);
+    const sin = Math.sin(r);
     for (let i = 0; i < n; i++) {
-      // Sparks fly out on the eye's side of the face (mirrors with facing).
-      const ox = (3 + rand() * 15) * mir;
-      const oy = (rand() - 0.6) * 16;
+      // Sparks fly out on the eye's side of the face (mirrors with facing, turns with the body).
+      const lx = (3 + rand() * 15) * mir;
+      const ly = (rand() - 0.6) * 16;
+      const ox = lx * cos - ly * sin;
+      const oy = lx * sin + ly * cos;
       const size = rand() < 0.6 ? PX : 2;
       this.square(ex + ox * dpr, ey + oy * dpr, size * dpr, COLORS[Math.floor(rand() * 3)], 0.6 + 0.4 * rand());
     }
@@ -298,8 +490,7 @@ export class Renderer {
   }
 
   private drawFx(pose: Pose, tick: number, rand: () => number, dpr: number, face: number): void {
-    const ax = VIEW_W / 2;
-    const at = (x: number, y: number): [number, number] => [(ax + x * face) * dpr, (FEET_Y + y) * dpr];
+    const at = (x: number, y: number): [number, number] => this.at(x, y, dpr, face);
     switch (pose.fx) {
       case "trail":
         for (const p of planTrail(tick)) {
@@ -332,6 +523,22 @@ export class Renderer {
         const phase = tick % 3;
         const [x, y] = at(46 + phase * 4, -76 - phase * 8);
         this.zee(x, y, 2 * dpr, [1, 0.75, 0.4][phase]);
+        break;
+      }
+      case "eq": {
+        // A little sound-wave equalizer above his head: 5 bars of pixels, heights from the tick.
+        const r2 = mulberry32(seedFor(tick, 5));
+        for (let b = 0; b < 5; b++) {
+          const hgt = 1 + Math.floor(r2() * 5);
+          for (let j = 0; j < hgt; j++) {
+            const [x, y] = at(50 + b * 5, -82 - j * 4);
+            this.square(x, y, 3 * dpr, j === hgt - 1 ? COLORS[2] : COLORS[b % 2], j === hgt - 1 ? 1 : 0.85);
+          }
+        }
+        if (rand() < 0.4) {
+          const [x, y] = at(48 + rand() * 26, -104 - rand() * 6);
+          this.square(x, y, 2 * dpr, CYAN, 0.8);
+        }
         break;
       }
       case "eye":
@@ -371,7 +578,8 @@ export class Renderer {
     }
     const m = [
       scale(dpr, dpr),
-      translate(VIEW_W / 2 + x * face, FEET_Y + y),
+      this.baseMatrix(),
+      translate(x * face, y),
       scale(face, 1),
       rotate(rot),
       translate(-grid.origin[0] * PROP_PX, -grid.origin[1] * PROP_PX),
@@ -386,7 +594,7 @@ export class Renderer {
   private drawTether(x1: number, y1: number, x2: number, y2: number, dpr: number, face: number): void {
     const p = (t: number): [number, number] => {
       const sag = 7 * 4 * t * (1 - t);
-      return [(VIEW_W / 2 + (x1 + (x2 - x1) * t) * face) * dpr, (FEET_Y + y1 + (y2 - y1) * t + sag) * dpr];
+      return this.at(x1 + (x2 - x1) * t, y1 + (y2 - y1) * t + sag, dpr, face);
     };
     const steps = Math.ceil(Math.hypot(x2 - x1, y2 - y1) / 1.5);
     for (const [color, size] of [["#1d1424", 3], ["#c99a62", 1]] as const) {

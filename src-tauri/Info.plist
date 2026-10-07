@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into Glitch.app's Info.plist by the Tauri bundler (and embedded
+     in dev builds), because it sits next to tauri.conf.json. -->
+<plist version="1.0">
+<dict>
+  <!-- Shown by macOS the first time Glitch uses the microphone (voice commands). -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Glitch listens only while you hold the mic button or the voice shortcut, and turns what you say into text right on this Mac. Your voice never leaves your computer.</string>
+</dict>
+</plist>

@@ -486,3 +486,19 @@ button.icon-x:hover:not(:disabled) { color: var(--danger); border-color: var(--l
 .memory-history summary { cursor: pointer; font-weight: 600; }
 .memory-history p { margin: 6px 0 0; color: var(--muted); }
 button.danger-text { color: var(--danger); }
+
+/* ------------------------------------------------------- settings: voice */
+
+.voice-hotkey { margin: 8px 0 2px; }
+.voice-field { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.voice-label { flex: none; width: 92px; font-weight: 650; font-size: 13px; }
+.voice-field .select { flex: 1; min-width: 0; }
+.voice-blurb { margin: 4px 0 0 102px; }
+.voice-model { margin: 8px 0 0 102px; }
+.voice-model-line { display: flex; align-items: center; gap: 8px; margin: 6px 0 0 102px; }
+.voice-model .voice-model-line { margin-left: 0; }
+.voice-model-line .hint { flex: 1; min-width: 0; }
+.voice-model-line button { flex: none; }
+.voice-model-line.stack { flex-direction: column; align-items: flex-start; gap: 6px; }
+.voice-error { color: var(--danger); }
+.voice-gap { height: 12px; border-bottom: 2px dashed var(--line-soft); margin-bottom: 12px; }

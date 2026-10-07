@@ -1,251 +1,119 @@
-// The mascot window: draws Glitch, plays animations, wanders, opens the chat.
+// The mascot window: wires Glitch the creature (creature.ts: physics, brain,
+// animations) to Tauri: the window he lives in, the screen and other apps'
+// windows (api.world), the click-through hitbox, the mouse, and the events
+// from Rust (moods, chat open, settings, actions).
 //
-// CPU budget: no requestAnimationFrame. Idle = about one repaint per second
-// (a breath, a fidget, a glitch burst every 8-25 s); sleep = one per 2.4 s.
-// Walking = 15 window moves + 15 repaints/s, only for a few seconds every
-// 25-75 s. Walking stops while the chat panel is open.
+// CPU budget: no requestAnimationFrame. Resting = about one repaint and one
+// timer wakeup per second; asleep = one per 2.4 s and no polling at all.
+// The window only moves while he walks/climbs (30 Hz) or flies / is carried
+// (60 Hz); otherwise no movement timer runs. See creature.ts.
 
 import { listen } from "@tauri-apps/api/event";
-import { currentMonitor, getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
-import { api, type Mood, type Settings } from "../shared/ipc";
+import {
+  currentMonitor,
+  cursorPosition,
+  getCurrentWindow,
+  PhysicalPosition,
+  primaryMonitor,
+} from "@tauri-apps/api/window";
+import { api, type Settings, type WorldSnapshot } from "../shared/ipc";
 import { GLITCH } from "../sprites/glitch";
 import { loadSprites } from "../sprites/load";
 import { RACCOON } from "../sprites/raccoon";
-import { ANIMATIONS, type AnimationName, Animator, isAnimationName } from "./animations";
-import { Renderer, VIEW_H, VIEW_W } from "./render";
-import { DEFAULT_WALKER, facesLeft, positionAt, type Walk, Walker } from "./walker";
-
-// Must match the mascot window in tauri.conf.json and MASCOT_W/H in windows.rs.
-const WINDOW_W = VIEW_W; // 160
-const WINDOW_H = VIEW_H; // 110
-const MOVE_FPS = 15;
-const SLEEP_AFTER_MS = 10 * 60_000;
-const DRAG_THRESHOLD_PX = 4;
-/** The dangle ends this long after the window last moved (mouseup is often swallowed by a native drag). */
-const DANGLE_SETTLE_MS = 250;
-/** Looping actions triggered from outside stop on their own after this long. */
-const ACTION_LOOP_MAX_MS = 8000;
+import type { AnimationName } from "./animations";
+import { Creature, type Host } from "./creature";
+import { WIN, type Vec } from "./physics";
+import { Renderer } from "./render";
 
 const win = getCurrentWindow();
 const canvas = document.getElementById("glitch") as HTMLCanvasElement;
-canvas.style.width = `${WINDOW_W}px`;
-canvas.style.height = `${WINDOW_H}px`;
+canvas.style.width = `${WIN}px`;
+canvas.style.height = `${WIN}px`;
 
-let renderer: Renderer | null = null;
-const animator = new Animator((pose, tick) => renderer?.render(pose, tick));
-
-let movementEnabled = true;
-let panelOpen = false;
-let busy = false; // AI is thinking / waiting for the user
-let asleep = false;
-
-let restTimer: number | undefined;
-let sleepTimer: number | undefined;
-let actionTimer: number | undefined;
-let walk: { plan: Walk; started: number; timer?: number } | null = null;
-
-// ------------------------------------------------------------------ walking
-
-let walker: Walker | null = null;
-
-async function getWalker(): Promise<Walker> {
-  if (walker) return walker;
-  const scale = await win.scaleFactor();
-  walker = new Walker({ ...DEFAULT_WALKER, speed: 70 * scale, maxDistance: 420 * scale });
-  return walker;
+/** If `world_snapshot` isn't available, the monitor's work area without window tops. */
+async function fallbackWorld(): Promise<WorldSnapshot> {
+  const [monitor, scale] = await Promise.all([currentMonitor(), win.scaleFactor()]);
+  const area = monitor
+    ? { x: monitor.workArea.position.x, y: monitor.workArea.position.y, w: monitor.workArea.size.width, h: monitor.workArea.size.height }
+    : { x: 0, y: 0, w: Math.round(screen.availWidth * scale), h: Math.round(screen.availHeight * scale) };
+  return { area, scale, ledges: [] };
 }
 
-function canWander(): boolean {
-  // Only wander from plain idle: never cut a reaction or an action short.
-  return movementEnabled && !panelOpen && !busy && !asleep && !dangling && (animator.animation === "idle" || animator.animation === "walk");
-}
+let lastPointer: { x: number; y: number } = { x: 0, y: 0 };
 
-function scheduleWalk(): void {
-  window.clearTimeout(restTimer);
-  if (!movementEnabled || panelOpen || busy || asleep || walk) return;
-  void getWalker().then((w) => {
-    window.clearTimeout(restTimer);
-    restTimer = window.setTimeout(() => void startWalk(), w.restMs());
-  });
+// macOS reports the global cursor scaled by the PRIMARY screen's factor, but
+// window positions with the factor of the window's own screen. Convert the
+// cursor into the window's space so dragging works on mixed-DPI setups
+// (e.g. a Retina MacBook + a 1x external monitor). Windows: both are global
+// physical pixels already.
+const isMac = /Mac/.test(navigator.platform) || /Mac OS X/.test(navigator.userAgent);
+let cursorToWindow = 1;
+async function updateCursorScale(): Promise<void> {
+  if (!isMac) return;
+  const [primary, own] = await Promise.all([primaryMonitor(), win.scaleFactor()]);
+  cursorToWindow = own / (primary?.scaleFactor ?? own);
 }
+void updateCursorScale();
+void win.onScaleChanged(() => void updateCursorScale());
 
-async function startWalk(): Promise<void> {
-  if (!canWander() || walk) return scheduleWalk();
-  const [pos, monitor, size] = await Promise.all([win.outerPosition(), currentMonitor(), win.outerSize()]);
-  if (!monitor || !canWander()) return scheduleWalk();
-  const area = {
-    x: monitor.workArea.position.x,
-    y: monitor.workArea.position.y,
-    width: monitor.workArea.size.width,
-    height: monitor.workArea.size.height,
-  };
-  const plan = (await getWalker()).plan({ x: pos.x, y: pos.y }, area, { width: size.width, height: size.height });
-  if (plan.durationMs < 300) return scheduleWalk();
-  if (renderer) renderer.facingLeft = facesLeft(plan);
-  walk = { plan, started: performance.now() };
-  animator.play("walk");
-  void step();
-}
+const host: Host = {
+  moveWindow: (x, y) => win.setPosition(new PhysicalPosition(Math.round(x), Math.round(y))),
+  world: () => api.world().catch(() => fallbackWorld()),
+  // Global physical cursor; if that fails, the last pointer event (screen CSS px x DPR).
+  cursor: () => cursorPosition().then(
+    (p) => ({ x: p.x * cursorToWindow, y: p.y * cursorToWindow }),
+    () => ({ x: lastPointer.x * devicePixelRatio, y: lastPointer.y * devicePixelRatio }),
+  ),
+  setHitbox: (rect) => void api.setHitbox(rect).catch(() => {}),
+  clicked: () => void api.mascotClicked(),
+};
 
-async function step(): Promise<void> {
-  if (!walk) return;
-  const t0 = performance.now();
-  const p = positionAt(walk.plan, t0 - walk.started);
-  try {
-    await win.setPosition(new PhysicalPosition(p.x, p.y));
-  } catch {
-    return stopWalk();
-  }
-  if (!walk) return;
-  if (p.x === walk.plan.to.x && p.y === walk.plan.to.y) return stopWalk();
-  const spent = performance.now() - t0;
-  walk.timer = window.setTimeout(() => void step(), Math.max(0, 1000 / MOVE_FPS - spent));
-}
+let creature: Creature | null = null;
 
-function stopWalk(): void {
-  if (walk) {
-    window.clearTimeout(walk.timer);
-    walk = null;
-    if (animator.animation === "walk") animator.play("idle");
-  }
-  scheduleWalk();
-}
+// ----------------------------------------------------------- the mouse
+// Our own drag (not the OS one): pointer capture keeps the events coming
+// even when the cursor outruns the window; the creature polls the global
+// cursor while carrying him.
 
-// ------------------------------------------------------------- sleep / mood
+const local = (e: PointerEvent): Vec => {
+  const r = canvas.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+};
 
-function resetSleepTimer(): void {
-  window.clearTimeout(sleepTimer);
-  sleepTimer = window.setTimeout(() => {
-    if (panelOpen || busy || animator.animation !== "idle") return resetSleepTimer();
-    asleep = true;
-    stopWalk();
-    animator.play("sleep");
-  }, SLEEP_AFTER_MS);
-}
-
-function wake(): void {
-  if (asleep) {
-    asleep = false;
-    animator.play("idle");
-    animator.glitchBurst(350); // rebooting...
-  }
-  resetSleepTimer();
-  scheduleWalk();
-}
-
-function setMood(mood: Mood): void {
-  busy = mood === "thinking" || mood === "asking";
-  if (busy) stopWalk();
-  asleep = false;
-  resetSleepTimer();
-  if (mood === "thinking") {
-    if (animator.animation !== "think") {
-      animator.play("think");
-      animator.glitchBurst(); // the gears start grinding
-    }
-  } else {
-    animator.play(mood === "happy" ? "happy" : mood === "asking" ? "ask" : "idle");
-  }
-  scheduleWalk();
-}
+canvas.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0 || !creature) return;
+  lastPointer = { x: e.screenX, y: e.screenY };
+  canvas.setPointerCapture(e.pointerId);
+  creature.pointerDown(local(e));
+});
+canvas.addEventListener("pointermove", (e) => {
+  lastPointer = { x: e.screenX, y: e.screenY };
+  creature?.pointerMove(local(e));
+});
+canvas.addEventListener("pointerup", (e) => {
+  if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+  creature?.pointerUp();
+});
+canvas.addEventListener("pointercancel", () => creature?.pointerCancel());
+canvas.addEventListener("lostpointercapture", () => creature?.held && creature.pointerCancel());
+window.addEventListener("blur", () => creature?.held && creature.pointerCancel());
+window.addEventListener("contextmenu", (e) => e.preventDefault());
 
 // ------------------------------------------------------------------ actions
 
 /**
- * Play any animation by name (e.g. "grabCursor", "glitchOut", "peek").
- * One-shots return to what was playing; loops stop after ACTION_LOOP_MAX_MS.
- * Unknown names are ignored. Returns whether something was played.
+ * Play any animation by name (e.g. "grabCursor", "glitchOut", "peek") or a
+ * behaviour ("climb", "jump", "teleport", "build", "chaos", "run",
+ * "sitEdge", "peekEdge", "hopDown"...). One-shots return to what was
+ * playing; loops stop after 8 s. Unknown names are ignored. Returns whether
+ * something was played.
  */
 export function playAction(name: unknown): boolean {
-  if (!isAnimationName(name)) return false;
-  const resume = animator.base === "walk" ? "idle" : animator.base;
-  stopWalk();
-  window.clearTimeout(actionTimer);
-  asleep = name === "sleep";
-  animator.play(name, ANIMATIONS[name].next ?? resume);
-  if (!ANIMATIONS[name].once && !["idle", "sleep", "napRock", "think", "ask"].includes(name)) {
-    actionTimer = window.setTimeout(() => {
-      if (animator.animation === name) animator.play(busy ? "think" : "idle");
-    }, ACTION_LOOP_MAX_MS);
-  }
-  return true;
+  return creature?.playAction(name) ?? false;
 }
-
-// ----------------------------------------------- click vs. drag (dangle)
-
-let pointerDown: { x: number; y: number } | null = null;
-let dragging = false;
-let dangling = false;
-let lastMoveAt = 0;
-let dangleTimer: number | undefined;
-
-function startDangle(): void {
-  dangling = true;
-  lastMoveAt = performance.now();
-  animator.play("dangle");
-  animator.glitchBurst(400);
-  armDangleEnd(700); // in case the window never actually moves
-}
-
-function armDangleEnd(ms: number): void {
-  window.clearTimeout(dangleTimer);
-  dangleTimer = window.setTimeout(endDangle, ms);
-}
-
-function endDangle(): void {
-  window.clearTimeout(dangleTimer);
-  if (!dangling) return;
-  dangling = false;
-  dragging = false;
-  pointerDown = null;
-  animator.play("fall"); // -> land -> idle
-  scheduleWalk();
-}
-
-/** Any mouse event once the window has settled means the drag is over. */
-function settledMouseEvent(): void {
-  if (dangling && performance.now() - lastMoveAt > 150) endDangle();
-}
-
-canvas.addEventListener("mousedown", (e) => {
-  settledMouseEvent();
-  if (e.button !== 0) return;
-  pointerDown = { x: e.screenX, y: e.screenY };
-  dragging = false;
-  stopWalk();
-  wake();
-});
-
-window.addEventListener("mousemove", (e) => {
-  settledMouseEvent();
-  if (!pointerDown || dragging) return;
-  if (Math.hypot(e.screenX - pointerDown.x, e.screenY - pointerDown.y) > DRAG_THRESHOLD_PX) {
-    dragging = true;
-    startDangle();
-    // Native drag: the OS moves the window (and may swallow the mouseup).
-    void win.startDragging();
-  }
-});
-
-window.addEventListener("mouseup", () => {
-  if (dangling) return endDangle();
-  if (pointerDown && !dragging) {
-    void api.mascotClicked();
-    animator.play("startled", animator.base === "walk" ? "idle" : animator.base);
-  }
-  pointerDown = null;
-  dragging = false;
-});
-
-canvas.addEventListener("mouseenter", () => wake());
-window.addEventListener("contextmenu", (e) => e.preventDefault());
-
-// ------------------------------------------------------------------- start
 
 function applySettings(s: Settings): void {
-  movementEnabled = s.movement_enabled;
-  if (!movementEnabled) stopWalk();
-  scheduleWalk();
+  creature?.setMovement(s.movement_enabled);
 }
 
 async function main(): Promise<void> {
@@ -254,50 +122,49 @@ async function main(): Promise<void> {
     console.error("sprite sheet failed to load, using fallback art", e);
     return loadSprites(GLITCH);
   });
-  renderer = new Renderer(canvas, sprites);
-  animator.play("idle");
+  const renderer = new Renderer(canvas, sprites);
+  const c = new Creature(host, renderer);
+  creature = c;
   let settings: Settings | null = null;
   try {
     settings = await api.getSettings();
-    applySettings(settings);
+    c.movement = settings.movement_enabled;
   } catch (e) {
     console.error("could not load settings", e);
   }
+  const pos = await win.outerPosition().catch(() => ({ x: 0, y: 0 }));
+  await c.start({ x: pos.x, y: pos.y });
+
   await listen<Settings>("settings-changed", (e) => applySettings(e.payload));
-  await listen<boolean>("panel-visibility", (e) => {
-    panelOpen = e.payload;
-    if (panelOpen) stopWalk();
-    wake();
-  });
-  await listen<Mood>("mood", (e) => setMood(e.payload));
+  await listen<boolean>("panel-visibility", (e) => c.setPanelOpen(e.payload));
+  // Unknown moods fall back to idle inside setMood.
+  await listen<string>("mood", (e) => c.setMood(e.payload));
+  await listen<boolean>("mascot-hover", (e) => c.setHovered(e.payload));
   // For behaviours driven from Rust or other windows; unknown names are ignored.
   await listen<string>("mascot-action", (e) => void playAction(e.payload));
-  await win.onMoved(() => {
-    if (!dangling) return;
-    lastMoveAt = performance.now();
-    armDangleEnd(DANGLE_SETTLE_MS);
-  });
-  window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener("change", () => renderer?.redraw());
+  window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener("change", () => renderer.redraw());
   // Show only now that the first frame is drawn (no blank/white flash).
   await win.show();
   // First run: open the setup wizard next to Glitch.
   if (settings && !settings.onboarding_done) void api.showPanel();
-  resetSleepTimer();
-  scheduleWalk();
 }
 
-// Dev/testing hook: trigger animations and moods from the console or Playwright.
+// Dev/testing hook: trigger animations, behaviours and moods from the console or Playwright.
 if (import.meta.env.DEV) {
   (window as unknown as { __glitch: object }).__glitch = {
     play: playAction,
-    mood: setMood,
-    burst: (ms?: number) => animator.glitchBurst(ms),
+    mood: (m: string) => creature?.setMood(m),
+    burst: (ms?: number) => creature?.animator.glitchBurst(ms),
     face: (left: boolean) => {
-      if (renderer) renderer.facingLeft = left;
-      renderer?.redraw();
+      if (!creature) return;
+      creature.facingLeft = left;
+      creature.animator.glitchBurst(60);
     },
-    get animation(): AnimationName {
-      return animator.animation;
+    get creature() {
+      return creature;
+    },
+    get animation(): AnimationName | undefined {
+      return creature?.animation;
     },
   };
 }

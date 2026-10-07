@@ -6,6 +6,7 @@ mod hover;
 mod layout;
 mod os;
 mod state;
+mod voice;
 mod windows;
 mod world_native;
 
@@ -69,9 +70,12 @@ fn main() {
             let app = app.clone();
             tauri::async_runtime::spawn(async move { commands::open_chat(&app, false) });
         }))
+        // Voice push-to-talk hotkey (registered by voice::setup, not here).
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             app.manage(AppState::new(app.path().app_config_dir()?));
             app.manage(hover::Hitbox::default());
+            voice::setup(app.handle());
             hover::start(app.handle().clone());
             os::configure(app);
             build_tray(app.handle())?;
@@ -105,6 +109,17 @@ fn main() {
             commands::world_snapshot,
             commands::set_hitbox,
             commands::quit,
+            voice::commands::voice_status,
+            voice::commands::update_voice_settings,
+            voice::commands::voice_start,
+            voice::commands::voice_stop,
+            voice::commands::voice_hands_free,
+            voice::commands::voice_cancel,
+            voice::commands::voice_offer_seen,
+            voice::commands::voice_download_model,
+            voice::commands::voice_cancel_download,
+            voice::commands::voice_delete_model,
+            voice::commands::voice_open_mic_settings,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Glitch")

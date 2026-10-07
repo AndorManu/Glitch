@@ -12,7 +12,11 @@ export type Answer = "allowed" | "denied" | "stale";
 export type Speech =
   | { kind: "reply"; text: string; actions: string[] }
   | { kind: "confirm"; id: string; title: string; detail: string; actions: string[]; answer: Answer | null }
-  | { kind: "error"; text: string; offerSetup: boolean };
+  | { kind: "error"; text: string; offerSetup: boolean }
+  /** Voice: a hint or a microphone problem (optionally with an "Open settings" button). */
+  | { kind: "notice"; text: string; tone: "info" | "error"; action: "mic-settings" | null }
+  /** Voice: offer to download the speech model, then its progress. */
+  | { kind: "voice_setup"; model: string; sizeMb: number; progress: number | null; failed: string | null };
 
 export interface BubbleState {
   /** Waiting for the model: the thought cloud is up and sending is off. */
@@ -32,7 +36,13 @@ export type BubbleEvent =
   | { type: "failed"; error: UiError }
   | { type: "seen" }
   /** The bubble window became visible after `awayMs` hidden (null: unknown). */
-  | { type: "shown"; awayMs: number | null };
+  | { type: "shown"; awayMs: number | null }
+  /** Voice wants to say something (ignored while Glitch is thinking). */
+  | { type: "notice"; text: string; tone: "info" | "error"; action: "mic-settings" | null }
+  /** Voice needs the speech model: show the download offer. */
+  | { type: "voice_setup"; model: string; sizeMb: number }
+  /** Speech-model download progress (percent), or its end. */
+  | { type: "voice_download"; state: "running" | "done" | "failed" | "cancelled"; percent: number | null; failed: string | null; ready: string };
 
 /** Work for the caller to start after a transition. */
 export type Request = { kind: "send"; text: string } | { kind: "confirm"; id: string; approved: boolean };
@@ -97,8 +107,36 @@ export function transition(s: BubbleState, e: BubbleEvent): Transition {
       return none(s.seen ? s : { ...s, seen: true });
     case "shown": {
       const stale = e.awayMs !== null && e.awayMs >= COLLAPSE_AFTER_MS;
-      if (stale && !s.busy && s.speech && s.seen && !pendingConfirm(s)) return none({ ...speak(s, null), seen: true });
+      if (stale && !s.busy && s.speech && s.seen && !pendingConfirm(s) && s.speech.kind !== "voice_setup") {
+        return none({ ...speak(s, null), seen: true });
+      }
       return none(s);
     }
+    case "notice":
+      if (s.busy) return none(s);
+      return none(speak(s, { kind: "notice", text: e.text, tone: e.tone, action: e.action }));
+    case "voice_setup":
+      if (s.busy) return none(s);
+      return none(speak(s, { kind: "voice_setup", model: e.model, sizeMb: e.sizeMb, progress: null, failed: null }));
+    case "voice_download": {
+      const sp = s.speech;
+      if (s.busy || sp?.kind !== "voice_setup") return none(s);
+      switch (e.state) {
+        case "running":
+          // Progress updates the same balloon (no new revision: no re-typing).
+          return none({ ...s, speech: { ...sp, progress: e.percent ?? 0, failed: null } });
+        case "done":
+          return none(speak(s, { kind: "reply", text: e.ready, actions: [] }));
+        case "failed":
+          return none({ ...s, speech: { ...sp, progress: null, failed: e.failed } });
+        case "cancelled":
+          return none({ ...s, speech: { ...sp, progress: null, failed: null } });
+      }
+    }
   }
+}
+
+/** Dismiss the voice download offer ("Not now"). */
+export function dismissSpeech(s: BubbleState): BubbleState {
+  return s.busy ? s : speak(s, null);
 }

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Glitch stage</title>
+    <!-- Dev only: a fake desktop with fake app windows. Runs the real creature
+         (physics, brain, animations, renderer) and composites his 160x160
+         window onto it. Open http://localhost:1420/dev/stage.html with Vite running.
+         Drag Glitch around and throw him; drag the fake windows by their title bars.
+         Query: ?debug=1 (ledges, window rect, hitbox)  ?seed=3  ?movement=0  ?nowin=1 (no app windows) -->
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #111; }
+      canvas#desk { display: block; width: 100vw; height: 100vh; touch-action: none; }
+      #hud { position: fixed; right: 8px; top: 8px; font: 11px/1.35 ui-monospace, monospace; color: #e7e0ff; background: rgba(10, 0, 20, 0.6); padding: 6px 8px; border-radius: 6px; white-space: pre; pointer-events: none; }
+    </style>
+  </head>
+  <body>
+    <canvas id="desk"></canvas>
+    <div id="hud"></div>
+    <script type="module" src="./stage.ts"></script>
+  </body>
+</html>

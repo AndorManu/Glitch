@@ -110,11 +110,15 @@ pub fn start(app: AppHandle) {
             let near = (cursor.0 - cx).abs() < 400.0 * scale && (cursor.1 - cy).abs() < 400.0 * scale;
             wait = if near { NEAR_POLL } else { FAR_POLL };
             if last != Some(over) {
-                if let Some(win) = app.get_webview_window(MASCOT) {
-                    // Ignoring the mouse = clicks go through to the desktop.
-                    let _ = win.set_ignore_cursor_events(!over);
-                    let _ = win.emit("mascot-hover", over);
+                let Some(win) = app.get_webview_window(MASCOT) else { continue };
+                // Not before the window is on screen (GTK has no native
+                // window yet and tao would panic on Linux).
+                if !win.is_visible().unwrap_or(false) {
+                    continue;
                 }
+                // Ignoring the mouse = clicks go through to the desktop.
+                let _ = win.set_ignore_cursor_events(!over);
+                let _ = win.emit("mascot-hover", over);
                 last = Some(over);
             }
         }

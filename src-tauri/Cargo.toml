@@ -15,7 +15,23 @@ tauri = { version = "2.12.1", features = ["tray-icon", "image-png"] }
 tauri-plugin-single-instance = "2.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["sync", "time"] }
+tokio = { version = "1", features = ["sync", "time", "fs", "io-util"] }
+
+# Voice commands (src/voice/). Speech-to-text runs on this computer with
+# whisper.cpp (built from source by whisper-rs-sys; needs cmake + a C++
+# compiler, see .cargo/config.toml for the portable-CPU build flags).
+whisper-rs = "0.16"
+tauri-plugin-global-shortcut = "2.4"
+# Speech-model download over HTTPS with the OS's own TLS (SChannel on
+# Windows, Security.framework on macOS): no extra TLS stack in the binary.
+reqwest = { version = "0.13", default-features = false, features = ["native-tls"] }
+sha1_smol = "1"
+open = "5"
+
+# Microphone capture (WASAPI / CoreAudio). Linux isn't a target and would
+# need the ALSA dev headers, so voice is unavailable there.
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+cpal = "0.18"
 
 # Reading other apps' window positions so Glitch can stand on them
 # (src/world_native.rs). Both are already part of Tauri's dependency tree.
@@ -30,3 +46,8 @@ windows-sys = { version = "0.61", features = [
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
 core-graphics = "0.25"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+wiremock = "0.6"

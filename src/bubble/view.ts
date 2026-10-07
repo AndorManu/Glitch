@@ -11,6 +11,7 @@ import {
   ICON_CLOSE,
   ICON_FAIL,
   ICON_GEAR,
+  ICON_MIC,
   ICON_SEND,
   TAIL,
   TAIL_TIP,
@@ -20,6 +21,7 @@ import {
 import { canSend, type BubbleState, type Speech } from "./state";
 import { actionChip, breakChunks, centerOn, tailWithin } from "./text";
 import { Typewriter } from "./typewriter";
+import { micActive, micHint, setupText, type MicState } from "./voice";
 
 export interface ViewHandlers {
   send(text: string): void;
@@ -29,6 +31,14 @@ export interface ViewHandlers {
   openSetup(): void;
   /** The current speech has been fully revealed on screen. */
   seen(): void;
+  /** Mic button pressed / released (pointer or keyboard). */
+  micDown(): void;
+  micUp(): void;
+  /** Voice setup offer buttons. */
+  voiceDownload(): void;
+  voiceDismiss(): void;
+  voiceCancelDownload(): void;
+  openMicSettings(): void;
 }
 
 /** Transparent gap kept around the shapes for their shadow and focus ring. */
@@ -40,7 +50,16 @@ const PILL_TAIL_INSET = 26;
 const BALLOON_TAIL_INSET = 22;
 const MAX_LINES = 4;
 
-type SpeechShown = { kind: "speech"; rev: number; el: HTMLElement; balloon: HTMLElement; tail: SVGSVGElement; choices: HTMLButtonElement[] };
+type SpeechShown = {
+  kind: "speech";
+  rev: number;
+  el: HTMLElement;
+  balloon: HTMLElement;
+  tail: SVGSVGElement;
+  choices: HTMLButtonElement[];
+  /** Voice setup offer: progress bar, status line, and its button rows. */
+  setup?: { bar: HTMLElement; fill: HTMLElement; note: HTMLElement; pct: HTMLElement; offer: HTMLElement; running: HTMLElement };
+};
 type Shown = { kind: "cloud"; el: HTMLElement } | SpeechShown;
 
 export class BubbleView {
@@ -50,6 +69,11 @@ export class BubbleView {
   private readonly pill: HTMLElement;
   private readonly pillTail: SVGSVGElement;
   private readonly sendButton: HTMLButtonElement;
+  private readonly micButton: HTMLButtonElement;
+  private readonly voiceStrip: HTMLElement;
+  private readonly voiceHint: HTMLElement;
+  private mic: MicState | null = null;
+  private placeholder = PLACEHOLDER;
   private layout: BubbleLayout = { tail_up: false, tail_x: 150 };
   private shown: Shown | null = null;
   private typer: Typewriter | null = null;
@@ -83,7 +107,17 @@ export class BubbleView {
     close.append(svg(ICON_CLOSE));
     this.pillTail = svg(TAIL, "tail");
 
-    this.pill = h("form", { class: "pill", "aria-label": "Chat with Glitch" }, gear, this.input, this.sendButton, close);
+    // Push-to-talk. Hidden until the voice side says it's usable.
+    this.micButton = h("button", { type: "button", class: "icon mic", hidden: true, "aria-label": "Talk to Glitch" });
+    this.micButton.append(svg(ICON_MIC), h("span", { class: "mic-ring", "aria-hidden": "true" }));
+    this.bindMic(this.micButton);
+    // Shown over the text box while listening: a level meter and a hint.
+    const bars = h("span", { class: "bars", "aria-hidden": "true" });
+    for (let i = 0; i < 5; i++) bars.append(h("i"));
+    this.voiceHint = h("span", { class: "voice-hint" });
+    this.voiceStrip = h("div", { class: "voice-strip", "aria-live": "polite" }, bars, this.voiceHint);
+
+    this.pill = h("form", { class: "pill", "aria-label": "Chat with Glitch" }, gear, this.input, this.voiceStrip, this.micButton, this.sendButton, close);
     this.pill.append(this.pillTail);
     this.pill.addEventListener("submit", (e) => {
       e.preventDefault();
@@ -109,6 +143,7 @@ export class BubbleView {
   render(state: BubbleState): void {
     this.state = state;
     this.sendButton.disabled = !canSend(state, this.input.value);
+    this.micButton.disabled = state.busy && !(this.mic && micActive(this.mic));
     this.root.setAttribute("aria-busy", String(state.busy));
 
     if (state.busy) {
@@ -156,6 +191,82 @@ export class BubbleView {
   clearInput(): void {
     this.input.value = "";
     this.fitInput();
+  }
+
+  /** Put text in the message box (a transcript that couldn't be sent yet). */
+  setInput(text: string): void {
+    this.input.value = text;
+    this.fitInput();
+    if (this.state) this.sendButton.disabled = !canSend(this.state, text);
+  }
+
+  /** While Glitch thinks about a spoken message, show what he heard in the empty box. */
+  setEcho(text: string | null): void {
+    this.placeholder = text ? `“${text}”` : PLACEHOLDER;
+    this.input.placeholder = this.placeholder;
+    this.pill.classList.toggle("echo", !!text);
+  }
+
+  // ------------------------------------------------------------- voice
+
+  /** Mic button + listening strip. `hotkeyTitle`: the button's tooltip. */
+  renderMic(mic: MicState, title: string): void {
+    const prev = this.mic;
+    this.mic = mic;
+    const b = this.micButton;
+    b.hidden = mic.phase === "hidden";
+    b.title = title;
+    const active = micActive(mic);
+    b.disabled = !active && !!this.state?.busy;
+    b.setAttribute("aria-pressed", String(mic.phase === "starting" || mic.phase === "listening"));
+    this.pill.classList.toggle("listening", mic.phase === "starting" || mic.phase === "listening");
+    this.pill.classList.toggle("transcribing", mic.phase === "transcribing");
+    this.voiceStrip.style.setProperty("--level", mic.level.toFixed(2));
+    b.style.setProperty("--level", mic.level.toFixed(2));
+    const hint = micHint(mic);
+    if (this.voiceHint.textContent !== hint) this.voiceHint.textContent = hint;
+    if (!prev || micActive(prev) !== active) {
+      this.input.readOnly = active;
+      this.input.setAttribute("aria-hidden", String(active));
+    }
+  }
+
+  private bindMic(b: HTMLButtonElement): void {
+    let down = false;
+    const press = () => {
+      if (down || b.disabled) return;
+      down = true;
+      this.on.micDown();
+    };
+    const release = () => {
+      if (!down) return;
+      down = false;
+      this.on.micUp();
+    };
+    b.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault(); // keep the text box focused, no text selection
+      b.setPointerCapture?.(e.pointerId);
+      press();
+    });
+    b.addEventListener("pointerup", release);
+    b.addEventListener("pointercancel", release);
+    b.addEventListener("lostpointercapture", release);
+    b.addEventListener("contextmenu", (e) => e.preventDefault());
+    // Keyboard: Space/Enter work like the mouse (hold or tap).
+    b.addEventListener("keydown", (e) => {
+      if ((e.key === " " || e.key === "Enter") && !e.repeat) {
+        e.preventDefault();
+        press();
+      }
+    });
+    b.addEventListener("keyup", (e) => {
+      if (e.key === " " || e.key === "Enter") {
+        e.preventDefault();
+        release();
+      }
+    });
+    b.addEventListener("blur", release);
   }
 
   // ----------------------------------------------------------- compose
@@ -212,15 +323,19 @@ export class BubbleView {
   }
 
   private buildSpeech(speech: Speech, rev: number): { shown: SpeechShown; typed: HTMLElement; text: string } {
-    const balloon = h("div", { class: `balloon ${speech.kind}` });
-    const main = speech.kind === "confirm" ? askPermission(speech.title) : speech.text;
+    const balloon = h("div", { class: `balloon ${speech.kind}${speech.kind === "notice" ? ` ${speech.tone}` : ""}` });
+    const main =
+      speech.kind === "confirm" ? askPermission(speech.title) : speech.kind === "voice_setup" ? setupText(speech.sizeMb) : speech.text;
 
     // Screen readers get the whole text at once; the eyes get it typed.
     const say = h("p", { class: "say" });
     const typed = h("span", { "aria-hidden": "true" });
     say.append(h("span", { class: "sr" }, main), typed);
     const scroll = h("div", { class: "scroll" }, say);
-    if (speech.kind === "error") scroll.prepend(h("span", { class: "glyph", "aria-hidden": "true" }, "!"));
+    if (speech.kind === "error" || (speech.kind === "notice" && speech.tone === "error")) {
+      scroll.prepend(h("span", { class: "glyph", "aria-hidden": "true" }, "!"));
+    }
+    if (speech.kind === "voice_setup") scroll.prepend(h("span", { class: "glyph mic-glyph", "aria-hidden": "true" }, svg(ICON_MIC)));
     if (main) balloon.append(scroll);
 
     if (speech.kind === "confirm" && speech.detail) {
@@ -229,7 +344,7 @@ export class BubbleView {
       balloon.append(detail);
     }
 
-    const actions = speech.kind === "error" ? [] : speech.actions;
+    const actions = speech.kind === "reply" || speech.kind === "confirm" ? speech.actions : [];
     if (actions.length) balloon.append(this.buildChips(actions));
 
     const choices: HTMLButtonElement[] = [];
@@ -247,6 +362,30 @@ export class BubbleView {
     if (speech.kind === "error" && speech.offerSetup) {
       balloon.append(h("div", { class: "choices" }, h("button", { type: "button", class: "choice yes", onclick: () => this.on.openSetup() }, "Fix it")));
     }
+    if (speech.kind === "notice" && speech.action === "mic-settings") {
+      balloon.append(
+        h("div", { class: "choices" }, h("button", { type: "button", class: "choice yes", onclick: () => this.on.openMicSettings() }, "Open settings")),
+      );
+    }
+    let setup: SpeechShown["setup"];
+    if (speech.kind === "voice_setup") {
+      const fill = h("i");
+      const bar = h("div", { class: "vbar", role: "progressbar", "aria-label": "Download progress", "aria-valuemin": 0, "aria-valuemax": 100 }, fill);
+      const note = h("p", { class: "note", role: "alert" });
+      const download = h("button", { type: "button", class: "choice yes", onclick: () => this.on.voiceDownload() }, "Download");
+      const later = h("button", { type: "button", class: "choice no", onclick: () => this.on.voiceDismiss() }, "Not now");
+      const offer = h("div", { class: "choices" }, download, later);
+      const pct = h("span", { class: "pct", role: "status" });
+      const running = h(
+        "div",
+        { class: "choices running" },
+        pct,
+        h("button", { type: "button", class: "choice no", onclick: () => this.on.voiceCancelDownload() }, "Cancel"),
+      );
+      choices.push(download);
+      setup = { bar, fill, note, pct, offer, running };
+      balloon.append(bar, note, offer, running);
+    }
 
     const tail = svg(TAIL, "tail");
     balloon.append(tail);
@@ -255,7 +394,7 @@ export class BubbleView {
 
     scroll.addEventListener("scroll", () => this.markOverflow(scroll), { passive: true });
 
-    const shown: SpeechShown = { kind: "speech", rev, el, balloon, tail, choices };
+    const shown: SpeechShown = { kind: "speech", rev, el, balloon, tail, choices, setup };
     this.updateSpeech(shown, speech);
     return { shown, typed, text: main };
   }
@@ -277,6 +416,24 @@ export class BubbleView {
   }
 
   private updateSpeech(s: SpeechShown, speech: Speech): void {
+    if (speech.kind === "voice_setup" && s.setup) {
+      const { bar, fill, note, pct: pctEl, offer, running } = s.setup;
+      const downloading = speech.progress !== null;
+      bar.hidden = !downloading;
+      running.hidden = !downloading;
+      offer.hidden = downloading;
+      const pct = Math.round(speech.progress ?? 0);
+      fill.style.width = `${pct}%`;
+      bar.setAttribute("aria-valuenow", String(pct));
+      const progressText = `Downloading… ${pct}%`;
+      if (pctEl.textContent !== progressText) pctEl.textContent = progressText;
+      const text = speech.failed ?? "";
+      if (note.textContent !== text) note.textContent = text;
+      note.hidden = !text;
+      const label = speech.failed ? "Try again" : "Download";
+      if (offer.firstElementChild && offer.firstElementChild.textContent !== label) offer.firstElementChild.textContent = label;
+      return;
+    }
     if (speech.kind !== "confirm") return;
     const done = speech.answer !== null;
     for (const b of s.choices) b.disabled = done;

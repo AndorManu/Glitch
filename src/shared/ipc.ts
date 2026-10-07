@@ -9,6 +9,8 @@ export interface Settings {
   ollama_url: string;
   keep_alive: string;
   memory_enabled: boolean;
+  /** Voice commands (see the voice section at the end of this file). */
+  voice?: VoiceSettings;
 }
 
 export interface MemoryFact {
@@ -69,7 +71,7 @@ export interface PullProgress {
   total: number | null;
 }
 
-export type Mood = "thinking" | "happy" | "asking" | "idle";
+export type Mood = "thinking" | "happy" | "asking" | "idle" | "listening";
 
 export type PanelView = "setup" | "settings";
 
@@ -169,4 +171,90 @@ export const api = {
    * Rust emits "mascot-hover" (boolean) when the cursor enters/leaves it.
    */
   setHitbox: (rect: LocalRect | null) => invoke<void>("set_hitbox", { rect }),
+};
+
+// ------------------------------------------------------------------ voice
+// Push-to-talk voice commands (src-tauri/src/voice/). Everything that
+// happens during a voice command arrives as "voice" events (VoiceEvent);
+// model downloads report as "voice-download" events (VoiceDownloadEvent).
+
+export interface VoiceSettings {
+  enabled: boolean;
+  /** "tiny" | "base" | "small"; null = picked by RAM. */
+  model: string | null;
+  /** "auto" or a language code. */
+  language: string;
+  speak_replies: boolean;
+}
+
+export interface SpeechModel {
+  id: string;
+  label: string;
+  blurb: string;
+  file: string;
+  size_bytes: number;
+  size_mb: number;
+  downloaded: boolean;
+}
+
+export interface VoiceStatus {
+  /** false on Linux, or on a CPU too old for the speech model. */
+  available: boolean;
+  unavailable_reason: "platform" | "cpu" | null;
+  os: "windows" | "macos" | "linux";
+  enabled: boolean;
+  phase: "idle" | "listening" | "transcribing";
+  hotkey: { label: string; registered: boolean; error: string | null };
+  /** Model in use (explicit choice or RAM pick) and the RAM pick. */
+  model: string;
+  recommended: string;
+  model_auto: boolean;
+  models: SpeechModel[];
+  language: string;
+  languages: { code: string; label: string }[];
+  speak_replies: boolean;
+  download: { model: string; done: number; total: number } | null;
+  /** The bubble should offer the model download (the hotkey opened it). */
+  offer_pending: boolean;
+}
+
+export type VoiceEvent =
+  | { phase: "listening"; level: number; hands_free: boolean }
+  | { phase: "transcribing" }
+  | { phase: "heard"; text: string }
+  | { phase: "idle"; reason: "cancelled" | "nothing_heard" }
+  | { phase: "error"; code: string; message: string }
+  | { phase: "needs_model"; model: Omit<SpeechModel, "size_mb" | "downloaded"> };
+
+export interface VoiceDownloadEvent {
+  model: string;
+  state: "running" | "done" | "failed" | "cancelled";
+  done: number;
+  total: number;
+  error: UiError | null;
+}
+
+export interface VoicePatch {
+  enabled?: boolean;
+  /** A model id, or "auto". */
+  model?: string;
+  language?: string;
+  speak_replies?: boolean;
+}
+
+export const voiceApi = {
+  status: () => invoke<VoiceStatus>("voice_status"),
+  updateSettings: (patch: VoicePatch) => invoke<Settings>("update_voice_settings", { patch }),
+  /** "hold": until stop(); "hands_free": until the user goes quiet. */
+  start: (mode: "hold" | "hands_free" = "hold") => invoke<void>("voice_start", { mode }),
+  stop: () => invoke<void>("voice_stop"),
+  /** The mic was only tapped: keep listening until the user is quiet. */
+  handsFree: () => invoke<void>("voice_hands_free"),
+  cancel: () => invoke<void>("voice_cancel"),
+  offerSeen: () => invoke<void>("voice_offer_seen"),
+  /** Default: the model in use. Resolves when finished. */
+  downloadModel: (model?: string) => invoke<void>("voice_download_model", { model }),
+  cancelDownload: () => invoke<void>("voice_cancel_download"),
+  deleteModel: (model: string) => invoke<void>("voice_delete_model", { model }),
+  openMicSettings: () => invoke<void>("voice_open_mic_settings"),
 };

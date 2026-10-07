@@ -1,12 +1,13 @@
 // The panel window: setup wizard and settings. (Chat lives in the bubble.)
 
 import { listen } from "@tauri-apps/api/event";
-import { api, asUiError, type PanelView, type Settings, type SetupStatus } from "../shared/ipc";
+import { api, asUiError, type PanelView, type Settings, type SetupStatus, type VoiceDownloadEvent } from "../shared/ipc";
 import { drawAvatar } from "./avatar";
 import { h } from "./dom";
 import { renderMemory } from "./memory";
 import { formatGb, layout, ollamaSummary, prettyModelName, SetupView, sameModel } from "./setup";
 import { loading, toggleSwitch } from "./ui";
+import { onVoiceDownload, renderVoice } from "./voice";
 
 type View = PanelView;
 
@@ -84,6 +85,8 @@ async function renderSettings(): Promise<void> {
   const ollama = ollamaSummary(status);
   const memoryBody = h("div", { class: "memory" });
   void renderMemory(memoryBody);
+  const voiceBody = h("div", { class: "voice" });
+  void renderVoice(voiceBody);
 
   layout(
     root,
@@ -108,6 +111,7 @@ async function renderSettings(): Promise<void> {
           h("button", { class: "secondary small", type: "button", onclick: () => showView("setup") }, "Run setup again"),
         ),
       ),
+      card("Voice", voiceBody),
       card("Memory", memoryBody),
       h("p", { class: `info ${ollama.state}` }, h("span", { class: "dot", "aria-hidden": "true" }), h("span", {}, ollama.text)),
     ],
@@ -130,6 +134,7 @@ async function main(): Promise<void> {
   await listen<Settings>("settings-changed", () => {
     if (current === "settings") void renderSettings();
   });
+  await listen<VoiceDownloadEvent>("voice-download", (e) => onVoiceDownload(e.payload));
   await listen("memory-changed", () => {
     const body = views.settings.querySelector<HTMLElement>(".memory");
     if (current === "settings" && body) void renderMemory(body);

@@ -5,18 +5,22 @@ doubles as a small, private AI assistant. Click Glitch to chat. Glitch runs a
 small AI model **on your own computer** with [Ollama](https://ollama.com), so
 your chats don't leave your machine.
 
-This is **milestone 1: the foundation**. Voice, "chaos mode" and Claude Code
-notifications are planned for later and are not in this build.
+This is **milestone 1: the foundation** (plus voice commands). "Chaos mode"
+and Claude Code notifications are planned for later and are not in this build.
 
 What works in this milestone:
 
-* Glitch sits on top of your other windows and is properly alive: he
-  breathes, fidgets, hops, glitches (slice/RGB-split/pixel bursts every so
-  often), walks with a multi-frame bobbing run, dangles when you pick him up
-  and lands with a squash, and curls up asleep after 10 quiet minutes. See
-  [docs/ANIMATIONS.md](docs/ANIMATIONS.md) for every animation, including
-  ready-made actions for later features (grabbing the cursor, dragging a
-  window on a rope, teleporting).
+* Glitch **lives on your whole desktop**, Shimeji-style: he walks along the
+  taskbar, climbs up the screen edges, crawls upside-down along the top,
+  jumps onto **the tops of your open windows** and walks/sits on them (if you
+  move or close that window he rides along or falls), glitch-teleports, and
+  sometimes builds himself a glowing glitch platform. He breathes, fidgets
+  and glitches (slice/RGB-split/pixel bursts) for real.
+* **Grab him and throw him**: real gravity, spin, bounces off the screen
+  edges, a squash (or splat + dizzy stars) on landing; he can land on a
+  window or grab a wall. Only his body catches the mouse: clicks around him
+  go straight through to your desktop. See [docs/ANIMATIONS.md](docs/ANIMATIONS.md)
+  for every animation and behaviour.
 * Click him and a **small round chat bubble** pops up above him. Type, press
   Enter; while he thinks you get a little thought cloud, and the answer
   appears as a speech bubble.
@@ -28,7 +32,10 @@ What works in this milestone:
 * **Memory**: he remembers facts you tell him, compacts long chats into a
   short summary, keeps a one-line-per-day journal, and continues the chat
   after a restart. You can see and delete everything in Settings → Memory.
-* Settings: choose the model, walking on/off, memory, clear chat, quit.
+* **Voice commands**: hold the mic button in the chat (or Ctrl+Shift+Space /
+  Cmd+Shift+Space anywhere), talk, let go. Speech-to-text runs on your
+  computer too (see [Voice commands](#voice-commands)).
+* Settings: choose the model, walking on/off, voice, memory, clear chat, quit.
 
 ---
 
@@ -44,6 +51,9 @@ You need these once (all free):
    accept the defaults.
 4. **Node.js 22 LTS**: <https://nodejs.org> (the "LTS" installer).
 5. **Git**: <https://git-scm.com/download/win>.
+6. **CMake and LLVM** (to build the speech-to-text engine, whisper.cpp): in
+   PowerShell run `winget install Kitware.CMake LLVM.LLVM`, then open a new
+   PowerShell window.
 
 Then, in a new **PowerShell** window:
 
@@ -67,6 +77,8 @@ up in `target\release\bundle\nsis\` (named like `Glitch_0.1.0_x64-setup.exe`).
 You need these once:
 
 1. **Xcode Command Line Tools**: in Terminal run `xcode-select --install`.
+   Also **CMake** (for the speech-to-text engine): `brew install cmake`, or the
+   installer from <https://cmake.org/download/>.
 2. **Rust**: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
    (accept the defaults, then open a new Terminal window).
 3. **Node.js 22 LTS**: <https://nodejs.org> or `brew install node@22`.
@@ -113,6 +125,59 @@ Intel). These builds are **not code-signed**, so:
      Documents, Downloads, Pictures, Music and Videos, then can open the
      result (asks again)
 
+## Voice commands
+
+**How to talk to Glitch**
+
+* **Hold** the 🎤 button in the chat bubble, say something ("open YouTube"),
+  **let go**. Glitch writes down what you said and answers as if you typed it
+  (Allow / Nope questions work the same).
+* **Tap** the button instead to talk hands-free: Glitch stops listening by
+  himself about a second after you stop talking (tap again to stop early).
+* From anywhere: **hold Ctrl+Shift+Space** (Windows) / **Cmd+Shift+Space**
+  (macOS). The bubble opens and Glitch listens until you let go. A quick tap
+  works hands-free here too. Esc cancels.
+* The first time, Glitch offers to download a **speech model** (one time,
+  with progress; Settings → Voice can also download, switch or delete it):
+
+  | Model | Download | Used by default when |
+  |---|---|---|
+  | Tiny | 75 MB | the computer has less than 8 GB of RAM |
+  | Base | 142 MB | 8 GB of RAM or more |
+  | Small | 466 MB | only if you pick it (most accurate, slowest) |
+
+  These are the official whisper.cpp files from Hugging Face; the download
+  resumes if it's interrupted and is checked against the official SHA-1
+  before it's used. Settings → Voice also sets the language you speak
+  (default: detect automatically) and **Read replies aloud** (off by default;
+  uses the computer's own voice for short replies).
+
+**Private and light.** Push-to-talk only: the microphone is opened when you
+press and closed the moment you let go; there is no "always listening". Your
+voice is turned into text on your computer by
+[whisper.cpp](https://github.com/ggml-org/whisper.cpp); no audio is saved or
+sent anywhere. While you're not talking there is no audio stream, no extra
+thread and no speech model in memory: the model is loaded when you start
+talking (while you talk, so it's ready when you stop) and freed 60 seconds
+after the last use.
+
+**Permissions**
+
+* **macOS** asks "Glitch would like to access the microphone" the first time.
+  If you said no: System Settings → Privacy & Security → Microphone → turn on
+  Glitch (the bubble has an "Open settings" button for this).
+* **Windows**: if Windows blocks it, turn on Settings → Privacy & security →
+  Microphone → **"Let desktop apps access your microphone"** (the bubble
+  explains this and opens the page).
+* If another app already uses the shortcut, Settings → Voice says so; the
+  mic button still works.
+
+**Limits**: voice isn't available on Linux builds, and on x86 PCs without
+AVX2 (roughly older than 2013, and some budget Celeron/Pentium chips) voice
+is switched off instead of risking a crash. A future signed/notarized macOS
+build with the hardened runtime will also need the
+`com.apple.security.device.audio-input` entitlement.
+
 ---
 
 ## Why Tauri (and not Electron)
@@ -156,8 +221,8 @@ on the manual checklist below.
 src/                     frontend (TypeScript, no framework)
   mascot/                mascot window: animator, walker, click/drag
   mascot/                animations, glitch effects, props, walking, input
-  bubble/                the chat bubble (compose pill, replies, thinking cloud)
-  panel/                 setup wizard + settings (incl. Memory)
+  bubble/                the chat bubble (compose pill, replies, thinking cloud, mic button)
+  panel/                 setup wizard + settings (incl. Memory, Voice)
   sprites/               sprite-sheet frame map, loader, fallback art
 art/                     the original character art (source of the sheet)
 public/sprites/          the generated sprite sheet the app loads
@@ -166,6 +231,8 @@ scripts/make-sprites.py  art → sprite sheet + app icon
 src-tauri/               thin app shell: windows, tray, IPC commands
   tauri.conf.json        mascot window: transparent, frameless, on top
   src/os.rs              app-shell OS differences (macOS: no Dock icon)
+  src/voice/             voice: mic (cpal), whisper.cpp, model download, hotkey
+  Info.plist             macOS microphone permission text
 crates/glitch-core/      all the logic, no UI dependency, unit-tested
   src/ai/                AiProvider trait + Ollama implementation
   src/models.rs          RAM → model tiers (one table)
@@ -174,6 +241,8 @@ crates/glitch-core/      all the logic, no UI dependency, unit-tested
   src/agent.rs           chat loop: model → tools → confirm → model
   src/platform/          the ONLY OS-specific logic (windows.rs, macos.rs)
   src/settings.rs        settings JSON file
+  src/voice/             voice logic: resampling, silence detection, transcript
+                         clean-up, speech-model table
 docs/PLAN.md             the plan this milestone followed
 docs/ANIMATIONS.md       every animation + the art wishlist
 dev/                     screenshot scripts and the animation gallery (dev only)
@@ -222,6 +291,10 @@ API-key provider would be a new file implementing `chat()`.
   exists while Glitch is thinking.
 * **The chat bubble and the settings panel are only created when first
   opened**, then hidden (not destroyed), so the conversation is kept.
+* **Voice**: nothing runs until you press the mic button or the shortcut (the
+  shortcut itself is a passive OS registration). Recording, the speech model
+  and its threads only exist while used; the model is freed 60 s after the
+  last voice command (enforced by unit tests with a fake model).
 * **Memory compaction** runs right after a reply, while the model is still
   loaded anyway, so it never wakes the model up by itself.
 * **File search is bounded**: max depth 8, 200,000 entries, 4 seconds, 15
@@ -291,7 +364,7 @@ to a tiny code-drawn creature (`src/sprites/glitch.ts`), so the app still works.
 
 **Automated (runs in CI on every push):**
 
-* `cargo test --workspace`: 101 Rust tests (incl. memory: facts, secrets
+* `cargo test --workspace`: 168 Rust tests (incl. memory: facts, secrets
   refused, compaction with a scripted model, journal roll-over, restart)
   * Ollama client against a mock HTTP server using the documented API
     responses: request body (`stream:false`, `keep_alive`, `num_ctx`,
@@ -306,12 +379,27 @@ to a tiny code-drawn creature (`src/sprites/glitch.ts`), so the app still works.
     loop with a scripted fake model (auto URL, approve, decline, invalid
     calls, loop cap, history trimming)
   * panel placement next to Glitch (multi-monitor, screen edges)
-* `npm test`: 63 frontend tests: animation engine (one timer max, idle and
+  * voice: resampler accuracy (sine in → sine out at 16 kHz from 8–48 kHz,
+    aliases removed), silence detection and auto-stop, trimming/padding,
+    transcript clean-up (`[BLANK_AUDIO]`, "(music)", invented outros),
+    speech-model choice by RAM and URLs, the model download against a mock
+    server (progress, resume with `Range`, server ignoring `Range`, wrong
+    size, bad SHA-1, cancel + resume, offline), a whole voice command with a
+    fake microphone (mic closed before transcription, cancel, nothing said,
+    muted stream, mic errors), and the model being freed after its
+    keep-alive (and never while in use)
+* `npm test`: 130 frontend tests: physics (gravity, no tunnelling through
+  window tops at any speed, bounces stay on screen, planned jumps land),
+  throw velocity, the behaviour brain (cooldowns, reactions, CPU budget over
+  a simulated hour), and: animation engine (one timer max, idle and
   sleep repaint budgets over 40 random seeds, every animation ends or loops
   as intended), deterministic glitch slicing, walker stays on screen, bubble
   state machine (stale confirmations, double answers), text helpers, wizard
   and memory-card helpers.
 * `node dev/bubble-check.mjs`: 40 browser checks of the bubble with mocked IPC.
+  The voice states of the bubble (mic button, listening meter, transcribing,
+  model download offer, errors) and Settings → Voice were checked the same
+  way, with screenshots.
 * CI also **builds the real app on Windows and macOS runners**, which proves
   the OS-specific code compiles and the unit tests pass on both OSes.
 
@@ -321,18 +409,36 @@ setup wizard opens beside it, choosing a model saves settings, "open twitter on
 elon musk's page" opened `https://x.com/elonmusk` with no prompt, "find a
 photo of a dog" showed the confirmation card, and Allow ran the search and
 found the test file. This run caught three bugs, which are fixed.
+A later run of the full current build: Glitch roamed on his own (and built
+a glitch platform), was grabbed and flung with the mouse (flew with a glitch
+trail and grabbed the left screen edge), the chat bubble appeared right
+above his body and the URL flow worked again. Average CPU over 90 s of free
+roaming: ~1.2% of one core (debug build, no GPU: a worst case). Voice is
+off on Linux, so it wasn't part of this run.
+
+**Live check with a real Ollama:** `node dev/ollama-check/check.mjs --pull`
+sends Glitch's exact prompts/tools to your local Ollama and checks the model
+calls the right tools (see [dev/ollama-check](dev/ollama-check/check.mjs)).
 
 **NOT verified (I had no Windows or macOS desktop):**
 
 * transparency (no box/border/white flash behind Glitch) on Windows and macOS
 * always-on-top behaviour, including over full-screen apps
-* dragging, click-vs-drag detection, walking smoothness, DPI scaling
+* dragging/throwing, click-through around Glitch, walking/climbing
+  smoothness and DPI scaling on real Windows/macOS desktops
+* standing on other apps' windows: reading their positions works and builds
+  on both OSes (CI), but hasn't been watched on a real desktop yet
 * the tray / menu-bar icon and its menu
 * real app discovery and launching (Start Menu shortcuts, `.app` bundles)
 * starting Ollama from the wizard, and a real model download and real chat
   with a real Ollama model (the smoke test used a mock)
 * macOS file-permission prompts, Gatekeeper/SmartScreen flows
 * actual idle CPU and RAM on Windows/macOS
+* voice with a real microphone and a real speech model on Windows/macOS:
+  recording, the permission prompts, the global shortcut, the real model
+  download from Hugging Face (only tested against a local mock server), and
+  transcription quality/speed (whisper.cpp was only run here with its tiny
+  test model)
 
 ## Manual test checklist
 
@@ -383,6 +489,32 @@ test the wizard from scratch.
 - [ ] Stop Ollama mid-session and send a message: a friendly error with
       "Fix it" appears
 
+**Voice**
+
+- [ ] Hold the mic button: first time, the "speech model" offer appears;
+      Download shows progress and ends with "All set!"
+- [ ] Turn Wi-Fi off during the download: a friendly "Are you online?"
+      message; turn it back on, "Try again" continues where it stopped
+- [ ] Hold the mic and say "open YouTube", let go: "Writing it down…", then
+      YouTube opens; the bubble shows what was heard while Glitch thinks
+- [ ] Tap the mic, say "open the calculator", stop talking: it stops by
+      itself after ~1 s and shows the Allow / Nope question
+- [ ] Hold Ctrl+Shift+Space (Cmd+Shift+Space on a Mac) with the chat closed:
+      the bubble opens and listens until you let go; Glitch shows a
+      listening pose while recording
+- [ ] Esc while listening cancels; closing the bubble cancels
+- [ ] macOS: the first use asks for microphone access with Glitch's
+      explanation; deny it, try again: the bubble explains how to allow it
+- [ ] Windows: turn off "Let desktop apps access your microphone", try: the
+      bubble explains it and "Open settings" opens the right page
+- [ ] Unplug/disable the microphone: "I can't find a microphone"
+- [ ] Speak another language with "Detect automatically": it's understood
+- [ ] Settings → Voice: switch to Tiny (download), delete Base, turn on "Read
+      replies aloud" (a short reply is spoken; pressing the mic stops it)
+- [ ] The OS microphone indicator is only on while you hold/talk
+- [ ] Task Manager / Activity Monitor: after a voice command Glitch's memory
+      goes up by about the model size, and back down ~1 minute later
+
 **Memory**
 
 - [ ] "Remember that my dog is called Rex" shows a "Remembered" chip and the
@@ -412,6 +544,12 @@ test the wizard from scratch.
   `~/Library/Application Support/dev.glitch.companion/` (macOS).
   Delete `settings.json` to start the wizard again; delete `memory.json` (or
   use Settings → Memory → Forget everything) to wipe his memory.
+* **Voice**: speech models are in `%LOCALAPPDATA%\dev.glitch.companion\speech-models\`
+  (Windows) or `~/Library/Application Support/dev.glitch.companion/speech-models/`
+  (macOS); deleting them there or in Settings → Voice is safe (they're
+  downloaded again on the next voice command). If Glitch keeps saying he
+  didn't catch anything, check the input device and its level in the
+  system's sound settings.
 
 ## Next milestone (suggested)
 

@@ -6,6 +6,11 @@ const icon = (body: string, size = 16) =>
 
 export const ICON_SEND = icon(`<path d="M8 13.2V3.4M3.6 7.6 8 3.2l4.4 4.4" stroke-width="2.3"/>`);
 
+/** Microphone: capsule, cradle, stand. */
+export const ICON_MIC = icon(
+  `<rect x="5.6" y="1.6" width="4.8" height="8" rx="2.4" stroke-width="2"/><path d="M3.2 7.6a4.8 4.8 0 0 0 9.6 0M8 12.4v2" stroke-width="2"/>`,
+);
+
 export const ICON_GEAR = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
 
 export const ICON_CLOSE = icon(`<path d="M4.5 4.5l7 7M11.5 4.5l-7 7" stroke-width="2.4"/>`, 10);

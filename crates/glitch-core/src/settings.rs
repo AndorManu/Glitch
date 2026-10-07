@@ -22,6 +22,28 @@ pub struct Settings {
     pub keep_alive: String,
     /// Whether Glitch remembers things between chats (memory.json).
     pub memory_enabled: bool,
+    /// Voice commands (push-to-talk). Missing in older files → defaults.
+    pub voice: VoiceSettings,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VoiceSettings {
+    /// Mic button + hotkey. On by default, but nothing is loaded or
+    /// downloaded until the first time the user talks.
+    pub enabled: bool,
+    /// Speech model id ("tiny", "base", "small"); `None` = pick by RAM.
+    pub model: Option<String>,
+    /// "auto" or a language code from `voice::LANGUAGES`.
+    pub language: String,
+    /// Read short replies aloud with the system voice.
+    pub speak_replies: bool,
+}
+
+impl Default for VoiceSettings {
+    fn default() -> Self {
+        Self { enabled: true, model: None, language: "auto".into(), speak_replies: false }
+    }
 }
 
 impl Default for Settings {
@@ -33,6 +55,7 @@ impl Default for Settings {
             ollama_url: ollama::DEFAULT_URL.to_string(),
             keep_alive: ollama::DEFAULT_KEEP_ALIVE.to_string(),
             memory_enabled: true,
+            voice: VoiceSettings::default(),
         }
     }
 }
@@ -107,5 +130,39 @@ mod tests {
         let s = Settings::load(&path);
         assert_eq!(s.model.as_deref(), Some("llama3.2:3b"));
         assert!(s.movement_enabled);
+    }
+
+    #[test]
+    fn voice_defaults_and_old_files() {
+        let v = Settings::default().voice;
+        assert!(v.enabled);
+        assert_eq!(v.model, None);
+        assert_eq!(v.language, "auto");
+        assert!(!v.speak_replies);
+        // A settings file from before voice existed.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, r#"{"model":"qwen3.5:2b","onboarding_done":true,"memory_enabled":false}"#).unwrap();
+        let s = Settings::load(&path);
+        assert!(s.onboarding_done && !s.memory_enabled);
+        assert_eq!(s.voice, VoiceSettings::default());
+        // Partial voice section: the rest falls back to defaults.
+        std::fs::write(&path, r#"{"voice":{"model":"tiny","future":1}}"#).unwrap();
+        let s = Settings::load(&path);
+        assert_eq!(s.voice.model.as_deref(), Some("tiny"));
+        assert!(s.voice.enabled);
+        assert_eq!(s.voice.language, "auto");
+        // Round trip.
+        let s = Settings {
+            voice: VoiceSettings {
+                enabled: false,
+                model: Some("small".into()),
+                language: "de".into(),
+                speak_replies: true,
+            },
+            ..Default::default()
+        };
+        s.save(&path).unwrap();
+        assert_eq!(Settings::load(&path), s);
     }
 }

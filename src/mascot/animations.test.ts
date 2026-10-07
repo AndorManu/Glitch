@@ -96,9 +96,18 @@ describe("animations", () => {
   });
 
   it("actions either finish (once) or loop, as intended", () => {
-    const once: AnimationName[] = ["happy", "startled", "laugh", "grabCursor", "peek", "fall", "land", "glitchOut", "gone", "glitchIn", "chaosSpin"];
-    const loops: AnimationName[] = ["idle", "walk", "think", "ask", "sleep", "carryCursor", "dragWindow", "pushWindow", "dangle", "napRock"];
-    expect([...once, ...loops].sort()).toEqual(Object.keys(ANIMATIONS).sort());
+    const once: AnimationName[] = [
+      ...["happy", "startled", "laugh", "grabCursor", "peek", "fall", "land", "glitchOut", "gone", "glitchIn", "chaosSpin"],
+      ...["crouch", "splat", "dizzy", "peekEdge", "lookAround", "build", "malfunction"],
+    ] as AnimationName[];
+    const loops: AnimationName[] = [
+      ...["idle", "walk", "think", "ask", "sleep", "carryCursor", "dragWindow", "pushWindow", "dangle", "napRock"],
+      ...["cling", "climb", "run", "airUp", "airDown", "tumble", "flail", "sitEdge", "held", "heldKick", "listen"],
+    ] as AnimationName[];
+    // These hand over to a loop that isn't idle.
+    const special: Partial<Record<AnimationName, AnimationName>> = { lookBack: "cling", yawn: "sleep" };
+    for (const [name, then] of Object.entries(special)) expect(simulate(name as AnimationName, 20_000).animator.animation, name).toBe(then);
+    expect([...once, ...loops, ...Object.keys(special)].sort()).toEqual(Object.keys(ANIMATIONS).sort());
     for (const name of once) {
       const r = simulate(name, 20_000);
       // Every one-shot chain ends back in idle within a few seconds.
@@ -244,7 +253,7 @@ describe("CPU budgets (60 s of fake time)", () => {
       const r = simulate(name, 10_000, 5);
       expect(Math.min(...r.delays), name).toBeGreaterThanOrEqual(MIN_KEY_MS);
       expect(r.draws / (r.elapsed / 1000), name).toBeLessThanOrEqual(MAX_FPS);
-      expect(r.maxPending, name).toBe(1);
+      expect(r.maxPending, name).toBeLessThanOrEqual(1);
     }
   });
 

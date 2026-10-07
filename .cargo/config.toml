@@ -1,0 +1,8 @@
+# Build settings for whisper.cpp (voice commands, built by whisper-rs-sys).
+[env]
+# Don't tune whisper.cpp for the CPU of the machine that builds it (the CI
+# runner): the app must run on users' older CPUs too. With this off, x86-64
+# builds target AVX2/FMA/F16C/BMI2 (most PCs since ~2013; Glitch checks at
+# runtime and politely disables voice on CPUs without them instead of
+# crashing), Apple Silicon the generic ARMv8 baseline.
+GGML_NATIVE = "OFF"
