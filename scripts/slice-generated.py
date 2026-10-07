@@ -725,6 +725,12 @@ SHEETS["glasses_type"]["cell"] = 4.9  # sitting: eye height like sit0
 SHEETS["hold_sign"]["cell"] = 4.6  # the sign makes him look tall: sized by the head
 SHEETS["chubby_idle"] = {"n": None, "ref": 0, "target": 55, "tolerance": 0}
 SHEETS["streamer"] = {"n": 8, "ref": 0, "target": 55, "tolerance": 0}
+# Interaction sheets (round 4b): standing, frame 0 as tall as idle0.
+for _name, _n in {"look_dirs": 8, "petted": 8, "high_five": 6, "happy_spin": 6, "jump_scare": 6}.items():
+    SHEETS[_name] = {"n": _n, "ref": 0, "target": 55, "tolerance": 0}
+# Gaze directions and the spin turn his head / body round: never mirrored as a whole.
+SHEETS["look_dirs"]["keep_facing"] = True
+SHEETS["happy_spin"].update({"keep_facing": True, "anchor": "head"})
 # A hat catalogue (one hat per frame; the hats sit on top, so not measured by height).
 SHEETS["hats"] = {"n": 8, "cell": 4.7}
 

@@ -121,6 +121,8 @@ ALIGN = {
     **{s: (STAND, STAND) for s in ["dance_beat", "celebrate_focus", "sweat_fan", "worried_battery", "hold_sign", "knock_screen", "streamer", "chubby_idle", "hats"]},
     **{s: ("sit0", "sit0") for s in ["glasses_type", "watch_tv"]},
     "fetch_ball": ("walk0", None),
+    "look_dirs": (STAND, None),  # a set of held gazes, not a sequence: one shift for all
+    **{s: (STAND, STAND) for s in ["petted", "high_five", "happy_spin", "jump_scare"]},
     **{s: (STAND, None) for s in ["wave", "talk", "think", "laugh", "celebrate", "sad", "angry", "scared", "eat", "dance", "typing", "point", "dizzy", "listen", "surprised"]},
 }
 
@@ -159,7 +161,7 @@ def best_shift(a: np.ndarray, ref: np.ndarray, span: int = 14) -> int:
 #: airborne ones), so the loop holds still where the art didn't.
 STEADY = {"climb": False, "dangle": True, "dizzy": False, "spin": True, "hop_idle": False, "tail_copter": True, "glide": True, "fall_flail": True, "hang_ledge": False,
           # Round 4 fidgets: redrawn every frame, the body wanders sideways.
-          **{s: False for s in ["hats", "sweat_fan", "worried_battery", "hold_sign", "streamer", "chubby_idle", "glasses_type", "watch_tv", "knock_screen"]}}
+          **{s: False for s in ["look_dirs", "petted", "hats", "sweat_fan", "worried_battery", "hold_sign", "streamer", "chubby_idle", "glasses_type", "watch_tv", "knock_screen"]}}
 
 
 def steady(sheet: str, frames: list[np.ndarray]) -> list[np.ndarray]:
