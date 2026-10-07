@@ -16,7 +16,7 @@ describe("context feature card", () => {
   it("has a switch for every reaction and is registered", () => {
     const bools = Object.entries(CONTEXT_DEFAULTS).filter(([k, v]) => typeof v === "boolean" && k !== "enabled").map(([k]) => k);
     expect(REACTION_SWITCHES.map((r) => r.key).sort()).toEqual(bools.sort());
-    for (const r of REACTION_SWITCHES) expect(r.hint).not.toMatch(/[–—]/);
+    for (const r of REACTION_SWITCHES) expect(r.hint).not.toMatch(new RegExp(`[${String.fromCharCode(0x2013, 0x2014)}]`));
     expect(FEATURES.map((f) => f.id)).toContain("context");
   });
 });
