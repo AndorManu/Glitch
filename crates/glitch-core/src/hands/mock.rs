@@ -224,8 +224,8 @@ impl MockHands {
         }
     }
 
-    fn element_mut<'a>(a: &'a mut MockApp, key: u64) -> Option<&'a mut MockEl> {
-        if key >= 900 && key < 1000 {
+    fn element_mut(a: &mut MockApp, key: u64) -> Option<&mut MockEl> {
+        if (900..1000).contains(&key) {
             return a.dialog.as_mut().and_then(|(_, els)| els.get_mut((key - 900) as usize));
         }
         let (si, j) = ((key >> 16) as usize, (key & 0xffff) as usize);
