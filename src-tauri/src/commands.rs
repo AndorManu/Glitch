@@ -176,7 +176,9 @@ pub async fn send_message(app: AppHandle, state: State<'_, AppState>, text: Stri
     }
     let model = state.settings().model.ok_or_else(|| UiError::new("no_model", "Pick a model in settings first"))?;
     let _ = app.emit("mood", "thinking");
-    let result = state.agent.lock().await.send(&model, text).await;
+    // Typed or push-to-talk: trusted. Heard after "Hey Glitch": outside content.
+    let origin = crate::voice::origin_of(&app, text);
+    let result = state.agent.lock().await.send_with(&model, text, origin).await;
     let _ = app.emit("mood", mood_after(&result));
     after_turn(&app, &model, &result);
     result.map_err(UiError::from)

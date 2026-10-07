@@ -40,7 +40,7 @@ impl MicError {
     }
 }
 
-pub use imp::open;
+pub use imp::{open, Mic};
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod imp {

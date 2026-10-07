@@ -138,9 +138,9 @@ impl Resampler {
 /// Little-endian 16-bit PCM (Piper's `--output_raw`) to f32. A trailing odd
 /// byte is returned to be prepended to the next read.
 pub fn pcm16_to_f32(bytes: &[u8], out: &mut Vec<f32>) -> Option<u8> {
-    let mut it = bytes.chunks_exact(2);
-    out.extend(it.by_ref().map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0));
-    it.remainder().first().copied()
+    let (pairs, rest) = bytes.as_chunks::<2>();
+    out.extend(pairs.iter().map(|b| i16::from_le_bytes(*b) as f32 / 32768.0));
+    rest.first().copied()
 }
 
 /// The mascot's mouth moves for `chars * 45 ms` per "mascot-talk" pulse

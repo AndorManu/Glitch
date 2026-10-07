@@ -33,9 +33,10 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let chaos = CheckMenuItem::with_id(app, "chaos", "Chaos mode", true, state.settings().chaos_enabled, None::<&str>)?;
+    let wake = voice::tray::menu_item(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Glitch", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&chat, &wander, &chaos, &settings, &sep, &quit])?;
+    let menu = Menu::with_items(app, &[&chat, &wander, &chaos, &wake, &settings, &sep, &quit])?;
     *state.wander_item.lock().unwrap() = Some(wander);
     *state.chaos_item.lock().unwrap() = Some(chaos);
 
@@ -65,6 +66,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                     }
                     let _ = app.emit("settings-changed", &s);
                 }
+                voice::tray::MENU_ID => voice::wake::toggle(app),
                 "quit" => {
                     let app = app.clone();
                     tauri::async_runtime::spawn(async move { commands::quit_app(&app).await });
@@ -158,12 +160,24 @@ fn main() {
             voice::commands::voice_cancel_download,
             voice::commands::voice_delete_model,
             voice::commands::voice_open_mic_settings,
+            voice::commands::voice_speaking,
+            voice::commands::voice_tts_prepare,
+            voice::commands::voice_tts_speak,
+            voice::commands::voice_tts_stop,
+            voice::commands::voice_tts_download,
+            voice::commands::voice_tts_cancel_download,
+            voice::commands::voice_tts_delete,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Glitch")
         .run(|app, event| {
             // Any way of exiting (tray Quit, OS logout, last window closed):
             // save the chat/memory. (Quit from the UI also unloads the model.)
+            if let tauri::RunEvent::Exit = event {
+                // Close the always-on microphone and any voice playback.
+                voice::wake::shutdown(app);
+                voice::tts::stop(app);
+            }
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 if let Ok(mut agent) = app.state::<AppState>().agent.try_lock() {
                     agent.persist();
