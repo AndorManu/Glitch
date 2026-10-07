@@ -168,7 +168,11 @@ impl Action {
             Action::OpenUrl { url } => Description { title: "Open a web page".into(), detail: url.clone() },
             Action::OpenApp { app } => Description {
                 title: format!("Open the app \u{201c}{}\u{201d}", app.name),
-                detail: app.launch_path.display().to_string(),
+                detail: match crate::platform::windows::packaged_app_id(&app.launch_path) {
+                    // "shell:AppsFolder\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App" means nothing to people.
+                    Some(_) => "An app installed on this PC (Microsoft Store or built into Windows)".into(),
+                    None => app.launch_path.display().to_string(),
+                },
             },
             Action::SearchFiles { query } => Description {
                 title: format!("Search your files for \u{201c}{}\u{201d}{}", query.words_text(), query.kind_suffix()),
