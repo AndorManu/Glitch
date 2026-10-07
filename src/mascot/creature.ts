@@ -85,8 +85,8 @@ export interface View {
   render(pose: Pose, tick: number): void;
 }
 
-export type Mood = "thinking" | "happy" | "asking" | "idle" | "listening" | "talking";
-const MOODS: readonly string[] = ["thinking", "happy", "asking", "idle", "listening", "talking"];
+export type Mood = "thinking" | "happy" | "asking" | "idle" | "listening" | "talking" | "looking";
+const MOODS: readonly string[] = ["thinking", "happy", "asking", "idle", "listening", "talking", "looking"];
 
 type Mode = "stand" | "corner" | "air" | "held";
 
@@ -1330,7 +1330,7 @@ export class Creature {
   }
 
   private busy(): boolean {
-    return this.mood === "thinking" || this.mood === "asking" || this.mood === "listening" || this.mood === "talking";
+    return this.mood === "thinking" || this.mood === "asking" || this.mood === "listening" || this.mood === "talking" || this.mood === "looking";
   }
 
   private canAct(): boolean {
@@ -1360,6 +1360,8 @@ export class Creature {
     if (this.mood === "thinking") return "think";
     if (this.mood === "asking") return "ask";
     if (this.mood === "listening") return "listen";
+    // Studying a screenshot: the same curious, ears-forward look.
+    if (this.mood === "looking") return "listen";
     if (this.mood === "talking") return "talk";
     return isStanding(this.surface) || this.mode !== "stand" ? "idle" : "cling";
   }
