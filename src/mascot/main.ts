@@ -171,8 +171,8 @@ async function main(): Promise<void> {
   if (settings && !settings.onboarding_done) void api.showPanel();
 }
 
-// Dev/testing hook: trigger animations, behaviours and moods from the console or Playwright.
-if (import.meta.env.DEV) {
+// Dev/testing hook (dev server and debug builds only): trigger animations, behaviours and moods, read the state (CDP, Playwright).
+if (import.meta.env.DEV || import.meta.env.TAURI_ENV_DEBUG === "true") {
   (window as unknown as { __glitch: object }).__glitch = {
     play: playAction,
     /** A chaos act now: "window", "push", "chase", "note", "peek", "knock", "paws". */
