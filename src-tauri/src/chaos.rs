@@ -274,6 +274,18 @@ pub fn stop_all(app: &AppHandle) {
     }
 }
 
+/// Show one of Glitch's extra windows without taking the keyboard focus
+/// from whatever the user is doing.
+fn show_quietly(win: &tauri::WebviewWindow) {
+    #[cfg(target_os = "windows")]
+    if let Ok(h) = win.hwnd() {
+        if native::show_no_activate(h.0 as usize as u64) {
+            return;
+        }
+    }
+    let _ = win.show();
+}
+
 // ------------------------------------------------------------ paw prints
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -323,7 +335,7 @@ pub async fn chaos_paws(app: AppHandle, paws: Vec<Paw>) {
     let _ = win.set_size(PhysicalSize::new(area.w as u32, area.h as u32));
     let _ = win.set_ignore_cursor_events(true);
     if !win.is_visible().unwrap_or(false) {
-        let _ = win.show();
+        show_quietly(&win);
         let _ = win.set_ignore_cursor_events(true);
         // Keep Glitch above his own footprints.
         if let Some(m) = app.get_webview_window(MASCOT) {
@@ -376,13 +388,15 @@ pub async fn chaos_note_open(app: AppHandle, line: u32, x: i32, y: i32) -> Optio
         .always_on_top(true)
         .skip_taskbar(true)
         .focused(false)
+        // Never steals the keyboard from what the user is doing (× still works).
+        .focusable(false)
         .visible(false)
         .build()
         .map_err(|e| eprintln!("glitch: note failed: {e}"))
         .ok()?;
     let scale = win.scale_factor().unwrap_or(1.0);
     let _ = win.set_position(PhysicalPosition::new(x, y));
-    let _ = win.show();
+    show_quietly(&win);
     let _ = win.set_position(PhysicalPosition::new(x, y));
     Some(NoteInfo { w: (NOTE_W * scale).round() as i32, h: (NOTE_H * scale).round() as i32 })
 }

@@ -45,7 +45,7 @@ mod imp {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowLongW, GetWindowRect,
         GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed, SetCursorPos,
-        SetWindowPos, GWL_EXSTYLE, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, WS_EX_NOACTIVATE,
+        SetWindowPos, ShowWindow, GWL_EXSTYLE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, WS_EX_NOACTIVATE,
         WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     };
 
@@ -248,6 +248,16 @@ mod imp {
 
     pub fn set_cursor(x: i32, y: i32) -> bool {
         unsafe { SetCursorPos(x, y) != 0 }
+    }
+
+    /// Show one of Glitch's own windows without activating it.
+    pub fn show_no_activate(id: u64) -> bool {
+        let hwnd = id as usize as HWND;
+        if unsafe { IsWindow(hwnd) } == 0 || !is_own(hwnd) {
+            return false;
+        }
+        unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+        true
     }
 
     pub const AVAILABLE: bool = true;
