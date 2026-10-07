@@ -227,6 +227,9 @@ if (import.meta.env.DEV || import.meta.env.TAURI_ENV_DEBUG === "true") {
     get creature() {
       return creature;
     },
+    get reactor() {
+      return reactor;
+    },
     get animation(): AnimationName | undefined {
       return creature?.animation;
     },

@@ -161,8 +161,9 @@ fn on_focus_event(app: &AppHandle, e: FocusEvent) {
         FocusEvent::Done { minutes, break_minutes } => say(
             app,
             format!(
-                "{minutes} focused minutes, nice work! Take a {break_minutes}-minute break: stretch, sip some water, \
-                 look out of the window."
+                "{} of focus, nice work! Take a {break_minutes}-minute break: stretch, sip some water, look out \
+                 of the window.",
+                glitch_core::tools::duration_text(u64::from(minutes) * 60)
             ),
         ),
         FocusEvent::BreakOver => say(app, "Break's over! Want another round? Pick Focus mode in my tray menu.".into()),
