@@ -4,3 +4,5 @@
 //! logic that matters for safety and correctness can be unit-tested headlessly.
 
 pub mod ai;
+pub mod models;
+pub mod settings;
