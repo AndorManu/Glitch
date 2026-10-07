@@ -108,6 +108,7 @@ fn main() {
             // wizard on first run (so the panel can be placed next to it).
             // Dragging Glitch keeps the chat bubble attached (see place_mascot).
             windows::place_mascot(app.handle());
+            play::watch_drops(app.handle());
             chaos::debug_trigger(app.handle());
             Ok(())
         })
@@ -163,7 +164,6 @@ fn main() {
             play::belly_list,
             play::belly_restore,
             play::belly_choose_folder,
-            play::feed_files,
             ledge_watch::ledge_watch,
             ledge_watch::ledge_frame,
             voice::commands::voice_status,

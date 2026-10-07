@@ -12,7 +12,10 @@ use glitch_core::belly::{Belly, BellyError, Eaten, MAX_PER_MEAL};
 use glitch_core::play::{self, Game, PetEvent, PetStore, PetView, PlaySettings};
 use glitch_core::settings::Settings;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{
+    AppHandle, DragDropEvent, Emitter, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindowBuilder, Window,
+    WindowEvent,
+};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult};
 
 use crate::state::AppState;
@@ -34,6 +37,20 @@ impl PlayState {
             belly: Mutex::new(Belly::load(&config_dir.join("belly.json"))),
         }
     }
+}
+
+/// Commands that change things are only for the window that needs them
+/// (the ball page, a note or a compromised page can't call them).
+fn only_from(window: &Window, labels: &[&str]) -> Result<(), String> {
+    if label_ok(window.label(), labels) {
+        Ok(())
+    } else {
+        Err(format!("not allowed from the {} window", window.label()))
+    }
+}
+
+fn label_ok(label: &str, labels: &[&str]) -> bool {
+    labels.contains(&label)
 }
 
 fn now_secs() -> i64 {
@@ -90,12 +107,13 @@ pub fn pet_state(app: AppHandle) -> PetView {
 
 /// From the mascot: "fetch", "found", "gave_up", "pet", "thrown".
 #[tauri::command]
-pub fn pet_event(app: AppHandle, kind: PetEvent) -> PetView {
+pub fn pet_event(app: AppHandle, window: Window, kind: PetEvent) -> Result<PetView, String> {
+    only_from(&window, &[windows::MASCOT])?;
     // Feeding and chatting are only counted here in Rust.
     if matches!(kind, PetEvent::Fed | PetEvent::Chat) {
-        return pet_view(&app);
+        return Ok(pet_view(&app));
     }
-    record(&app, kind)
+    Ok(record(&app, kind))
 }
 
 /// Fields of [`PlaySettings`] the panel may change; missing = unchanged.
@@ -136,12 +154,15 @@ fn apply(p: &mut PlaySettings, patch: PlayPatch) {
     }
 }
 
+/// Settings -> Features / Wardrobe: only the settings panel may change these
+/// (including feeding and its "don't ask again").
 #[tauri::command]
-pub fn update_play_settings(app: AppHandle, patch: PlayPatch) -> Settings {
+pub fn update_play_settings(app: AppHandle, window: Window, patch: PlayPatch) -> Result<Settings, String> {
+    only_from(&window, &[windows::PANEL])?;
     let new = app.state::<AppState>().update_settings(|s| apply(&mut s.play, patch));
     let _ = app.emit("settings-changed", &new);
     let _ = app.emit("pet-changed", pet_view(&app));
-    new
+    Ok(new)
 }
 
 // ------------------------------------------------------------------ games
@@ -188,8 +209,8 @@ pub fn chat_hook(app: &AppHandle, text: &str) -> Option<glitch_core::agent::Step
 
 /// The fetch ball: a tiny always-on-top window at (x, y) (physical px, top-left).
 #[tauri::command]
-pub async fn ball_open(app: AppHandle, x: i32, y: i32) -> Option<i32> {
-    if !app.state::<AppState>().settings().play.fetch {
+pub async fn ball_open(app: AppHandle, window: Window, x: i32, y: i32) -> Option<i32> {
+    if only_from(&window, &[windows::MASCOT]).is_err() || !app.state::<AppState>().settings().play.fetch {
         return None;
     }
     let win = match app.get_webview_window(BALL) {
@@ -220,7 +241,10 @@ pub async fn ball_open(app: AppHandle, x: i32, y: i32) -> Option<i32> {
 }
 
 #[tauri::command]
-pub fn ball_move(app: AppHandle, x: i32, y: i32) -> bool {
+pub fn ball_move(app: AppHandle, window: Window, x: i32, y: i32) -> bool {
+    if only_from(&window, &[windows::MASCOT]).is_err() {
+        return false;
+    }
     app.get_webview_window(BALL).is_some_and(|w| w.set_position(PhysicalPosition::new(x, y)).is_ok())
 }
 
@@ -235,7 +259,12 @@ pub fn ball_close(app: AppHandle) {
 
 /// The once-a-day personal hello for the chat bubble (None = the usual one).
 #[tauri::command]
-pub async fn growth_greeting(app: AppHandle, state: State<'_, AppState>) -> Result<Option<String>, ()> {
+pub async fn growth_greeting(
+    app: AppHandle,
+    window: Window,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    only_from(&window, &[windows::BUBBLE])?;
     let s = state.settings();
     if !s.play.growth || !s.memory_enabled {
         return Ok(None);
@@ -271,11 +300,14 @@ pub fn belly_list(app: AppHandle) -> BellyView {
 
 /// Put an eaten file back where it came from.
 #[tauri::command]
-pub fn belly_restore(app: AppHandle, id: u64) -> Result<String, String> {
+pub fn belly_restore(app: AppHandle, window: Window, id: u64) -> Result<String, String> {
+    only_from(&window, &[windows::PANEL])?;
+    let dir = app.state::<AppState>().settings().play.belly_dir.ok_or("I haven't eaten anything yet")?;
+    let home = app.path().home_dir().map_err(|e| e.to_string())?;
     let r = {
         let ps = app.state::<PlayState>();
         let mut b = ps.belly.lock().unwrap();
-        let r = b.restore(id);
+        let r = b.restore(id, &PathBuf::from(dir), &home);
         let _ = b.save();
         r
     };
@@ -297,14 +329,15 @@ fn pick_folder(app: &AppHandle) -> Option<PathBuf> {
 }
 
 #[tauri::command]
-pub async fn belly_choose_folder(app: AppHandle) -> Option<String> {
+pub async fn belly_choose_folder(app: AppHandle, window: Window) -> Option<String> {
+    only_from(&window, &[windows::PANEL]).ok()?;
     let a = app.clone();
     let r = tauri::async_runtime::spawn_blocking(move || pick_folder(&a)).await.ok().flatten();
     let _ = app.emit("belly-changed", ());
     r.map(|p| p.display().to_string())
 }
 
-#[derive(Serialize, Default)]
+#[derive(Clone, Serialize, Default)]
 pub struct FeedResult {
     /// File names he ate.
     eaten: Vec<String>,
@@ -323,16 +356,54 @@ fn size_text(n: u64) -> String {
     }
 }
 
-/// Files dropped on Glitch. Feeding must be on; the first time he asks
-/// where his belly is; then (unless "don't ask again") he asks before every
-/// meal. Files are MOVED, never deleted. Dialogs run off the main thread.
-#[tauri::command]
-pub async fn feed_files(app: AppHandle, paths: Vec<String>) -> FeedResult {
-    let a = app.clone();
-    tauri::async_runtime::spawn_blocking(move || feed_blocking(&a, paths)).await.unwrap_or_default()
+/// Files dropped on Glitch. Only the native drag-and-drop event of the
+/// mascot window feeds him (no page can hand Rust a path to eat), and only
+/// when the drop lands on his body. Enter/leave tell the page, so he can open
+/// his mouth.
+pub fn watch_drops(app: &AppHandle) {
+    let Some(m) = app.get_webview_window(windows::MASCOT) else { return };
+    let handle = app.clone();
+    m.on_window_event(move |e| {
+        let WindowEvent::DragDrop(d) = e else { return };
+        if !handle.state::<AppState>().settings().play.feeding {
+            return;
+        }
+        match d {
+            DragDropEvent::Enter { .. } | DragDropEvent::Over { .. } => {
+                let _ = handle.emit_to(windows::MASCOT, "feed-drag", true);
+            }
+            DragDropEvent::Leave => {
+                let _ = handle.emit_to(windows::MASCOT, "feed-drag", false);
+            }
+            DragDropEvent::Drop { paths, position } => {
+                let _ = handle.emit_to(windows::MASCOT, "feed-drag", false);
+                if !on_body(&handle, position.x, position.y) {
+                    return;
+                }
+                let (app, paths) = (handle.clone(), paths.clone());
+                tauri::async_runtime::spawn(async move {
+                    let _ = app.emit_to(windows::MASCOT, "feed-start", ());
+                    let a = app.clone();
+                    let r = tauri::async_runtime::spawn_blocking(move || feed_blocking(&a, paths))
+                        .await
+                        .unwrap_or_default();
+                    let _ = app.emit_to(windows::MASCOT, "feed-result", &r);
+                });
+            }
+            _ => {}
+        }
+    });
 }
 
-fn feed_blocking(app: &AppHandle, paths: Vec<String>) -> FeedResult {
+/// Is a window-local physical point on his body (the click-through hitbox)?
+fn on_body(app: &AppHandle, x: f64, y: f64) -> bool {
+    let hb = app.state::<crate::hover::Hitbox>();
+    let body = (*hb.body.lock().unwrap()).or(*hb.last_body.lock().unwrap());
+    let Some(g) = *hb.geometry.lock().unwrap() else { return false };
+    crate::hover::hit((x, y), (0.0, 0.0, g.w, g.h), body, g.scale)
+}
+
+fn feed_blocking(app: &AppHandle, paths: Vec<PathBuf>) -> FeedResult {
     let mut out = FeedResult::default();
     let settings = app.state::<AppState>().settings();
     if !settings.play.feeding || paths.is_empty() {
@@ -361,10 +432,14 @@ fn feed_blocking(app: &AppHandle, paths: Vec<String>) -> FeedResult {
             }
         }
     };
+    let Ok(home) = app.path().home_dir() else {
+        out.declined = true;
+        return out;
+    };
     let mut edible: Vec<(PathBuf, u64)> = Vec::new();
     for p in paths.iter().take(MAX_PER_MEAL) {
-        match Belly::check(&PathBuf::from(p), &dir) {
-            Ok(size) => edible.push((PathBuf::from(p), size)),
+        match Belly::check(p, &dir, &home) {
+            Ok(size) => edible.push((p.clone(), size)),
             Err(e) => out.refused.push(e.to_string()),
         }
     }
@@ -421,7 +496,7 @@ fn feed_blocking(app: &AppHandle, paths: Vec<String>) -> FeedResult {
         let r: Result<Eaten, BellyError> = {
             let ps = app.state::<PlayState>();
             let mut b = ps.belly.lock().unwrap();
-            let r = b.eat(&p, &dir, &stamp);
+            let r = b.eat(&p, &dir, &home, &stamp);
             if let Err(e) = b.save() {
                 eprintln!("glitch: could not save belly.json: {e}");
             }
@@ -446,10 +521,29 @@ mod tests {
     #[test]
     fn patches_only_accept_known_hats_and_eyes() {
         let mut p = PlaySettings::default();
-        apply(&mut p, PlayPatch { hat: Some("crown".into()), eye: Some("gold".into()), feeding: Some(true), ..Default::default() });
+        apply(
+            &mut p,
+            PlayPatch {
+                hat: Some("crown".into()),
+                eye: Some("gold".into()),
+                feeding: Some(true),
+                ..Default::default()
+            },
+        );
         assert_eq!((p.hat.as_deref(), p.eye.as_str(), p.feeding), (Some("crown"), "gold", true));
         apply(&mut p, PlayPatch { hat: Some("".into()), eye: Some("rainbow".into()), ..Default::default() });
         assert_eq!((p.hat, p.eye.as_str()), (None, "gold"));
+    }
+
+    #[test]
+    fn commands_are_per_window() {
+        // Settings (incl. feeding and "don't ask again") and restores: the panel only.
+        assert!(label_ok("panel", &[windows::PANEL]));
+        for other in ["mascot", "bubble", "ball", "note", "pawprints", "Panel", ""] {
+            assert!(!label_ok(other, &[windows::PANEL]), "{other}");
+        }
+        assert!(label_ok("mascot", &[windows::MASCOT]));
+        assert!(!label_ok("ball", &[windows::MASCOT]));
     }
 
     #[test]

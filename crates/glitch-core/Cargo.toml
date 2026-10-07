@@ -23,6 +23,8 @@ open = { version = "5", features = ["shellexecute-on-windows"] }
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Glitch's belly: checks a file is still the one he ate before restoring it.
+sha2 = "0.10"
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 thiserror = "2"
 # Only for spawn_blocking (file search must not stall the async runtime).
