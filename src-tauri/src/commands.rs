@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use glitch_core::agent::{AgentError, Step};
 use glitch_core::ai::ollama::PullProgress;
-use glitch_core::ai::AiError;
+use glitch_core::ai::{AiError, AiProvider};
 use glitch_core::memory::{Fact, JournalEntry, MemoryStore};
 use glitch_core::models::{self, Recommendation};
 use glitch_core::platform::{self, Os};
@@ -215,7 +215,15 @@ pub async fn confirm_action(
 ) -> Result<Step, UiError> {
     let model = state.settings().model.ok_or_else(|| UiError::new("no_model", "Pick a model first"))?;
     let _ = app.emit("mood", "thinking");
-    let result = state.agent.lock().await.confirm(&model, &id, approved).await;
+    let (result, notes_trusted) = {
+        let mut agent = state.agent.lock().await;
+        let result = agent.confirm(&model, &id, approved).await;
+        (result, agent.notes_trusted())
+    };
+    // The first allowed note: later notes don't ask again (saved).
+    if notes_trusted && !state.settings().notes_trusted {
+        state.update_settings(|s| s.notes_trusted = true);
+    }
     let _ = app.emit("mood", mood_after(&result));
     after_turn(&app, &model, &result);
     result.map_err(UiError::from)
@@ -227,6 +235,40 @@ fn mood_after(result: &Result<Step, AgentError>) -> &'static str {
         Ok(Step::Confirm { .. }) => "asking",
         Err(_) => "idle",
     }
+}
+
+/// How long the model stays loaded while the chat bubble is open.
+const WARM_KEEP_ALIVE: &str = "10m";
+
+/// The chat bubble is open (called on open and every couple of minutes while
+/// it stays open): load the model now and keep it loaded, so the first answer
+/// doesn't wait for it. Best effort, never an error for the UI.
+#[tauri::command]
+pub async fn warm_model(state: State<'_, AppState>) -> Result<(), UiError> {
+    let Some(model) = state.settings().model else { return Ok(()) };
+    let ollama = state.ollama.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = ollama.warm_up(&model, WARM_KEEP_ALIVE).await {
+            eprintln!("glitch: warming up {model} failed: {e}");
+        }
+    });
+    Ok(())
+}
+
+/// The chat bubble closed: back to the short keep-alive from the settings,
+/// so the model's memory is given back soon (only if it is still loaded:
+/// never load it just for this).
+#[tauri::command]
+pub async fn cool_model(state: State<'_, AppState>) -> Result<(), UiError> {
+    let settings = state.settings();
+    let Some(model) = settings.model else { return Ok(()) };
+    let ollama = state.ollama.clone();
+    tauri::async_runtime::spawn(async move {
+        if ollama.is_loaded(&model).await {
+            let _ = ollama.warm_up(&model, &settings.keep_alive).await;
+        }
+    });
+    Ok(())
 }
 
 /// New chat. With memory on, the old chat is first folded into memory (best
@@ -323,6 +365,7 @@ pub struct SettingsPatch {
     chaos_enabled: Option<bool>,
     onboarding_done: Option<bool>,
     memory_enabled: Option<bool>,
+    screen_enabled: Option<bool>,
 }
 
 #[tauri::command]
@@ -353,7 +396,13 @@ pub async fn update_settings(
         if let Some(v) = patch.memory_enabled {
             s.memory_enabled = v;
         }
+        if let Some(v) = patch.screen_enabled {
+            s.screen_enabled = v;
+        }
     });
+    if let Some(on) = patch.screen_enabled {
+        state.agent.lock().await.set_screen_enabled(on);
+    }
     if let Some(on) = patch.memory_enabled {
         let mut agent = state.agent.lock().await;
         if on && agent.memory().is_none() {

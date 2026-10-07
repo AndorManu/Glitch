@@ -103,8 +103,13 @@ pub trait Desktop: Send + Sync {
     fn set_timer(&self, after: Duration, message: &str) -> DesktopResult<()>;
     /// The notes file `take_note` appends to.
     fn notes_file(&self) -> Option<PathBuf> {
-        dirs::document_dir().map(|d| d.join("Glitch notes").join("notes.md"))
+        default_notes_file()
     }
+}
+
+/// Documents/Glitch notes/notes.md
+pub fn default_notes_file() -> Option<PathBuf> {
+    dirs::document_dir().map(|d| d.join("Glitch notes").join("notes.md"))
 }
 
 /// A desktop with none of these abilities (tests, unsupported OSes).

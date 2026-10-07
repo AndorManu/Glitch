@@ -2,13 +2,15 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use glitch_core::agent::Agent;
+use glitch_core::agent::{Agent, Progress, ProgressSink};
 use glitch_core::ai::ollama::OllamaClient;
 use glitch_core::memory::MemoryStore;
 use glitch_core::platform::{AppEntry, Platform, SystemPlatform};
 use glitch_core::settings::Settings;
 use tauri::menu::CheckMenuItem;
-use tauri::Wry;
+use tauri::{AppHandle, Emitter, Wry};
+
+use crate::desktop::NativeDesktop;
 
 /// Set to `1` by `dev/windows-smoke.mjs` (and CI): everything works for real
 /// except that opening a URL, file or app is only logged, so an automated run
@@ -58,19 +60,41 @@ pub struct AppState {
     pub panel_view: Mutex<String>,
 }
 
+/// What the agent is doing, for the bubble ("agent-progress" events) and
+/// Glitch's face ("mood": "looking" while he takes a screenshot).
+fn progress_sink(app: AppHandle) -> ProgressSink {
+    Arc::new(move |p: Progress| {
+        match &p {
+            Progress::Looking { active: true, .. } => {
+                let _ = app.emit("mood", "looking");
+            }
+            Progress::Looking { active: false, .. } => {
+                let _ = app.emit("mood", "thinking");
+            }
+            _ => {}
+        }
+        let _ = app.emit("agent-progress", &p);
+    })
+}
+
 impl AppState {
-    pub fn new(config_dir: PathBuf) -> Self {
+    pub fn new(app: &AppHandle, config_dir: PathBuf) -> Self {
         let settings_path = config_dir.join("settings.json");
         let memory_path = config_dir.join("memory.json");
         let settings = Settings::load(&settings_path);
         let ollama = Arc::new(OllamaClient::new(&settings.ollama_url, &settings.keep_alive));
-        let platform: Arc<dyn Platform> = if std::env::var_os(DRY_RUN_ENV).is_some_and(|v| v == "1") {
+        let dry_run = std::env::var_os(DRY_RUN_ENV).is_some_and(|v| v == "1");
+        let platform: Arc<dyn Platform> = if dry_run {
             eprintln!("glitch: {DRY_RUN_ENV}=1, opening things is only logged");
             Arc::new(DryRunPlatform(SystemPlatform))
         } else {
             Arc::new(SystemPlatform)
         };
         let mut agent = Agent::new(ollama.clone(), platform.clone());
+        agent.set_desktop(Arc::new(NativeDesktop::new(app.clone(), dry_run)));
+        agent.set_progress(Some(progress_sink(app.clone())));
+        agent.set_screen_enabled(settings.screen_enabled);
+        agent.set_notes_trusted(settings.notes_trusted);
         if settings.memory_enabled {
             agent.set_memory(Some(MemoryStore::load(&memory_path)));
         }

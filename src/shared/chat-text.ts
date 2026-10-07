@@ -22,7 +22,37 @@ export function explainError(e: UiError): { text: string; offerSetup: boolean } 
 }
 
 export const WELCOME =
-  "Hi, I'm Glitch! Ask me anything, or try “open YouTube”, “open the Calculator app” or “find a photo of a dog”.";
+  "Hi, I'm Glitch! Ask me anything, or try “what's on my screen?”, “what does this error mean?”, “what's 15% of what I copied?” or “remind me to stretch in 20 minutes”.";
+
+/** The badge while Glitch takes a screenshot. */
+export function lookingText(target: "screen" | "window" | "cursor"): string {
+  return target === "cursor" ? "👀 looking under your mouse" : target === "window" ? "👀 looking at your window" : "👀 looking at your screen";
+}
+
+/**
+ * The speech bubble shows plain text: drop the markdown small models add
+ * anyway and a "Glitch:" speaker label. Same rules as `plain_text` in
+ * crates/glitch-core/src/agent.rs (used here for text while it streams in,
+ * so the final reply matches what was already shown). Unit-tested.
+ */
+export function plainText(text: string): string {
+  let t = text.trim();
+  for (const label of ["**Glitch:**", "Glitch:", "**Glitch**:"]) {
+    if (t.slice(0, label.length).toLowerCase() === label.toLowerCase()) t = t.slice(label.length).trimStart();
+  }
+  return t
+    .split("\n")
+    .filter((l) => !l.trimStart().startsWith("```"))
+    .map((l) => {
+      const line = l.replaceAll("**", "").replaceAll("`", "");
+      const trimmed = line.trimStart();
+      if (trimmed.startsWith("* ")) return `- ${trimmed.slice(2)}`;
+      if (trimmed.startsWith("#")) return trimmed.replace(/^#+/, "").trimStart();
+      return line;
+    })
+    .join("\n")
+    .trim();
+}
 
 /** Said after "Clear chat" in Settings. */
 export const CLEARED = "Fresh start! What's on your mind?";
