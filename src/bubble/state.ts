@@ -4,7 +4,7 @@
 // (a reply, a confirmation question or an error) above the compose pill, or
 // a thought cloud while the model is working.
 
-import { EMPTY_REPLY, WELCOME, explainError } from "../shared/chat-text";
+import { CLEARED, EMPTY_REPLY, WELCOME, explainError } from "../shared/chat-text";
 import type { Step, UiError } from "../shared/ipc";
 
 export type Answer = "allowed" | "denied" | "stale";
@@ -41,6 +41,8 @@ export type BubbleEvent =
   | { type: "notice"; text: string; tone: "info" | "error"; action: "mic-settings" | null }
   /** Voice needs the speech model: show the download offer. */
   | { type: "voice_setup"; model: string; sizeMb: number }
+  /** "Clear chat" in Settings: a fresh start (drops anything in flight). */
+  | { type: "cleared" }
   /** Speech-model download progress (percent), or its end. */
   | { type: "voice_download"; state: "running" | "done" | "failed" | "cancelled"; percent: number | null; failed: string | null; ready: string };
 
@@ -112,6 +114,8 @@ export function transition(s: BubbleState, e: BubbleEvent): Transition {
       }
       return none(s);
     }
+    case "cleared":
+      return none(speak(s, { kind: "reply", text: CLEARED, actions: [] }));
     case "notice":
       if (s.busy) return none(s);
       return none(speak(s, { kind: "notice", text: e.text, tone: e.tone, action: e.action }));

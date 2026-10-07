@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { actionChip, baseName, breakChunks, centerOn, graphemes, revealedAt, shortUrl, tailWithin, typingDuration, TYPE_MAX_MS } from "./text";
+import { actionChip, baseName, breakChunks, centerOn, graphemes, narrowestFit, urlBreaks, revealedAt, shortUrl, tailWithin, typingDuration, TYPE_MAX_MS } from "./text";
 
 describe("shortUrl", () => {
   it("drops the scheme, www and trailing slash", () => {
@@ -83,5 +83,48 @@ describe("breakChunks", () => {
     expect(breakChunks("C:\\Apps\\x.exe")).toEqual(["C:\\", "Apps\\", "x.exe"]);
     expect(breakChunks("https://a.com/b?c=1")).toEqual(["https://", "a.com/", "b?", "c=", "1"]);
     expect(breakChunks("")).toEqual([]);
+  });
+});
+
+describe("urlBreaks", () => {
+  const breaksIn = (s: string) => {
+    const chars = graphemes(s);
+    return [...urlBreaks(chars)].map((i) => chars.slice(0, i + 1).join(""));
+  };
+  it("breaks links after their separators only", () => {
+    expect(breaksIn("see https://a.com/b?c=1&d=2 ok")).toEqual([
+      "see https://a.com/",
+      "see https://a.com/b?",
+      "see https://a.com/b?c=",
+      "see https://a.com/b?c=1&",
+      "see https://a.com/b?c=1&d=",
+    ]);
+  });
+  it("leaves plain text and the end of a link alone", () => {
+    expect(breaksIn("a/b and c=d, no links")).toEqual([]);
+    expect(breaksIn("https://x.com/")).toEqual([]);
+  });
+  it("counts graphemes, not UTF-16 units", () => {
+    const chars = graphemes("👋 https://a.com/b");
+    expect([...urlBreaks(chars)]).toEqual([chars.indexOf("/", 10)]);
+  });
+});
+
+describe("narrowestFit", () => {
+  it("finds the smallest width that fits", () => {
+    const tested: number[] = [];
+    const fits = (w: number) => (tested.push(w), w >= 137);
+    expect(narrowestFit(60, 220, fits)).toBe(137);
+    expect(tested.length).toBeLessThan(12);
+  });
+  it("never trusts the upper bound without testing it", () => {
+    // Natural width measured as 79 (rounded) but the text needs 79.4px:
+    // 79 must not be returned.
+    expect(narrowestFit(60, 80, (w) => w >= 79.4)).toBe(80);
+    expect(narrowestFit(60, 79, (w) => w >= 79.4)).toBeNull();
+  });
+  it("handles fractional and collapsed ranges", () => {
+    expect(narrowestFit(50.2, 50.7, () => true)).toBe(51);
+    expect(narrowestFit(90, 90, () => true)).toBe(90);
   });
 });

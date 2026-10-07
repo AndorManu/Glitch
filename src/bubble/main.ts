@@ -9,6 +9,7 @@ import { listen } from "@tauri-apps/api/event";
 import {
   api,
   asUiError,
+  CHAT_CLEARED_EVENT,
   voiceApi,
   type BubbleLayout,
   type Settings,
@@ -65,17 +66,32 @@ function dispatch(e: BubbleEvent): void {
   }
 }
 
+/** Bumped by "Clear chat": answers to requests from before it are dropped. */
+let epoch = 0;
+
 async function perform(r: Request): Promise<void> {
+  const mine = epoch;
   try {
     const step = r.kind === "send" ? await api.sendMessage(r.text) : await api.confirmAction(r.id, r.approved);
+    if (mine !== epoch) return;
     dispatch({ type: "step", step });
     if (step.type === "reply") speakReply(step.text);
   } catch (e) {
+    if (mine !== epoch) return;
     dispatch({ type: "failed", error: asUiError(e) });
   }
   view.setEcho(null);
   if (visible) view.focus();
 }
+
+void listen(CHAT_CLEARED_EVENT, () => {
+  epoch++;
+  micDispatch({ type: "cancel" });
+  stopSpeaking();
+  view.setEcho(null);
+  view.clearInput();
+  dispatch({ type: "cleared" });
+});
 
 // ------------------------------------------------------------- voice
 // Push-to-talk. The recording itself happens in Rust; this mirrors its
@@ -201,8 +217,15 @@ void listen<Settings>("settings-changed", () => refreshVoice());
 
 let visible = false;
 let hiddenAt: number | null = null;
+/** Esc / ×: the window hides once the close animation has played. */
+let hideTimer: ReturnType<typeof setTimeout> | null = null;
+const CLOSE_MS = 160;
 
 function onShown(): void {
+  if (hideTimer) {
+    clearTimeout(hideTimer);
+    hideTimer = null;
+  }
   if (!visible) {
     visible = true;
     const awayMs = hiddenAt === null ? null : Date.now() - hiddenAt;
@@ -224,8 +247,16 @@ function onHidden(): void {
 }
 
 function hide(): void {
+  if (hideTimer) return;
   onHidden();
-  void api.hideBubble().catch(() => {});
+  const calm = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  hideTimer = setTimeout(
+    () => {
+      hideTimer = null;
+      void api.hideBubble().catch(() => {});
+    },
+    calm ? 0 : CLOSE_MS,
+  );
 }
 
 document.addEventListener("keydown", (e) => {
