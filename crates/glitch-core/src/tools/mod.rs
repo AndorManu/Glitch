@@ -569,9 +569,9 @@ pub fn prepare(call: &ToolCall, platform: &dyn Platform) -> Result<Action, ToolE
             let text = ellipsize(&clean_text(str_arg(args, "text").or_else(|_| str_arg(args, "message"))?), 200);
             let when_words = str_arg(args, "when").or_else(|_| str_arg(args, "time"))?;
             let now = chrono::Local::now();
-            let at = crate::updates::when::parse_when(when_words, now.naive_local()).map_err(ToolError)?;
-            let due = crate::updates::when::to_unix(at).ok_or_else(|| ToolError("that time doesn't exist here".into()))?;
-            let when = crate::updates::when::label(at, now.naive_local());
+            let at = crate::update_me::when::parse_when(when_words, now.naive_local()).map_err(ToolError)?;
+            let due = crate::update_me::when::to_unix(at).ok_or_else(|| ToolError("that time doesn't exist here".into()))?;
+            let when = crate::update_me::when::label(at, now.naive_local());
             Ok(Action::SetReminder { text, due, when })
         }
         TAKE_NOTE => {

@@ -8,9 +8,12 @@
 //! * other hooks and settings are kept (keys come out sorted, as
 //!   serde_json writes them; the content is the same);
 //! * connecting twice changes nothing; a moved Glitch updates its own entry;
-//! * a timestamped backup is written next to the file before every change;
+//! * before every change the old file is copied to one backup next to it
+//!   (`settings.json.glitch-backup`, readable only by the user: it can
+//!   hold API keys), replacing the previous backup;
 //! * a file that isn't valid JSON is never touched;
-//! * "Disconnect" removes only Glitch's entries (marked by `--claude-hook`).
+//! * "Disconnect" removes only Glitch's entries: commands ending in exactly
+//!   ` --glitch-claude-hook`.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -20,8 +23,9 @@ use serde_json::{json, Map, Value};
 
 use super::{clean, Level, UpdateEvent};
 
-/// Marks Glitch's own hook commands.
-pub const HOOK_FLAG: &str = "--claude-hook";
+/// Marks Glitch's own hook commands: only a command that ends with exactly
+/// this flag is Glitch's (other tools' hooks are never touched).
+pub const HOOK_FLAG: &str = "--glitch-claude-hook";
 pub const EVENTS: [&str; 2] = ["Stop", "Notification"];
 /// Seconds Claude Code gives the hook (it returns in well under one).
 const HOOK_TIMEOUT: u64 = 10;
@@ -34,13 +38,27 @@ pub fn settings_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".claude").join("settings.json"))
 }
 
-/// The hook command for this Glitch: `"C:\...\glitch.exe" --claude-hook`.
-pub fn hook_command(exe: &Path) -> String {
-    format!("\"{}\" {HOOK_FLAG}", exe.display())
+/// Characters that mean something inside double quotes to cmd.exe, sh or
+/// bash (Claude Code may run hooks through either). A path with one of them
+/// is refused rather than quoted cleverly.
+const UNSAFE_IN_QUOTES: &[char] = &['"', '\'', '$', '`', '%', '!', '\\', '\n', '\r', '\0'];
+
+/// The hook command for this Glitch: `"C:/.../glitch.exe" --glitch-claude-hook`.
+/// Forward slashes work for Windows paths in cmd and in bash alike, so the
+/// only quoting needed is the double quotes around a path with spaces.
+pub fn hook_command(exe: &Path) -> Result<String, String> {
+    let path = exe.display().to_string().replace('\\', "/");
+    if path.is_empty() || path.contains(UNSAFE_IN_QUOTES) {
+        return Err(format!(
+            "Glitch's install folder ({path}) has characters that aren't safe in a command line; move Glitch to a \
+             plain folder to connect Claude Code"
+        ));
+    }
+    Ok(format!("\"{path}\" {HOOK_FLAG}"))
 }
 
 fn is_ours(hook: &Value) -> bool {
-    hook.get("command").and_then(Value::as_str).is_some_and(|c| c.contains(HOOK_FLAG) && c.to_lowercase().contains("glitch"))
+    hook.get("command").and_then(Value::as_str).is_some_and(|c| c.trim_end().ends_with(&format!(" {HOOK_FLAG}")))
 }
 
 fn our_group(command: &str) -> Value {
@@ -206,12 +224,62 @@ pub struct Change {
     pub backup: Option<PathBuf>,
 }
 
+/// The one backup Glitch keeps, next to the original.
+pub fn backup_path(path: &Path) -> PathBuf {
+    path.with_file_name("settings.json.glitch-backup")
+}
+
+/// Only the current user may read the file (it can hold API keys).
+/// Created empty, locked down, then filled, so the content is never
+/// readable by others even for a moment.
+fn write_private(path: &Path, content: &str) -> io::Result<()> {
+    let _ = std::fs::remove_file(path);
+    std::fs::write(path, "")?;
+    restrict_to_user(path)?;
+    std::fs::write(path, content)
+}
+
+#[cfg(unix)]
+fn restrict_to_user(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+}
+
+/// Windows: drop inherited entries, grant only the current user (icacls is
+/// part of every Windows; no extra dependency for a one-off).
+#[cfg(windows)]
+fn restrict_to_user(path: &Path) -> io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    let user = std::env::var("USERNAME").map_err(|_| io::Error::other("unknown user"))?;
+    let who = match std::env::var("USERDOMAIN") {
+        Ok(d) if !d.is_empty() => format!("{d}\\{user}"),
+        _ => user,
+    };
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let status = std::process::Command::new("icacls")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r", &format!("{who}:F")])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other("couldn't make the backup private"))
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn restrict_to_user(_: &Path) -> io::Result<()> {
+    Ok(())
+}
+
 fn write_with_backup(path: &Path, old: Option<&str>, new: &str) -> io::Result<Option<PathBuf>> {
     let backup = match old {
         Some(old) => {
-            let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-            let b = path.with_file_name(format!("settings.json.glitch-backup-{stamp}"));
-            std::fs::write(&b, old)?;
+            let b = backup_path(path);
+            write_private(&b, old)?;
             Some(b)
         }
         None => None,
@@ -281,7 +349,7 @@ pub fn event_from_hook(input: &str) -> Option<UpdateEvent> {
 mod tests {
     use super::*;
 
-    const CMD: &str = r#""C:\Program Files\Glitch\glitch.exe" --claude-hook"#;
+    const CMD: &str = r#""C:\Program Files\Glitch\glitch.exe" --glitch-claude-hook"#;
 
     #[test]
     fn connect_into_nothing() {
@@ -315,7 +383,7 @@ mod tests {
         // Second time: nothing to do.
         assert_eq!(merge_connect(Some(&once), CMD).unwrap(), None);
         // Moved exe: our entry is replaced, not duplicated.
-        let moved = r#""D:\Glitch\glitch.exe" --claude-hook"#;
+        let moved = r#""D:\Glitch\glitch.exe" --glitch-claude-hook"#;
         let v: Value = serde_json::from_str(&merge_connect(Some(&once), moved).unwrap().unwrap()).unwrap();
         assert_eq!(v["hooks"]["Stop"].as_array().unwrap().len(), 2);
         assert_eq!(v["hooks"]["Stop"][1]["hooks"][0]["command"], moved);
@@ -344,9 +412,22 @@ mod tests {
         assert!(matches!(merge_connect(Some("{ nope"), CMD), Err(MergeError::Invalid(_))));
         assert!(matches!(merge_connect(Some("[1,2]"), CMD), Err(MergeError::Shape(_))));
         assert!(matches!(merge_connect(Some(r#"{"hooks": 5}"#), CMD), Err(MergeError::Shape(_))));
-        // Someone else's command that mentions the flag but isn't Glitch stays.
-        let other = json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "other --claude-hook"}]}]}});
-        assert_eq!(merge_disconnect(Some(&other.to_string())).unwrap(), None);
+        // Other tools' hooks, even ones with a similar flag, are never ours.
+        for cmd in ["other --claude-hook", "x --glitch-claude-hook-v2", "glitch --glitch-claude-hook && rm -rf ~", "glitch.exe"] {
+            let other = json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": cmd}]}]}});
+            assert_eq!(merge_disconnect(Some(&other.to_string())).unwrap(), None, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn hook_command_quoting() {
+        assert_eq!(
+            hook_command(Path::new(r"C:\Program Files\Glitch\glitch.exe")).unwrap(),
+            "\"C:/Program Files/Glitch/glitch.exe\" --glitch-claude-hook"
+        );
+        for bad in [r#"C:\a"b\glitch.exe"#, "/tmp/$HOME/glitch", "C:\\100%\\glitch.exe", "/x/`id`/glitch", "/it's/glitch", ""] {
+            assert!(hook_command(Path::new(bad)).is_err(), "{bad}");
+        }
     }
 
     #[test]
@@ -358,15 +439,39 @@ mod tests {
         assert!(c.changed && c.backup.is_none());
         let s = status(&path, CMD);
         assert!(s.connected && !s.outdated && s.problem.is_none() && s.file_exists);
-        assert!(s.preview.contains("--claude-hook"));
+        assert!(s.preview.contains("--glitch-claude-hook"));
         // Again: unchanged, no backup.
         assert_eq!(connect(&path, CMD).unwrap(), Change { changed: false, backup: None });
-        assert!(status(&path, "\"x\\glitch.exe\" --claude-hook").outdated);
-        // Disconnect: backup of the connected file is kept.
+        assert!(status(&path, "\"x\\glitch.exe\" --glitch-claude-hook").outdated);
+        // Disconnect: one backup of the connected file, next to it, private.
         let before = std::fs::read_to_string(&path).unwrap();
         let d = disconnect(&path).unwrap();
         let backup = d.backup.unwrap();
+        assert_eq!(backup, backup_path(&path));
+        assert_eq!(backup.parent(), path.parent());
         assert_eq!(std::fs::read_to_string(&backup).unwrap(), before);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&backup).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        #[cfg(windows)]
+        {
+            let acl = std::process::Command::new("icacls").arg(&backup).output().unwrap();
+            let acl = String::from_utf8_lossy(&acl.stdout).to_string();
+            let user = std::env::var("USERNAME").unwrap();
+            assert!(acl.contains(&user), "{acl}");
+            assert!(!acl.contains("(I)"), "no inherited entries: {acl}");
+            assert!(!acl.contains("Everyone") && !acl.contains("BUILTIN\\Users"), "{acl}");
+        }
+        // Connecting again overwrites that one backup instead of adding more.
+        connect(&path, CMD).unwrap();
+        let backups = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().contains("backup"))
+            .count();
+        assert_eq!(backups, 1);
+        disconnect(&path).unwrap();
         assert!(!status(&path, CMD).connected);
         assert!(!dir.path().join(".claude").join("settings.json.glitch-tmp").exists());
         // A broken file: refused, left exactly as it was.

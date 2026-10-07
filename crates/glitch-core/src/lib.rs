@@ -13,7 +13,7 @@ pub mod models;
 pub mod platform;
 pub mod settings;
 pub mod tools;
-pub mod updates;
+pub mod update_me;
 pub mod vision;
 pub mod voice;
 pub mod world;

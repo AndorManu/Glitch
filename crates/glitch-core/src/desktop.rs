@@ -106,7 +106,7 @@ pub trait Desktop: Send + Sync {
         default_notes_file()
     }
     /// Save a reminder for `due` (unix seconds) that survives restarts
-    /// ("Update me" reminders; see `crate::updates::reminders`).
+    /// ("Update me" reminders; see `crate::update_me::reminders`).
     fn add_reminder(&self, due: i64, text: &str) -> DesktopResult<()> {
         let _ = (due, text);
         Err("saved reminders are switched off (Settings > Features)".into())

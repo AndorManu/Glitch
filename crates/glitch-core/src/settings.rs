@@ -35,14 +35,14 @@ pub struct Settings {
     pub voice: VoiceSettings,
     /// "Update me": the local event endpoint, Claude Code buddy, the
     /// notification reader, reminders and the daily briefing.
-    pub updates: UpdateSettings,
+    pub update_me: UpdateMeSettings,
 }
 
 /// "Update me" features. Each one has its own switch in Settings → Features.
 /// Connected or privacy-sensitive ones (Claude Code, notifications) start off.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct UpdateSettings {
+pub struct UpdateMeSettings {
     /// Local event endpoint (127.0.0.1 + per-install token) for scripts,
     /// builds and the Claude Code hook.
     pub endpoint_enabled: bool,
@@ -71,7 +71,7 @@ pub struct Location {
     pub longitude: f64,
 }
 
-impl Default for UpdateSettings {
+impl Default for UpdateMeSettings {
     fn default() -> Self {
         Self {
             endpoint_enabled: true,
@@ -119,7 +119,7 @@ impl Default for Settings {
             screen_enabled: true,
             notes_trusted: false,
             voice: VoiceSettings::default(),
-            updates: UpdateSettings::default(),
+            update_me: UpdateMeSettings::default(),
         }
     }
 }
@@ -200,16 +200,16 @@ mod tests {
 
     #[test]
     fn update_defaults_and_old_files() {
-        let u = Settings::default().updates;
+        let u = Settings::default().update_me;
         // Connected / privacy-sensitive: off. Local and harmless: on.
         assert!(!u.claude_code_enabled && !u.notifications_enabled && !u.notifications_quiet);
         assert!(u.endpoint_enabled && u.reminders_enabled && u.briefing_enabled);
         assert_eq!(u.location, None);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        std::fs::write(&path, r#"{"model":"qwen3.5:4b","updates":{"notifications_enabled":true}}"#).unwrap();
+        std::fs::write(&path, r#"{"model":"qwen3.5:4b","update_me":{"notifications_enabled":true}}"#).unwrap();
         let s = Settings::load(&path);
-        assert!(s.updates.notifications_enabled && s.updates.reminders_enabled);
+        assert!(s.update_me.notifications_enabled && s.update_me.reminders_enabled);
     }
 
     #[test]
