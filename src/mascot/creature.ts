@@ -1875,12 +1875,11 @@ export class Creature {
       if (this.mode === "held") return false;
       // On a wall or the ceiling he is turned with the surface: a front-facing
       // emote would look like waving lying down. Only wall/air poses there.
-      if (!isStanding(this.surface) && this.mode === "stand") {
-        const keys = ANIMATIONS[name].keys;
-        const first = (typeof keys === "function" ? keys(() => 0.5, {}) : keys)[0]?.frame ?? "";
-        const fam = familyOf(first);
-        if (fam !== "wall" && fam !== "any") return false;
-      }
+      const keys = ANIMATIONS[name].keys;
+      const fam = familyOf((typeof keys === "function" ? keys(() => 0.5, {}) : keys)[0]?.frame ?? "");
+      if (!isStanding(this.surface) && this.mode === "stand" && fam !== "wall" && fam !== "any") return false;
+      // And the wall poses (crawling, holding on) only on a wall, never standing on the floor.
+      if (isStanding(this.surface) && fam === "wall") return false;
       this.interaction();
       this.interrupt();
       if (this.actionTimer !== null) this.clock.clearTimeout(this.actionTimer);

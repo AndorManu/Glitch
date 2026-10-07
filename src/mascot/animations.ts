@@ -630,7 +630,7 @@ function edgeSitDown(_rand: () => number, mem: Memory): Keyframe[] {
   const fam = familyOf(String(mem.fromFrame ?? ""));
   if (fam !== "front" || !has("sit_down")) return [];
   // Sits down, then slides forward over the edge so his seat ends on it and the legs hang over.
-  return [...clip("sit_down", 95, { ease: 2 }), ...slideDy([k("sit_down7", 90), k("sit_down7", 90), k("sit_down7", 90)], EDGE_DY / 4, (EDGE_DY * 3) / 4)];
+  return [...clip("sit_down", 95, { ease: 2 }), ...slideDy([k("sit_down7", 70), k("sit_down7", 70), k("sit_down7", 70), k("sit_down7", 70), k("sit_down7", 70)], EDGE_DY / 6, (EDGE_DY * 5) / 6)];
 }
 
 /** Off the edge: back up onto it and stand (one of the drawn stand-ups). */
@@ -640,7 +640,7 @@ function edgeStandUp(rand: () => number, mem: Memory): Keyframe[] {
   const last = ((mem.lastClip as Record<string, string>) ??= {});
   const v = pickVariant(up, rand, last["sit>front"]);
   last["sit>front"] = v.id;
-  return [...slideDy([k("sit_down7", 90), k("sit_down7", 90), k("sit_down7", 90)], (EDGE_DY * 3) / 4, EDGE_DY / 4), ...v.keys(rand, mem)];
+  return [...slideDy([k("sit_down7", 70), k("sit_down7", 70), k("sit_down7", 70), k("sit_down7", 70), k("sit_down7", 70)], (EDGE_DY * 5) / 6, EDGE_DY / 6), ...v.keys(rand, mem)];
 }
 
 /** At a window's edge: lean right over it to look down, eye flickering. */
