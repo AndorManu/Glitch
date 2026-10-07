@@ -67,7 +67,10 @@ export async function renderMemory(root: HTMLElement): Promise<void> {
       armed = setTimeout(disarm, 4000);
       return;
     }
+    // Disarm first: disabling the focused button can fire blur, which
+    // would otherwise reset the label mid-wipe.
     clearTimeout(armed);
+    armed = null;
     wipe.disabled = true;
     wipe.textContent = "Forgetting…";
     await api.clearMemory().catch(() => {});
