@@ -282,7 +282,7 @@ def process(name: str, cfg: dict, report: dict) -> list[np.ndarray]:
         ys = np.where(part[:, :, 3].any(1))[0]
         crops.append(part[ys.min() : ys.max() + 1])
     # The art's grid: block pitch from the whole sheet, then half a block per art px.
-    pitch, _, _ = best_pitch(np.concatenate([np.pad(c, ((0, 400 - c.shape[0] if c.shape[0] < 400 else 0), (0, 0), (0, 0))) for c in crops], 1)[:400], 5.0, 11.0)
+    pitch, _, _ = best_pitch(np.concatenate([np.pad(c[:400], ((0, 400 - min(400, c.shape[0])), (0, 0), (0, 0))) for c in crops], 1), 5.0, 11.0)
     cell = pitch / 2
     # Normalise to the original character's size: the reference frame's height in art px.
     ref = crops[cfg.get("ref", 0)]
@@ -301,7 +301,11 @@ def process(name: str, cfg: dict, report: dict) -> list[np.ndarray]:
         frames.append(art)
     # The glitch eye is on his right eye: in our convention it shows on the
     # right of the picture. Mirror the whole sheet if most frames have it left.
-    if votes < 0:
+    if cfg.get("rotate"):
+        # Drawn climbing a wall on his right: turn the wall into the floor (the
+        # app turns him onto the wall itself), climbing up becomes walking right.
+        frames = [np.rot90(f, cfg["rotate"]).copy() for f in frames]
+    elif votes < 0:
         frames = [f[:, ::-1].copy() for f in frames]
     # Body centred; `shift` moves a whole sheet (e.g. the long run tail must fit the canvas).
     anchors = [body_x(f, "left") - cfg.get("shift", 0) for f in frames]
@@ -340,6 +344,8 @@ for _name in ["think", "sleep", "wake", "dangle", "climb", "laugh", "sad", "angr
               "peek", "push", "spin", "teleport", "listen", "celebrate", "dance", "eat", "grab_tab",
               "dizzy", "sneeze", "typing", "point", "land", "sit"]:
     SHEETS[_name] = {"cell": 3.8}
+# The wall crawl, rotated onto the floor; a bit smaller so the long body + tail fits the canvas.
+SHEETS["climb"] = {"cell": 4.9, "rotate": -1, "shift": 6}
 
 
 def main():

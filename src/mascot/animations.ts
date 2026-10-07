@@ -425,35 +425,30 @@ function startledKeys(): Keyframe[] {
 
 /** Holding on to a wall or the ceiling: pressed flat, breathing, glancing back. */
 function clingKeys(rand: () => number): Keyframe[] {
+  // Holding on (the drawn wall crawl, paused): breathing, shifting the grip, glancing back.
   const keys: Keyframe[] = [];
   const until = 5000 + rand() * 8000;
   let t = 0;
   while (t < until) {
     const rest = 2000 + rand() * 1800;
-    keys.push(k("walk0", rest, { sy: 0.97 }));
+    keys.push(k("climb0", rest));
     t += rest;
     const r = rand();
     const extra =
       r < 0.3
-        ? [k("side", 900 + rand() * 700, { flip: true, sy: 0.98 })] // over the shoulder
+        ? [k("climb7", 900 + rand() * 700), k("climb7", 60, { glitch: 0.25, fx: "eye" })] // a pause, the eye flickers
         : r < 0.5
-          ? [k("walk1", 140, { sy: 0.95, dx: 2 }), k("walk0", 160, { sy: 0.96, dx: 1 })] // shift the grip
-          : [k("walk0", 650, { sy: 0.995, dy: -1 })]; // breathe
+          ? [k("climb1", 140), k("climb2", 160)] // shift the grip
+          : [k("climb7", 650)]; // breathe
     keys.push(...extra);
     t += sum(extra);
   }
-  return [...keys, ...burst(rand, { frame: "walk0", sy: 0.97 })];
+  return [...keys, ...burst(rand, { frame: "climb0" })];
 }
 
-/** Climbing (walls) and crawling (ceiling): a slower, flatter gait than walking. */
+/** Climbing (walls) and crawling (ceiling): the drawn 8-frame wall crawl, alternating paws, ~10 fps. */
 function climbKeys(rand: () => number): Keyframe[] {
-  const reach = (o: Omit<Keyframe, "frame" | "ms"> = {}) => [
-    k("walk0", 80, { sx: 1.05, sy: 0.93, ...o }),
-    k("walk0", 80, { dy: -1, sy: 0.96, ...o }),
-    k("walk1", 80, { dy: -3, sx: 0.96, sy: 1.04, rot: 3, ...o }),
-    k("walk1", 80, { dy: -2, sy: 1.0, rot: 1, ...o }),
-  ];
-  const keys = [...reach(), ...reach({ dx: 1 })];
+  const keys = cycle("climb", [0, 1, 2, 3, 4, 5, 6, 7], 100);
   if (rand() < 0.25) keys[6] = { ...keys[6], glitch: 0.35, fx: "eye" };
   return keys;
 }
@@ -567,7 +562,7 @@ function lookAroundKeys(rand: () => number): Keyframe[] {
 }
 
 /** On a wall: stop and look back down at where he came from. */
-const LOOK_BACK: Keyframe[] = [k("walk0", 200, { sy: 0.97 }), k("side", 1000, { flip: true }), k("side", 60, { flip: true, glitch: 0.3, fx: "eye" }), k("walk0", 300, { sy: 0.97 })];
+const LOOK_BACK: Keyframe[] = [k("climb0", 300), k("climb7", 900), k("climb7", 60, { glitch: 0.3, fx: "eye" }), k("climb0", 300)];
 
 /** Conjuring a platform out of glitch pixels. */
 function buildKeys(rand: () => number): Keyframe[] {
