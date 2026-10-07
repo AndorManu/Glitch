@@ -4,6 +4,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { api, asUiError, CHAT_CLEARED_EVENT, type PanelView, type Settings, type SetupStatus, type VoiceDownloadEvent } from "../shared/ipc";
 import { drawAvatar } from "./avatar";
 import { h } from "./dom";
+import { FEATURES } from "./features";
 import { renderMemory } from "./memory";
 import { formatGb, layout, ollamaSummary, prettyModelName, SetupView, sameModel } from "./setup";
 import { busyButton, enterView, loading, settingsKey, toggleSwitch } from "./ui";
@@ -169,6 +170,12 @@ async function renderSettings(): Promise<void> {
       ),
       card("Voice", voiceBody),
       card("Memory", memoryBody),
+      h("h2", { class: "features-title" }, "Features"),
+      ...FEATURES.map((f) => {
+        const body = h("div", { class: `feature feature-${f.id}` });
+        void f.render(body);
+        return card(f.title, body);
+      }),
       h("p", { class: `info ${ollama.state}` }, h("span", { class: "dot", "aria-hidden": "true" }), h("span", {}, ollama.text)),
     ],
     [

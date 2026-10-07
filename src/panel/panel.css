@@ -529,3 +529,29 @@ button.danger-text.armed:hover:not(:disabled) { background: var(--danger); }
 .voice-model-line.stack { flex-direction: column; align-items: flex-start; gap: 6px; }
 .voice-error { color: var(--danger); }
 .voice-gap { height: 12px; border-bottom: 2px dashed var(--line-soft); margin-bottom: 12px; }
+
+/* ---------------------------------------------------- settings: features */
+
+.features-title { font-size: 14px; margin: 18px 2px 8px; }
+.um-section + .um-section { margin-top: 12px; padding-top: 12px; border-top: 2px dashed var(--line-soft); }
+.um-section > * + * { margin-top: 8px; }
+.um-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.um-line .hint { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.um-state { overflow-wrap: anywhere; }
+.um-warn { color: var(--warn-ink); }
+.um-field { display: flex; flex-direction: column; gap: 5px; }
+.um-label { font-weight: 650; font-size: 12.5px; }
+.um-input {
+  flex: 1; min-width: 0; font: inherit; color: var(--text); background: var(--surface);
+  padding: 7px 10px; border: 2px solid var(--outline); border-radius: 10px;
+}
+.um-input:focus-visible { outline: 3px solid var(--ring); outline-offset: 1px; }
+.um-results { display: flex; flex-wrap: wrap; gap: 6px; }
+.um-preview { border: 2px dashed var(--line-soft); border-radius: 10px; padding: 8px; }
+.um-preview > * + * { margin-top: 8px; }
+.um-code {
+  margin: 0; max-height: 180px; overflow: auto; padding: 8px; border-radius: 8px;
+  background: var(--surface-2); font: 11px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  white-space: pre; user-select: text;
+}
+.um-preview code { overflow-wrap: anywhere; }
