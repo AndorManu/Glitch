@@ -287,7 +287,15 @@ new ResizeObserver(() => {
 void listen<BubbleLayout>("bubble-layout", (e) => applyLayout(e.payload));
 void listen("bubble-shown", () => onShown());
 // Rust tells us about hides too (not every webview fires visibilitychange).
-void listen("bubble-hidden", () => onHidden());
+// One that beats our close timer (e.g. Glitch clicked mid-close) makes the
+// timer moot: drop it, so it can't later hide a bubble reopened meanwhile.
+void listen("bubble-hidden", () => {
+  if (hideTimer) {
+    clearTimeout(hideTimer);
+    hideTimer = null;
+  }
+  onHidden();
+});
 
 // --------------------------------------------------------------- go
 
