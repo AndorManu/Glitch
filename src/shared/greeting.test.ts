@@ -33,3 +33,15 @@ describe("greeting", () => {
     expect(pickGreeting(null)).toBe(WELCOME);
   });
 });
+
+import { noDashes, plainText } from "./chat-text";
+
+describe("no dashes", () => {
+  it("rewrites em and en dashes the way the Rust side does", () => {
+    expect(plainText("It's sunny in space—his Starlink thing!")).toBe("It's sunny in space, his Starlink thing!");
+    expect(noDashes("Pick one – the red one.")).toBe("Pick one, the red one.");
+    expect(noDashes("Takes 3–5 minutes")).toBe("Takes 3-5 minutes");
+    expect(noDashes("Done —.")).toBe("Done.");
+    expect(noDashes("— a list item")).toBe("- a list item");
+  });
+});

@@ -138,6 +138,7 @@ pub fn system_prompt(os: Os, screen: bool) -> String {
          - Plain text only. No markdown: no **bold**, no # headings, no tables, no ``` code blocks (your speech \
          bubble can't show them). Write code inline, like prices[i].\n\
          - A bit of raccoon flavour is welcome, but the useful part comes first.\n\
+         - Never use em dashes or en dashes. Use a comma, a colon or a new sentence instead.\n\
          - Translating: translate every word, greetings too, and give just the translation.\n\
          - Never make up results or what you saw. If a tool fails, say so simply and suggest what to try.\n\n\
          Tools: call them yourself instead of telling the user to do it. Call one tool, read its result, then \
@@ -847,7 +848,45 @@ pub fn plain_text(text: &str) -> String {
             }
         })
         .collect();
-    lines.join("\n").trim().to_string()
+    no_dashes(lines.join("\n").trim())
+}
+
+/// Glitch never writes em or en dashes (house style, and they read as
+/// machine-written). Ranges like 3–5 become 3-5; a dash between words or
+/// clauses becomes a comma. Same rules as `noDashes` in src/shared/chat-text.ts.
+pub fn no_dashes(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c != '\u{2014}' && c != '\u{2013}' {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let prev = out.chars().last();
+        let next = chars.get(i + 1).copied();
+        let range = prev.is_some_and(|p| p.is_ascii_digit()) && next.is_some_and(|n| n.is_ascii_digit());
+        if range || prev.is_none() || prev == Some('\n') {
+            out.push('-');
+            i += 1;
+            continue;
+        }
+        while out.ends_with(' ') {
+            out.pop();
+        }
+        // Skip the spaces after the dash; a comma only if the sentence goes on.
+        let mut j = i + 1;
+        while chars.get(j) == Some(&' ') {
+            j += 1;
+        }
+        if chars.get(j).is_some_and(|n| !matches!(n, '.' | '!' | '?' | ',' | '\n')) {
+            out.push_str(", ");
+        }
+        i = j;
+    }
+    out.replace(",,", ",")
 }
 
 fn declined(tool: &str) -> Message {
@@ -1180,6 +1219,13 @@ mod tests {
         assert_eq!(plain_text("Change it:\n```python\ntotal += prices[i]\n```"), "Change it:\ntotal += prices[i]");
         assert_eq!(plain_text("2 * 3 = 6"), "2 * 3 = 6");
         assert_eq!(plain_text("Glitchy things"), "Glitchy things");
+        assert_eq!(
+            plain_text("It's sunny in space\u{2014}his Starlink thing!"),
+            "It's sunny in space, his Starlink thing!"
+        );
+        assert_eq!(plain_text("Pick one \u{2013} the red one."), "Pick one, the red one.");
+        assert_eq!(plain_text("Takes 3\u{2013}5 minutes"), "Takes 3-5 minutes");
+        assert_eq!(plain_text("Done \u{2014}."), "Done.");
     }
 
     #[tokio::test]

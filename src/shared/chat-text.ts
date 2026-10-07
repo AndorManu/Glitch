@@ -51,7 +51,38 @@ export function plainText(text: string): string {
       return line;
     })
     .join("\n")
-    .trim();
+    .trim()
+    .replace(/^[\s\S]*$/, (all) => noDashes(all));
+}
+
+/**
+ * Glitch never writes em or en dashes. Ranges (3–5) become 3-5, a dash
+ * between words or clauses becomes a comma. Same rules as `no_dashes` in
+ * crates/glitch-core/src/agent.rs. Unit-tested.
+ */
+export function noDashes(text: string): string {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c !== "\u2014" && c !== "\u2013") {
+      out += c;
+      continue;
+    }
+    const prev = out[out.length - 1];
+    const next = text[i + 1];
+    const range = prev !== undefined && /\d/.test(prev) && next !== undefined && /\d/.test(next);
+    if (range || prev === undefined || prev === "\n") {
+      out += "-";
+      continue;
+    }
+    out = out.replace(/ +$/, "");
+    let j = i + 1;
+    while (text[j] === " ") j++;
+    const n = text[j];
+    if (n !== undefined && !".!?,\n".includes(n)) out += ", ";
+    i = j - 1;
+  }
+  return out.replaceAll(",,", ",");
 }
 
 /** Said after "Clear chat" in Settings. */
