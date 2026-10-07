@@ -29,8 +29,8 @@ pub fn panel_position(mascot: Rect, panel_w: i32, panel_h: i32, area: Rect, gap:
 }
 
 /// Bottom-right corner of the work area, where Glitch appears on first start.
-pub fn mascot_home(area: Rect, size: i32, margin: i32) -> (i32, i32) {
-    (area.right() - size - margin, area.bottom() - size - margin)
+pub fn mascot_home(area: Rect, w: i32, h: i32, margin: i32) -> (i32, i32) {
+    (area.right() - w - margin, area.bottom() - h - margin)
 }
 
 #[cfg(test)]
@@ -72,6 +72,6 @@ mod tests {
 
     #[test]
     fn home_is_bottom_right() {
-        assert_eq!(mascot_home(AREA, 96, 24), (1920 - 120, 1040 - 120));
+        assert_eq!(mascot_home(AREA, 138, 90, 24), (1920 - 162, 1040 - 114));
     }
 }

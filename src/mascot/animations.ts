@@ -23,7 +23,7 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   idle: { frames: [...hold("idle0", 10), "blink", ...hold("idle0", 8), "idle1", "idle1", ...hold("idle0", 3)], fps: 4 },
   walk: { frames: ["walk0", "walk1"], fps: 6 },
   think: { frames: ["think0", "think1"], fps: 3 },
-  happy: { frames: ["happy", "happy", "idle0", "happy", "happy", "idle0"], fps: 4, once: true },
+  happy: { frames: ["wave", "happy", "wave", "happy"], fps: 3, once: true },
   sleep: { frames: ["sleep0", "sleep1"], fps: 0.5 },
 };
 

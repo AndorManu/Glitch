@@ -19,26 +19,26 @@ describe("Walker", () => {
     for (let i = 0; i < 500; i++) {
       const w = new Walker({ speed: 70, maxDistance: 400, restMinMs: 0, restMaxMs: 0 });
       const from = { x: Math.random() * (1920 - 96), y: Math.random() * (1040 - 96) };
-      const { to } = w.plan(from, area, 96);
+      const { to } = w.plan(from, area, { width: 138, height: 90 });
       expect(to.x).toBeGreaterThanOrEqual(0);
       expect(to.y).toBeGreaterThanOrEqual(0);
-      expect(to.x + 96).toBeLessThanOrEqual(1920);
-      expect(to.y + 96).toBeLessThanOrEqual(1040);
+      expect(to.x + 138).toBeLessThanOrEqual(1920);
+      expect(to.y + 90).toBeLessThanOrEqual(1040);
     }
   });
 
   it("respects monitors with negative coordinates", () => {
     const left = { x: -1920, y: -200, width: 1920, height: 1080 };
     const w = new Walker({ speed: 70, maxDistance: 5000, restMinMs: 0, restMaxMs: 0, random: seq(0.5, 1) });
-    const { to } = w.plan({ x: -100, y: 0 }, left, 96);
+    const { to } = w.plan({ x: -100, y: 0 }, left, { width: 138, height: 90 });
     expect(to.x).toBeGreaterThanOrEqual(-1920);
-    expect(to.x + 96).toBeLessThanOrEqual(0);
+    expect(to.x + 138).toBeLessThanOrEqual(0);
   });
 
   it("walk duration follows speed", () => {
     // angle 0 (to the right), full distance
     const w = new Walker({ speed: 100, maxDistance: 300, restMinMs: 0, restMaxMs: 0, random: seq(0, 1) });
-    const walk = w.plan({ x: 100, y: 100 }, area, 96);
+    const walk = w.plan({ x: 100, y: 100 }, area, { width: 138, height: 90 });
     expect(walk.to).toEqual({ x: 400, y: 100 });
     expect(walk.durationMs).toBe(3000);
     expect(facesLeft(walk)).toBe(false);

@@ -3,7 +3,7 @@
 // Anything that can produce named frames (code-drawn grids today, a PNG
 // sprite sheet later) works, as long as it provides the frame names that
 // the animations in `src/mascot/animations.ts` use:
-//   idle0 idle1 blink think0 think1 happy walk0 walk1 sleep0 sleep1
+//   idle0 idle1 blink think0 think1 happy wave walk0 walk1 sleep0 sleep1
 
 /** Pixel-art drawn as text: one character per pixel. */
 export interface GridSpriteSource {
@@ -32,5 +32,7 @@ export interface SpriteSet {
   /** Native size of one frame in art pixels. */
   width: number;
   height: number;
+  /** True for hard-edged pixel grids (scale by whole numbers, no smoothing). */
+  pixelated: boolean;
   frame(name: string): FrameImage;
 }

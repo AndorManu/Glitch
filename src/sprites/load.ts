@@ -44,7 +44,7 @@ function fromGrid(src: GridSpriteSource): SpriteSet {
     });
     cache.set(name, c);
   }
-  return spriteSet(width, height, cache);
+  return spriteSet(width, height, true, cache);
 }
 
 async function fromSheet(src: SheetSpriteSource): Promise<SpriteSet> {
@@ -60,12 +60,12 @@ async function fromSheet(src: SheetSpriteSource): Promise<SpriteSet> {
     c.getContext("2d")!.drawImage(img, sx, sy, src.frameWidth, src.frameHeight, 0, 0, src.frameWidth, src.frameHeight);
     cache.set(name, c);
   }
-  return spriteSet(src.frameWidth, src.frameHeight, cache);
+  return spriteSet(src.frameWidth, src.frameHeight, false, cache);
 }
 
-function spriteSet(width: number, height: number, cache: Map<string, FrameImage>): SpriteSet {
+function spriteSet(width: number, height: number, pixelated: boolean, cache: Map<string, FrameImage>): SpriteSet {
   const fallback = cache.values().next().value!;
-  return { width, height, frame: (name) => cache.get(name) ?? fallback };
+  return { width, height, pixelated, frame: (name) => cache.get(name) ?? fallback };
 }
 
 export async function loadSprites(src: SpriteSource): Promise<SpriteSet> {

@@ -1,11 +1,10 @@
-// Placeholder pixel art for Glitch, drawn as text grids.
+// Fallback art: a tiny code-drawn creature, used only if the real sprite
+// sheet (raccoon.ts) fails to load. Drawn as text grids.
 //
 // Each frame is 16x16 "pixels"; every character is one pixel and maps to a
 // colour in PALETTE ('.' = transparent). Edit the grids to tweak the art.
 //
-// To use real art instead, see `sheet.ts` (PNG sprite sheet loader) and the
-// "Swapping in real art" section of the README. The rest of the app only
-// depends on the `SpriteSet` interface in `types.ts`.
+// The rest of the app only depends on the `SpriteSet` interface in `types.ts`.
 
 import type { GridSpriteSource } from "./types";
 
@@ -60,6 +59,7 @@ export const GLITCH: GridSpriteSource = {
     think1: variant({ 0: ".............h..", 1: ".......mm....h..", 7: "..kbbwpbbwpbbk..", 8: "..kbbwwbbwwbbk.." }),
     // Squinty happy eyes, open mouth.
     happy: variant({ 7: "..kbbppbbppbbk..", 8: "..kbbbbbbbbbbk..", 10: "..kbbbkmmkbbbk.." }),
+    wave: variant({ 7: "..kbbppbbppbbk..", 8: "..kbbbbbbbbbbk.." }),
     walk0: variant({ 14: "...kk.....kk...." }),
     walk1: variant({ 1: "........mm......", 14: ".....kk..kk....." }),
     sleep0: variant({ ...EYES_CLOSED, 0: "...........zzz..", 1: ".......mm....z..", 2: "........k..zzz.." }),

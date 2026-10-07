@@ -1,6 +1,6 @@
 # Glitch
 
-A tiny pixel-art creature that lives on your desktop (Windows and macOS) and
+A tiny pixel-art raccoon with a glitchy eye that lives on your desktop (Windows and macOS) and
 doubles as a small, private AI assistant. Click Glitch to chat. Glitch runs a
 small AI model **on your own computer** with [Ollama](https://ollama.com), so
 your chats don't leave your machine.
@@ -10,7 +10,7 @@ notifications are planned for later and are not in this build.
 
 What works in this milestone:
 
-* Glitch sits on top of your other windows, idles (blinks, sways), sometimes
+* Glitch sits on top of your other windows, idles (shifts its tail), sometimes
   walks a short way, and falls asleep after 10 quiet minutes. Drag it anywhere.
 * Click it to open a small chat panel. A first-run wizard checks for Ollama,
   looks at how much memory your computer has, and suggests and downloads a
@@ -133,7 +133,7 @@ on the manual checklist below.
   may not float over another app's *full-screen* Space. Untested.
 * **Windows, tray icon** may be hidden behind the **^** arrow in the taskbar
   until you drag it out.
-* **Both**: the mascot window is a 96×96 square. Clicks on its transparent
+* **Both**: the mascot window is a 138×90 rectangle. Clicks on its transparent
   corners still go to Glitch rather than to the window underneath.
 * **Unsigned builds** trigger SmartScreen / Gatekeeper warnings (see above).
   Code signing is a release task for a later milestone.
@@ -146,7 +146,10 @@ on the manual checklist below.
 src/                     frontend (TypeScript, no framework)
   mascot/                mascot window: animator, walker, click/drag
   panel/                 chat panel: setup wizard, chat, settings
-  sprites/               placeholder art + sprite loader (swap art here)
+  sprites/               sprite-sheet frame map, loader, fallback art
+art/                     the original character art (source of the sheet)
+public/sprites/          the generated sprite sheet the app loads
+scripts/make-sprites.py  art → sprite sheet + app icon
   shared/ipc.ts          typed calls into Rust
 src-tauri/               thin app shell: windows, tray, IPC commands
   tauri.conf.json        mascot window: transparent, frameless, on top
@@ -229,27 +232,44 @@ A confirmation is a one-time ID held in Rust: a stale or replayed "Allow"
 does nothing, and typing a new message cancels any pending request. The rule
 "only URLs run without asking" is one table in `crates/glitch-core/src/confirm.rs`.
 
-## Swapping in real art
+## The character art
 
-All art goes through the `SpriteSet` interface (`src/sprites/types.ts`).
-The animations use these frame names:
-`idle0 idle1 blink think0 think1 happy walk0 walk1 sleep0 sleep1`.
+Glitch is the raccoon in `art/glitch-raccoon-source.webp` (16 poses).
+`scripts/make-sprites.py` finds each pose by the empty space around it, puts
+them all on one same-size canvas (feet on a shared baseline so Glitch doesn't
+jump between poses) and writes:
 
-* **Tweak the placeholder**: edit the 16×16 text grids in
-  `src/sprites/glitch.ts` (one character = one pixel, colours in `PALETTE`).
-  `npm test` checks every frame for typos.
-* **Use a PNG sprite sheet**: put e.g. `glitch.png` in `public/sprites/`, then
-  in `src/mascot/main.ts` replace `loadSprites(GLITCH)` with
+* `public/sprites/glitch.png`: the 4×4 sprite sheet the app loads (frames
+  276×180, twice the on-screen size so it's sharp on high-DPI screens)
+* `src-tauri/icons/source.png`: the app icon source (front pose)
 
-  ```ts
-  loadSprites({ kind: "sheet", url: "/sprites/glitch.png", frameWidth: 32, frameHeight: 32,
-    frames: { idle0: 0, idle1: 1, blink: 2, think0: 3, think1: 4, happy: 5, walk0: 6, walk1: 7, sleep0: 8, sleep1: 9 } })
-  ```
+Which pose plays when is set in `src/sprites/raccoon.ts`:
 
-  and adjust `ART_SCALE` so the frame fits the 96 px window (or change the
-  window size in `tauri.conf.json` and `WINDOW_CSS_PX` together).
-* **App icon**: replace `src-tauri/icons/source.png` (1024×1024) and run
-  `npx tauri icon src-tauri/icons/source.png`.
+| Animation | Poses |
+|---|---|
+| idle | front pose, now and then the tail-swapped front pose |
+| walk | the two side-running poses (mirrored when walking left) |
+| thinking / waiting for "Allow" | the "?" pose |
+| after answering | waving, then waving with mouth open |
+| asleep (10 idle minutes) | curled up with Zzz |
+
+Not used yet (they're in the sheet for later milestones): side, back,
+glitching, sitting, laughing, peeking at a window (for Claude Code
+notifications), napping on a rock, and the chaos spin (for chaos mode).
+
+**To change the art:** replace the source image (same rough 4×4 layout,
+transparent background), then run
+
+```bash
+pip install pillow numpy
+python3 scripts/make-sprites.py
+npx tauri icon src-tauri/icons/source.png
+```
+
+and adjust the pose numbers in `src/sprites/raccoon.ts` if the order
+changed. Any art works through the `SpriteSet` interface
+(`src/sprites/types.ts`). If the sheet ever fails to load, Glitch falls back
+to a tiny code-drawn creature (`src/sprites/glitch.ts`), so the app still works.
 
 ---
 
@@ -271,7 +291,7 @@ The animations use these frame names:
     loop with a scripted fake model (auto URL, approve, decline, invalid
     calls, loop cap, history trimming)
   * panel placement next to Glitch (multi-monitor, screen edges)
-* `npm test`: 21 frontend tests: walker stays inside the screen, animator
+* `npm test`: 22 frontend tests: walker stays inside the screen, animator
   never has more than one timer, idle repaint budget, sprite grids are
   well-formed, wizard helpers.
 * CI also **builds the real app on Windows and macOS runners**, which proves
@@ -306,14 +326,16 @@ test the wizard from scratch.
 - [ ] Glitch appears bottom-right with **no** box, border, shadow or white
       flash around it (fully transparent background)
 - [ ] Glitch stays on top when you click other windows
-- [ ] It blinks every few seconds; within ~1–2 minutes it walks a short way
+- [ ] No white/grey fringe around the raccoon's outline
+- [ ] It shifts its tail now and then; within ~1–2 minutes it walks a short way
       and stays fully on screen (also on a second monitor)
 - [ ] Dragging Glitch moves it; a simple click (no drag) opens the chat
 - [ ] Looks crisp (not blurry) on a high-DPI / Retina screen
 - [ ] No taskbar button (Windows) / no Dock icon (macOS); tray / menu-bar icon
       is present, and its menu works (Chat, Let Glitch wander, Quit)
 - [ ] Settings → turn off "walk around": it stops walking (tray tick updates too)
-- [ ] Leave it alone for 10 minutes: it falls asleep (Zzz); hover wakes it
+- [ ] Leave it alone for 10 minutes: it curls up asleep (Zzz); hover wakes it
+- [ ] While it's thinking it shows the "?" pose; after a reply it waves
 
 **Setup wizard**
 
@@ -363,7 +385,8 @@ test the wizard from scratch.
    DPI or always-on-top issues show up on real machines; measure real idle
    CPU/RAM and set a budget.
 2. **Streaming replies** (show words as they arrive) and a way to stop a reply.
-3. **Real pixel art** and more reactions (startled when dragged, waving).
+3. **Use the unused poses**: glitch/laugh reactions, being dragged, peeking at
+   a window for notifications; and draw a blink frame.
 4. **Signed builds and auto-update** so ordinary users can install with no
    warnings.
 5. **Faster file search** through Spotlight (`mdfind`) on macOS and Windows

@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { api, asUiError, type Settings, type SetupStatus } from "../shared/ipc";
 import { GLITCH } from "../sprites/glitch";
 import { loadSprites } from "../sprites/load";
+import { RACCOON } from "../sprites/raccoon";
 import { ChatView } from "./chat";
 import { clear, h } from "./dom";
 import { SetupView, sameModel } from "./setup";
@@ -93,13 +94,18 @@ async function renderSettings(): Promise<void> {
 }
 
 async function drawAvatar(): Promise<void> {
-  const sprites = await loadSprites(GLITCH);
+  const sprites = await loadSprites(RACCOON).catch(() => loadSprites(GLITCH));
+  const img = sprites.frame("idle0");
   const c = document.getElementById("avatar") as HTMLCanvasElement;
   const dpr = window.devicePixelRatio || 1;
   c.width = c.height = 32 * dpr;
   const ctx = c.getContext("2d")!;
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(sprites.frame("idle0"), 0, 0, c.width, c.height);
+  ctx.imageSmoothingEnabled = !sprites.pixelated;
+  ctx.imageSmoothingQuality = "high";
+  const scale = Math.min(c.width / img.width, c.height / img.height);
+  const w = img.width * scale;
+  const h = img.height * scale;
+  ctx.drawImage(img, (c.width - w) / 2, (c.height - h) / 2, w, h);
 }
 
 async function main(): Promise<void> {

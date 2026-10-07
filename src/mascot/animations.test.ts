@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GLITCH } from "../sprites/glitch";
+import { RACCOON } from "../sprites/raccoon";
 import { ANIMATIONS, Animator, type Clock, frameDelay, MAX_FPS } from "./animations";
 
 /** Manual clock: tracks pending timers so we can assert there is never more than one. */
@@ -23,10 +24,17 @@ function fakeClock() {
 }
 
 describe("animations", () => {
-  it("every frame used by an animation exists in the sprite", () => {
+  it("every frame used by an animation exists in both sprite sets", () => {
     for (const [name, anim] of Object.entries(ANIMATIONS)) {
-      for (const f of anim.frames) expect(GLITCH.frames, `${name} uses ${f}`).toHaveProperty(f);
+      for (const f of anim.frames) {
+        expect(RACCOON.frames, `raccoon: ${name} uses ${f}`).toHaveProperty(f);
+        expect(GLITCH.frames, `fallback: ${name} uses ${f}`).toHaveProperty(f);
+      }
     }
+  });
+
+  it("raccoon frames point inside the 4x4 sheet", () => {
+    for (const i of Object.values(RACCOON.frames)) expect(i >= 0 && i < 16).toBe(true);
   });
 
   it("frame rates are capped", () => {

@@ -9,12 +9,14 @@ import { currentMonitor, getCurrentWindow, PhysicalPosition } from "@tauri-apps/
 import { api, type Mood, type Settings } from "../shared/ipc";
 import { GLITCH } from "../sprites/glitch";
 import { loadSprites } from "../sprites/load";
+import { RACCOON } from "../sprites/raccoon";
 import type { SpriteSet } from "../sprites/types";
 import { Animator } from "./animations";
 import { DEFAULT_WALKER, facesLeft, positionAt, type Walk, Walker } from "./walker";
 
-const WINDOW_CSS_PX = 96; // must match tauri.conf.json
-const ART_SCALE = 5; // 16px art -> 80 css px
+// Must match the mascot window in tauri.conf.json and MASCOT_W/H in windows.rs.
+const WINDOW_W = 138;
+const WINDOW_H = 90;
 const MOVE_FPS = 15;
 const SLEEP_AFTER_MS = 10 * 60_000;
 const DRAG_THRESHOLD_PX = 4;
@@ -39,21 +41,28 @@ let walk: { plan: Walk; started: number; timer?: number } | null = null;
 function draw(frame: string): void {
   lastFrame = frame;
   const dpr = window.devicePixelRatio || 1;
-  const px = WINDOW_CSS_PX * dpr;
-  if (canvas.width !== px) {
-    canvas.width = canvas.height = px;
+  const pw = Math.round(WINDOW_W * dpr);
+  const ph = Math.round(WINDOW_H * dpr);
+  if (canvas.width !== pw || canvas.height !== ph) {
+    canvas.width = pw;
+    canvas.height = ph;
   }
   const img = sprites.frame(frame);
-  const w = img.width * ART_SCALE * dpr;
-  const h = img.height * ART_SCALE * dpr;
-  ctx.clearRect(0, 0, px, px);
-  ctx.imageSmoothingEnabled = false;
+  // Fit inside the window, feet on the bottom edge. Pixel grids scale by
+  // whole numbers so they stay crisp; drawn art is scaled smoothly.
+  let scale = Math.min(pw / img.width, ph / img.height);
+  if (sprites.pixelated) scale = Math.max(1, Math.floor(scale));
+  const w = Math.round(img.width * scale);
+  const h = Math.round(img.height * scale);
+  ctx.clearRect(0, 0, pw, ph);
+  ctx.imageSmoothingEnabled = !sprites.pixelated;
+  ctx.imageSmoothingQuality = "high";
   ctx.save();
   if (facingLeft) {
-    ctx.translate(px, 0);
+    ctx.translate(pw, 0);
     ctx.scale(-1, 1);
   }
-  ctx.drawImage(img, Math.round((px - w) / 2), Math.round(px - h), w, h);
+  ctx.drawImage(img, Math.round((pw - w) / 2), ph - h, w, h);
   ctx.restore();
 }
 
@@ -93,7 +102,7 @@ async function startWalk(): Promise<void> {
     width: monitor.workArea.size.width,
     height: monitor.workArea.size.height,
   };
-  const plan = (await getWalker()).plan({ x: pos.x, y: pos.y }, area, Math.max(size.width, size.height));
+  const plan = (await getWalker()).plan({ x: pos.x, y: pos.y }, area, { width: size.width, height: size.height });
   if (plan.durationMs < 300) return scheduleWalk();
   facingLeft = facesLeft(plan);
   walk = { plan, started: performance.now() };
@@ -195,7 +204,11 @@ function applySettings(s: Settings): void {
 }
 
 async function main(): Promise<void> {
-  sprites = await loadSprites(GLITCH);
+  // The raccoon sheet; the tiny code-drawn creature only if the PNG fails.
+  sprites = await loadSprites(RACCOON).catch((e) => {
+    console.error("sprite sheet failed to load, using fallback art", e);
+    return loadSprites(GLITCH);
+  });
   draw(lastFrame);
   let settings: Settings | null = null;
   try {

@@ -49,16 +49,13 @@ export class Walker {
     return this.opts.restMinMs + this.random() * (this.opts.restMaxMs - this.opts.restMinMs);
   }
 
-  /**
-   * Pick a destination near `from` that keeps the whole window
-   * (`size` x `size`) inside `area`.
-   */
-  plan(from: Point, area: Rect, size: number): Walk {
+  /** Pick a destination near `from` that keeps the whole window inside `area`. */
+  plan(from: Point, area: Rect, size: { width: number; height: number }): Walk {
     const angle = this.random() * Math.PI * 2;
     const dist = this.opts.maxDistance * (0.3 + 0.7 * this.random());
     const to = {
-      x: Math.round(clamp(from.x + Math.cos(angle) * dist, area.x, area.x + area.width - size)),
-      y: Math.round(clamp(from.y + Math.sin(angle) * dist, area.y, area.y + area.height - size)),
+      x: Math.round(clamp(from.x + Math.cos(angle) * dist, area.x, area.x + area.width - size.width)),
+      y: Math.round(clamp(from.y + Math.sin(angle) * dist, area.y, area.y + area.height - size.height)),
     };
     const length = Math.hypot(to.x - from.x, to.y - from.y);
     return { from, to, durationMs: Math.round((length / this.opts.speed) * 1000) };

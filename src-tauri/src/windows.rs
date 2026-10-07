@@ -10,7 +10,8 @@ use crate::layout::{self, Rect};
 pub const MASCOT: &str = "mascot";
 pub const PANEL: &str = "panel";
 /// Must match the mascot size in tauri.conf.json.
-const MASCOT_SIZE: f64 = 96.0;
+const MASCOT_W: f64 = 138.0;
+const MASCOT_H: f64 = 90.0;
 const PANEL_W: f64 = 360.0;
 const PANEL_H: f64 = 540.0;
 
@@ -36,8 +37,8 @@ pub fn place_mascot(app: &AppHandle) {
     let Some(m) = app.get_webview_window(MASCOT) else { return };
     let (Some(area), Ok(scale)) = (work_area(&m), m.scale_factor()) else { return };
     // Not `outer_size()`: a window that hasn't been shown yet may report 0x0.
-    let size = (MASCOT_SIZE * scale).round() as i32;
-    let (x, y) = layout::mascot_home(area, size, (24.0 * scale) as i32);
+    let (w, h) = ((MASCOT_W * scale).round() as i32, (MASCOT_H * scale).round() as i32);
+    let (x, y) = layout::mascot_home(area, w, h, (24.0 * scale) as i32);
     let _ = m.set_position(PhysicalPosition::new(x, y));
 }
 
@@ -74,7 +75,7 @@ pub fn show_panel(app: &AppHandle) {
     };
     let position = app.get_webview_window(MASCOT).and_then(|mascot| {
         let area = work_area(&mascot)?;
-        let m = window_rect(&mascot, (MASCOT_SIZE, MASCOT_SIZE))?;
+        let m = window_rect(&mascot, (MASCOT_W, MASCOT_H))?;
         let p = window_rect(&panel, (PANEL_W, PANEL_H))?;
         let gap = (8.0 * mascot.scale_factor().unwrap_or(1.0)) as i32;
         let (x, y) = layout::panel_position(m, p.w, p.h, area, gap);
