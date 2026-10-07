@@ -94,12 +94,33 @@ export function busyButton(label: string, busyLabel: string, run: () => Promise<
   return b;
 }
 
-/** Play the view's entrance (once per switch, not on every redraw). */
+const entering = new WeakMap<HTMLElement, () => void>();
+
+/**
+ * Play the view's entrance (once per switch, not on every redraw). The
+ * animation runs on the view's `.scroll` child, so the class comes off when
+ * that child's animation ends; otherwise it would stick and replay on every
+ * redraw (which swaps the `.scroll` child). Reduced motion: no animation,
+ * so no class and no listener left waiting forever.
+ */
 export function enterView(el: HTMLElement): void {
+  entering.get(el)?.();
   el.classList.remove("entering");
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
   void el.offsetWidth; // restart the animation
   el.classList.add("entering");
-  el.addEventListener("animationend", (e) => e.target === el && el.classList.remove("entering"), { once: true });
+  const end = (e: Event) => {
+    if (e.target instanceof Element && e.target.parentElement === el) stop();
+  };
+  const stop = () => {
+    el.classList.remove("entering");
+    el.removeEventListener("animationend", end);
+    el.removeEventListener("animationcancel", end);
+    entering.delete(el);
+  };
+  el.addEventListener("animationend", end);
+  el.addEventListener("animationcancel", end);
+  entering.set(el, stop);
 }
 
 /** An on/off switch: a real checkbox styled as a switch, with a label and optional hint. */
