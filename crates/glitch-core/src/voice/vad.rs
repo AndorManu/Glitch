@@ -5,7 +5,7 @@
 //!
 //! * **Hold** (mic button or hotkey held down): never stops by itself, except
 //!   at the 30 s safety limit. Letting go stops.
-//! * **Hands-free** (a quick tap): stops ~1.2 s after the user stops talking,
+//! * **Hands-free** (a quick tap): stops ~0.8 s after the user stops talking,
 //!   or after a few seconds if they never start.
 
 use super::audio::{meter_level, rms, MIN_SPEECH_RMS};
@@ -34,6 +34,10 @@ pub enum Decision {
 
 #[derive(Debug, Clone, Copy)]
 pub struct VadConfig {
+    /// Hands-free: stop after this much quiet. 0.8 s: pauses between words
+    /// are shorter (up to ~0.7 s still continues, see the tests), and the
+    /// text arrives ~1.2-1.5 s after the last word with the base model
+    /// (measured on Windows; 1.2 s here made it 1.6-1.9 s).
     pub silence_stop_ms: u32,
     pub no_speech_stop_ms: u32,
     pub max_ms: u32,
@@ -46,7 +50,7 @@ pub struct VadConfig {
 
 impl Default for VadConfig {
     fn default() -> Self {
-        Self { silence_stop_ms: 1_200, no_speech_stop_ms: 6_000, max_ms: 30_000, min_speech_ms: 100, noise_ratio: 3.0 }
+        Self { silence_stop_ms: 800, no_speech_stop_ms: 6_000, max_ms: 30_000, min_speech_ms: 100, noise_ratio: 3.0 }
     }
 }
 
@@ -216,8 +220,8 @@ mod tests {
         audio.extend(noise(3.0, 0.002));
         let (d, at) = run(&mut vad, &audio);
         assert_eq!(d, Decision::Stop(StopReason::Silence));
-        // 0.5 s + 1.5 s + 1.2 s of silence
-        assert!((3_180..=3_260).contains(&at), "{at}");
+        // 0.5 s + 1.5 s + 0.8 s of silence
+        assert!((2_780..=2_860).contains(&at), "{at}");
         assert!(vad.heard_speech());
     }
 

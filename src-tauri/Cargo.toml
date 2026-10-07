@@ -51,3 +51,5 @@ core-graphics = "0.25"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 wiremock = "0.6"
+# Reading speech WAVs in the live voice checks (src/voice/live_check.rs).
+hound = "3"

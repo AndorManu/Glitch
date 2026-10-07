@@ -6,3 +6,11 @@
 # runtime and politely disables voice on CPUs without them instead of
 # crashing), Apple Silicon the generic ARMv8 baseline.
 GGML_NATIVE = "OFF"
+# Compile whisper.cpp optimized. On Windows the `cmake` crate replaces
+# CMake's Release flags with its own for the Visual Studio generator and
+# drops every /O flag, so whisper.cpp was built *unoptimized* and a voice
+# command took 5-10 s instead of well under 1 s. whisper-rs-sys forwards
+# CMAKE_* variables to CMake, and the cmake crate keeps flags that are set.
+# The "-" spelling works for both MSVC's cl and clang (macOS, Linux).
+CMAKE_C_FLAGS_RELEASE = "-O2 -DNDEBUG"
+CMAKE_CXX_FLAGS_RELEASE = "-O2 -DNDEBUG"

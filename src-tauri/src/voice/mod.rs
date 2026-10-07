@@ -21,6 +21,8 @@ pub mod capture;
 pub mod commands;
 pub mod download;
 pub mod hotkey;
+#[cfg(test)]
+mod live_check;
 pub mod session;
 pub mod stt;
 
