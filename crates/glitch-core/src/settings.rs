@@ -33,6 +33,8 @@ pub struct Settings {
     pub notes_trusted: bool,
     /// Voice commands (push-to-talk). Missing in older files → defaults.
     pub voice: VoiceSettings,
+    /// Games, play and growth + the wardrobe (see play.rs). Missing in older files -> defaults.
+    pub play: crate::play::PlaySettings,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -68,6 +70,7 @@ impl Default for Settings {
             screen_enabled: true,
             notes_trusted: false,
             voice: VoiceSettings::default(),
+            play: crate::play::PlaySettings::default(),
         }
     }
 }

@@ -5,12 +5,14 @@
 
 pub mod agent;
 pub mod ai;
+pub mod belly;
 pub mod chaos;
 pub mod confirm;
 pub mod desktop;
 pub mod memory;
 pub mod models;
 pub mod platform;
+pub mod play;
 pub mod settings;
 pub mod tools;
 pub mod vision;
