@@ -185,7 +185,10 @@ pub fn chaos_grab_window(app: AppHandle, chaos: State<'_, ChaosState>, id: u64) 
     dlog(format_args!("grabbed window {id:#x} at {:?}", t.cand.frame));
     let now = c.now();
     c.window_cd.mark(now);
-    c.window = Some(Session { grab: WindowGrab { id, start: t.cand.frame, border: t.border, area, scale }, at: Instant::now() });
+    c.window = Some(Session {
+        grab: WindowGrab { id, start: t.cand.frame, border: t.border, area, scale },
+        at: Instant::now(),
+    });
     Ok(t.cand.frame)
 }
 
@@ -196,7 +199,7 @@ pub fn chaos_grab_window(app: AppHandle, chaos: State<'_, ChaosState>, id: u64) 
 #[tauri::command]
 pub fn chaos_drag_window(app: AppHandle, chaos: State<'_, ChaosState>, dx: f64, dy: f64) -> Option<[i32; 2]> {
     let mut c = chaos.lock().unwrap();
-    let Some((grab, at)) = c.window.as_ref().map(|s| (s.grab, s.at)) else { return None };
+    let (grab, at) = c.window.as_ref().map(|s| (s.grab, s.at))?;
     let elapsed = at.elapsed();
     // Any keyboard/mouse input since the grab: the user is back, hands off.
     let user_touched = (native::idle_ms() as u128) < elapsed.as_millis();

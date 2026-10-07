@@ -230,10 +230,7 @@ mod imp {
     /// The window's frame from the regular window list (the page polls this
     /// at 30 Hz only while Glitch stands on a window).
     pub fn frame(app: &AppHandle, id: u64) -> Option<ScreenRect> {
-        let scale = app
-            .get_webview_window(crate::windows::MASCOT)
-            .and_then(|w| w.scale_factor().ok())
-            .unwrap_or(1.0);
+        let scale = app.get_webview_window(crate::windows::MASCOT).and_then(|w| w.scale_factor().ok()).unwrap_or(1.0);
         crate::world_native::app_windows(scale).into_iter().find(|w| w.id == id).map(|w| w.rect)
     }
 }

@@ -31,14 +31,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         state.settings().movement_enabled,
         None::<&str>,
     )?;
-    let chaos = CheckMenuItem::with_id(
-        app,
-        "chaos",
-        "Chaos mode",
-        true,
-        state.settings().chaos_enabled,
-        None::<&str>,
-    )?;
+    let chaos = CheckMenuItem::with_id(app, "chaos", "Chaos mode", true, state.settings().chaos_enabled, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Glitch", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&chat, &wander, &chaos, &settings, &sep, &quit])?;

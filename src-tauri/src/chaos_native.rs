@@ -32,7 +32,9 @@ mod imp {
     use windows_sys::core::BOOL;
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, POINT, RECT};
     use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS};
-    use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
     use windows_sys::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
     use windows_sys::Win32::System::SystemInformation::GetTickCount;
     use windows_sys::Win32::System::Threading::{
@@ -45,8 +47,8 @@ mod imp {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowLongW, GetWindowRect,
         GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed, SetCursorPos,
-        SetWindowPos, ShowWindow, GWL_EXSTYLE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, WS_EX_NOACTIVATE,
-        WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+        SetWindowPos, ShowWindow, GWL_EXSTYLE, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER,
+        SW_SHOWNOACTIVATE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     };
 
     const SKIP_CLASSES: &[&str] = &[
@@ -119,7 +121,12 @@ mod imp {
     fn cloaked(hwnd: HWND) -> bool {
         let mut c = 0u32;
         let hr = unsafe {
-            DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED as u32, (&mut c as *mut u32).cast(), std::mem::size_of::<u32>() as u32)
+            DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAKED as u32,
+                (&mut c as *mut u32).cast(),
+                std::mem::size_of::<u32>() as u32,
+            )
         };
         hr == 0 && c != 0
     }
@@ -190,12 +197,7 @@ mod imp {
         let real = rect_of(hwnd)?;
         let cand = Candidate {
             id: hwnd as usize as u64,
-            frame: ScreenRect {
-                x: frame.left,
-                y: frame.top,
-                w: frame.right - frame.left,
-                h: frame.bottom - frame.top,
-            },
+            frame: ScreenRect { x: frame.left, y: frame.top, w: frame.right - frame.left, h: frame.bottom - frame.top },
             foreground: hwnd == fg,
             maximized: unsafe { IsZoomed(hwnd) } != 0,
             elevated: !system && elevated(hwnd),
@@ -253,7 +255,11 @@ mod imp {
     /// A window's visible frame, or None if it's gone, hidden, minimised or cloaked.
     pub fn visible_frame(id: u64) -> Option<ScreenRect> {
         let hwnd = id as usize as HWND;
-        if unsafe { IsWindow(hwnd) } == 0 || unsafe { IsWindowVisible(hwnd) } == 0 || unsafe { IsIconic(hwnd) } != 0 || cloaked(hwnd) {
+        if unsafe { IsWindow(hwnd) } == 0
+            || unsafe { IsWindowVisible(hwnd) } == 0
+            || unsafe { IsIconic(hwnd) } != 0
+            || cloaked(hwnd)
+        {
             return None;
         }
         let f = frame_of(hwnd)?;

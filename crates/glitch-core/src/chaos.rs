@@ -149,12 +149,8 @@ impl WindowGrab {
     /// never further than the travel limit.
     pub fn target(&self, dx: f64, dy: f64) -> (i32, i32) {
         let (dx, dy) = limit_offset(dx, dy, MAX_WINDOW_TRAVEL * self.scale);
-        let (fx, fy) = clamp_frame(
-            self.start,
-            self.start.x + dx.round() as i32,
-            self.start.y + dy.round() as i32,
-            self.area,
-        );
+        let (fx, fy) =
+            clamp_frame(self.start, self.start.x + dx.round() as i32, self.start.y + dy.round() as i32, self.area);
         (fx - self.border.0, fy - self.border.1)
     }
 }
@@ -246,9 +242,9 @@ mod tests {
             Candidate { elevated: true, ..ok },
             Candidate { fullscreen: true, ..ok },
             Candidate { system: true, ..ok },
-            cand(2, 100, 100, 150, 400),         // too narrow
-            cand(3, 0, 0, 1900, 1000),           // most of the screen
-            cand(4, 2500, 100, 600, 400),        // another monitor
+            cand(2, 100, 100, 150, 400),  // too narrow
+            cand(3, 0, 0, 1900, 1000),    // most of the screen
+            cand(4, 2500, 100, 600, 400), // another monitor
         ] {
             assert_eq!(eligible(&bad, AREA, 10_000), Err(Refusal::Ineligible), "{bad:?}");
         }
@@ -273,7 +269,13 @@ mod tests {
 
     #[test]
     fn windows_stay_fully_on_screen() {
-        let g = WindowGrab { id: 1, start: ScreenRect { x: 100, y: 100, w: 600, h: 400 }, border: (7, 0), area: AREA, scale: 1.0 };
+        let g = WindowGrab {
+            id: 1,
+            start: ScreenRect { x: 100, y: 100, w: 600, h: 400 },
+            border: (7, 0),
+            area: AREA,
+            scale: 1.0,
+        };
         // Way off to the left: clamped at the edge (frame x = 0, real rect x = -7).
         assert_eq!(g.target(-5000.0, 0.0), (-7, 100));
         // Right: limited by the travel cap first.
