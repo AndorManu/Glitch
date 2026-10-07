@@ -12,10 +12,15 @@
 //! 2. Each utterance's first [`WakeConfig::window_ms`] (with a little audio
 //!    from before it) is handed to whisper once, in English, with a tiny
 //!    token budget.
-//! 3. [`wake_end`] decides whether the transcript *starts* with "glitch"
-//!    (optionally after "hey", "hi", "okay", ...), fuzzily, so "Hey, Glitch!",
-//!    "Hey glitch" and "Glitch, open YouTube" wake him, but "there's a glitch
-//!    in the game" does not.
+//! 3. [`wake_end`] decides whether the transcript *starts* with "hey
+//!    glitch" or "okay glitch" (fuzzy on whisper's spelling of the name), and
+//!    [`wake_confidence`] whether whisper was sure of those tokens. "Hey,
+//!    Glitch!" wakes him; "Glitch", "a glitch in the system", German
+//!    "gleich" and mumbles don't.
+//!
+//! A wake-word command is still treated as outside content (a video or a
+//! podcast can say "Hey Glitch, open ..."): every action with a side effect
+//! waits for the user's OK. See `Agent::send_with`.
 
 use std::collections::VecDeque;
 
@@ -181,17 +186,22 @@ impl Segmenter {
 
 // ------------------------------------------------------------- matching
 
-/// Words that may come before "glitch" ("hey glitch", "okay glitch", ...),
-/// including how whisper sometimes spells them.
-const LEAD_INS: &[&str] = &[
-    "hey", "hi", "hello", "hay", "hei", "heh", "he", "hey'", "a", "ah", "oh", "okay", "ok", "yo", "ey", "eh", "um",
-    "uh",
-];
+/// The wake phrase is "hey glitch" or "okay glitch": a bare "Glitch" is a
+/// word that comes up in videos and podcasts ("a glitch in the system"),
+/// and short lead-ins ("a", "he") are what whisper makes of any syllable.
+/// These are the spellings of "hey"/"okay" whisper uses.
+const GREETINGS: &[&str] = &["hey", "hay", "okay", "ok"];
 
-/// Spellings of "glitch" whisper produced on synthetic and real speech that
-/// are more than one edit away.
-const SOUNDALIKES: &[&str] =
-    &["glitz", "glitzy", "glitches", "glitched", "klitsch", "gleich", "glitchy", "glitschy", "gletsch"];
+/// May come before the greeting ("Oh, hey Glitch").
+const FILLERS: &[&str] = &["oh", "um", "uh"];
+
+/// Spellings of "glitch" whisper produced on synthetic speech that are more
+/// than one edit away.
+const SOUNDALIKES: &[&str] = &["glitz", "glitzy", "klitsch", "glitschy", "gletsch"];
+
+/// Real words one edit away from "glitch" that must not count: German
+/// "gleich" (= "right away", very common), "glitchy" (an adjective).
+const NOT_THE_NAME: &[&str] = &["gleich", "glitchy", "glitched", "glitches", "flitch", "glitcher"];
 
 fn edit_distance(a: &str, b: &str) -> usize {
     let b: Vec<char> = b.chars().collect();
@@ -210,7 +220,7 @@ fn edit_distance(a: &str, b: &str) -> usize {
 pub fn is_glitch(word: &str) -> bool {
     let w = word.trim_matches('\'');
     let w = w.strip_suffix("'s").unwrap_or(w);
-    if w.len() < 4 {
+    if w.len() < 5 || NOT_THE_NAME.contains(&w) {
         return false;
     }
     w == "glitch" || edit_distance(w, "glitch") <= 1 || SOUNDALIKES.contains(&w)
@@ -237,38 +247,93 @@ fn words(text: &str) -> Vec<(usize, usize)> {
     out
 }
 
-/// How many words may come before "glitch".
-const MAX_LEAD_INS: usize = 2;
-
-/// If `text` starts with the wake word, the byte offset right after it (and
-/// the punctuation/space following it); `None` if it doesn't.
-pub fn wake_end(text: &str) -> Option<usize> {
-    for (n, (s, e)) in words(text).into_iter().enumerate() {
-        let w = text[s..e].to_lowercase().replace('’', "'");
-        // "Heyglitch" / "Hi-Glitch" written as one word.
-        let glued = ["hey", "hi"].iter().any(|p| w.strip_prefix(p).is_some_and(is_glitch));
-        if is_glitch(&w) || glued {
-            let after = text[e..].char_indices().find(|(_, c)| c.is_alphanumeric()).map_or(text.len(), |(i, _)| e + i);
-            return Some(after);
-        }
-        if n >= MAX_LEAD_INS || !LEAD_INS.contains(&w.as_str()) {
-            return None;
-        }
-    }
-    None
+/// Byte offset of the first letter after `e` (skipping ", " and the like).
+fn next_word(text: &str, e: usize) -> usize {
+    text[e..].char_indices().find(|(_, c)| c.is_alphanumeric()).map_or(text.len(), |(i, _)| e + i)
 }
 
-/// Whether whisper's transcript of an utterance is the wake word.
+fn lower(text: &str, (s, e): (usize, usize)) -> String {
+    text[s..e].to_lowercase().replace('’', "'")
+}
+
+/// If `text` starts with the wake phrase ("hey glitch" / "okay glitch",
+/// optionally after "oh"/"um"), the byte offset right after it and the
+/// punctuation following it; `None` if it doesn't.
+pub fn wake_end(text: &str) -> Option<usize> {
+    let ws = words(text);
+    let mut i = 0;
+    if ws.first().is_some_and(|&w| FILLERS.contains(&lower(text, w).as_str())) {
+        i = 1;
+    }
+    let first = lower(text, *ws.get(i)?);
+    // "Heyglitch" written as one word.
+    if first.strip_prefix("hey").is_some_and(is_glitch) {
+        return Some(next_word(text, ws[i].1));
+    }
+    if !GREETINGS.contains(&first.as_str()) {
+        return None;
+    }
+    let name = *ws.get(i + 1)?;
+    is_glitch(&lower(text, name)).then(|| next_word(text, name.1))
+}
+
+/// Whether whisper's transcript of an utterance is the wake phrase.
 pub fn is_wake(text: &str) -> bool {
     wake_end(text).is_some()
 }
 
-/// The command in a transcript that starts with the wake word ("Hey Glitch,
-/// open YouTube." → "open YouTube."). Without a wake word, the whole text
-/// (the main model may spell "Glitch" differently than the wake check did).
-/// `None` if only the wake word was said.
+/// Whisper must be at least this sure of every token of the wake phrase.
+/// Calibrated on synthetic speech (see dev/wake-check.mjs).
+pub const MIN_CONFIDENCE: f32 = 0.5;
+
+/// How sure whisper was of the wake phrase: the lowest probability of the
+/// tokens that spell it. `tokens` are whisper's (text, probability) pairs in
+/// order (special tokens left out). `None` if the text isn't the wake phrase.
+pub fn wake_confidence(tokens: &[(String, f32)]) -> Option<f32> {
+    let text: String = tokens.iter().map(|(t, _)| t.as_str()).collect();
+    let lead = text.len() - text.trim_start().len();
+    let after = wake_end(text.trim_start())? + lead;
+    // Up to the end of the name itself (not the punctuation after it).
+    let end = text[..after].trim_end_matches(|c: char| !c.is_alphanumeric()).len();
+    let mut at = 0;
+    let mut min = f32::INFINITY;
+    for (t, p) in tokens {
+        if at < end && t.chars().any(char::is_alphanumeric) {
+            min = min.min(*p);
+        }
+        at += t.len();
+    }
+    min.is_finite().then_some(min)
+}
+
+/// A transcript wakes Glitch: the phrase, said clearly enough.
+pub fn is_confident_wake(tokens: &[(String, f32)]) -> bool {
+    wake_confidence(tokens).is_some_and(|c| c >= MIN_CONFIDENCE)
+}
+
+/// Looser than [`wake_end`], only for cutting the name off the command's
+/// transcript (the bigger model may write "Glitch, open YouTube" for what
+/// the wake check heard as "Hey Glitch, open").
+fn spoken_name_end(text: &str) -> Option<usize> {
+    if let Some(e) = wake_end(text) {
+        return Some(e);
+    }
+    let ws = words(text);
+    let (n, &w) = ws.iter().enumerate().take(3).find(|(_, w)| is_glitch(&lower(text, **w)))?;
+    let leads_ok = ws[..n].iter().all(|w| {
+        let l = lower(text, *w);
+        GREETINGS.contains(&l.as_str())
+            || FILLERS.contains(&l.as_str())
+            || ["hi", "hello", "a", "he"].contains(&l.as_str())
+    });
+    leads_ok.then(|| next_word(text, w.1))
+}
+
+/// The command in a transcript that starts with the wake phrase ("Hey
+/// Glitch, open YouTube." -> "Open YouTube."). Without it, the whole text.
+/// `None` if only the wake phrase was said.
 pub fn strip_wake(text: &str) -> Option<String> {
-    let rest = match wake_end(text) {
+    let rest = match spoken_name_end(text) {
         Some(i) => &text[i..],
         None => text,
     };
@@ -391,21 +456,32 @@ mod tests {
             "Hey Glitch.",
             "Hey, Glitch!",
             " hey glitch open youtube",
-            "Glitch, what's the weather?",
-            "Hi Glitch.",
             "Okay Glitch, set a timer.",
+            "OK, Glitch.",
             "Hey Glitz, open YouTube.",
             "Hey glitch's open youtube",
             "Heyglitch",
             "Hey, Litch. Open YouTube.",
-            "Oh hey Glitch",
-            "Hey Glitches, open YouTube.",
+            "Oh, hey Glitch",
+            "Hay Glitch, what's up?",
         ] {
             assert!(is_wake(t), "{t}");
         }
         for t in [
             "",
+            "Glitch",
+            "Glitch, open YouTube.",
             "There's a glitch in the game.",
+            "A glitch in the system.",
+            "He glitched out.",
+            "A Glitch, open YouTube.",
+            "He, Glitch, open YouTube.",
+            "Hi Glitch.",
+            "Hey glitchy thing.",
+            "Hey glitches.",
+            "Ich komme gleich.",
+            "Hey, gleich geht's los.",
+            "Okay, gleich.",
             "Hey Mitch, open the door.",
             "Hey, pitch it to me.",
             "Open YouTube.",
@@ -414,11 +490,28 @@ mod tests {
             "Switch it off.",
             "Hey there Glitch",
             "Thanks for watching!",
-            "Rich people",
+            "Hey Rich",
             "[BLANK_AUDIO]",
         ] {
             assert!(!is_wake(t), "{t}");
         }
+    }
+
+    fn toks(parts: &[(&str, f32)]) -> Vec<(String, f32)> {
+        parts.iter().map(|(t, p)| (t.to_string(), *p)).collect()
+    }
+
+    #[test]
+    fn confidence() {
+        let clear = toks(&[(" Hey", 0.95), (" Gl", 0.8), ("itch", 0.9), (",", 0.7), (" open", 0.2), (" YouTube", 0.3)]);
+        assert_eq!(wake_confidence(&clear), Some(0.8), "only the wake phrase's tokens count");
+        assert!(is_confident_wake(&clear));
+        let mumbled = toks(&[(" Hey", 0.9), (" Gl", 0.3), ("itch", 0.6), (".", 0.9)]);
+        assert_eq!(wake_confidence(&mumbled), Some(0.3));
+        assert!(!is_confident_wake(&mumbled));
+        let other = toks(&[(" There", 0.9), ("'s", 0.9), (" a", 0.9), (" glitch", 0.9)]);
+        assert_eq!(wake_confidence(&other), None);
+        assert!(!is_confident_wake(&[]));
     }
 
     #[test]
@@ -428,7 +521,9 @@ mod tests {
             strip_wake(" Hey glitch. Open YouTube and play lo-fi.").as_deref(),
             Some("Open YouTube and play lo-fi.")
         );
+        // Looser for the command: the big model may drop or change "hey".
         assert_eq!(strip_wake("Glitch what's the weather").as_deref(), Some("What's the weather"));
+        assert_eq!(strip_wake("Hi Glitch, open YouTube.").as_deref(), Some("Open YouTube."));
         assert_eq!(strip_wake("Hey Glitch."), None);
         assert_eq!(strip_wake("Hey, Glitch!"), None);
         // The main model heard the name differently: send it all.
@@ -440,6 +535,7 @@ mod tests {
     fn fuzzy_name() {
         assert!(is_glitch("glitch") && is_glitch("glich") && is_glitch("klitch") && is_glitch("glitz"));
         assert!(!is_glitch("pitch") && !is_glitch("witch") && !is_glitch("mitch") && !is_glitch("lit"));
+        assert!(!is_glitch("gleich") && !is_glitch("glitchy") && !is_glitch("itch") && !is_glitch("glit"));
         assert_eq!(edit_distance("kitten", "sitting"), 3);
         assert_eq!(edit_distance("", "abc"), 3);
     }
