@@ -105,6 +105,12 @@ pub trait Desktop: Send + Sync {
     fn notes_file(&self) -> Option<PathBuf> {
         default_notes_file()
     }
+    /// Save a reminder for `due` (unix seconds) that survives restarts
+    /// ("Update me" reminders; see `crate::updates::reminders`).
+    fn add_reminder(&self, due: i64, text: &str) -> DesktopResult<()> {
+        let _ = (due, text);
+        Err("saved reminders are switched off (Settings > Features)".into())
+    }
 }
 
 /// Documents/Glitch notes/notes.md
@@ -155,6 +161,7 @@ pub(crate) mod fake {
         pub redact: Vec<PixelRect>,
         pub captures: Mutex<Vec<CaptureTarget>>,
         pub timers: Mutex<Vec<(Duration, String)>>,
+        pub reminders: Mutex<Vec<(i64, String)>>,
         pub notes: Option<PathBuf>,
     }
 
@@ -189,6 +196,10 @@ pub(crate) mod fake {
         }
         fn notes_file(&self) -> Option<PathBuf> {
             self.notes.clone()
+        }
+        fn add_reminder(&self, due: i64, text: &str) -> DesktopResult<()> {
+            self.reminders.lock().unwrap().push((due, text.into()));
+            Ok(())
         }
     }
 }

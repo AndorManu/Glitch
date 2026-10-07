@@ -33,6 +33,57 @@ pub struct Settings {
     pub notes_trusted: bool,
     /// Voice commands (push-to-talk). Missing in older files → defaults.
     pub voice: VoiceSettings,
+    /// "Update me": the local event endpoint, Claude Code buddy, the
+    /// notification reader, reminders and the daily briefing.
+    pub updates: UpdateSettings,
+}
+
+/// "Update me" features. Each one has its own switch in Settings → Features.
+/// Connected or privacy-sensitive ones (Claude Code, notifications) start off.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdateSettings {
+    /// Local event endpoint (127.0.0.1 + per-install token) for scripts,
+    /// builds and the Claude Code hook.
+    pub endpoint_enabled: bool,
+    /// React to Claude Code hook events (needs "Connect Claude Code" too).
+    pub claude_code_enabled: bool,
+    /// Read Windows' notification feed and offer a digest.
+    pub notifications_enabled: bool,
+    /// Quiet mode: collect the digest, but don't walk over with a sign.
+    pub notifications_quiet: bool,
+    /// Extra app names (case-insensitive substrings) never read, on top of
+    /// the built-in banking / authenticator list.
+    pub notifications_blocklist: Vec<String>,
+    /// "Remind me to X at 5": saved reminders that survive restarts.
+    pub reminders_enabled: bool,
+    /// A short briefing on the first chat of the day.
+    pub briefing_enabled: bool,
+    /// Where the briefing's weather is for (`None`: no weather).
+    pub location: Option<Location>,
+}
+
+/// A place picked in Settings (from Open-Meteo's geocoder).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Location {
+    pub name: String,
+    pub latitude: f64,
+    pub longitude: f64,
+}
+
+impl Default for UpdateSettings {
+    fn default() -> Self {
+        Self {
+            endpoint_enabled: true,
+            claude_code_enabled: false,
+            notifications_enabled: false,
+            notifications_quiet: false,
+            notifications_blocklist: Vec::new(),
+            reminders_enabled: true,
+            briefing_enabled: true,
+            location: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -68,6 +119,7 @@ impl Default for Settings {
             screen_enabled: true,
             notes_trusted: false,
             voice: VoiceSettings::default(),
+            updates: UpdateSettings::default(),
         }
     }
 }
@@ -144,6 +196,20 @@ mod tests {
         let s = Settings::load(&path);
         assert_eq!(s.model.as_deref(), Some("llama3.2:3b"));
         assert!(s.movement_enabled);
+    }
+
+    #[test]
+    fn update_defaults_and_old_files() {
+        let u = Settings::default().updates;
+        // Connected / privacy-sensitive: off. Local and harmless: on.
+        assert!(!u.claude_code_enabled && !u.notifications_enabled && !u.notifications_quiet);
+        assert!(u.endpoint_enabled && u.reminders_enabled && u.briefing_enabled);
+        assert_eq!(u.location, None);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, r#"{"model":"qwen3.5:4b","updates":{"notifications_enabled":true}}"#).unwrap();
+        let s = Settings::load(&path);
+        assert!(s.updates.notifications_enabled && s.updates.reminders_enabled);
     }
 
     #[test]

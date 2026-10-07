@@ -40,7 +40,9 @@ pub fn approval_for(action: &Action) -> Approval {
         | Action::Calculate { .. }
         | Action::DateTime
         // In-app only: the bubble pops up later.
-        | Action::SetTimer { .. } => Approval::Automatic,
+        | Action::SetTimer { .. }
+        // Glitch's own reminders file; listed (and deletable) in Settings.
+        | Action::SetReminder { .. } => Approval::Automatic,
         // Glitch's own notes file: asked the first time, then trusted.
         Action::TakeNote { trusted: true, .. } => Approval::Automatic,
         Action::TakeNote { trusted: false, .. }
@@ -67,6 +69,7 @@ pub fn approval_in_turn(action: &Action, outside_content: bool) -> Approval {
             | Action::WriteClipboard { .. }
             | Action::TakeNote { .. }
             | Action::SetTimer { .. }
+            | Action::SetReminder { .. }
     );
     if outside_content && side_effect {
         Approval::AskUser
