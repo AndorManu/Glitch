@@ -192,7 +192,8 @@ describe("creature: standing, resting, budgets", () => {
       expect(peak(t.rec.moves)).toBeLessThanOrEqual(60);
       expect(peak(t.rec.renders)).toBeLessThanOrEqual(60);
       // Average over the hour stays tiny.
-      expect(t.rec.renders.length / 3600, `seed ${seed} average repaints/s`).toBeLessThan(5);
+      // Resting most of the hour: the living idle tail at ~8.7 fps sets the average.
+      expect(t.rec.renders.length / 3600, `seed ${seed} average repaints/s`).toBeLessThan(IDLE_BUDGET);
       console.info(
         `hour seed ${seed}: moving ${((100 * t.c.stats.movingMs) / hour).toFixed(1)}%, ${plans.length} plans, ` +
           `avg ${(t.rec.renders.length / 3600).toFixed(2)} repaints/s, ${(t.rec.moves.length / 3600).toFixed(2)} moves/s, ` +

@@ -119,11 +119,18 @@ describe("playful moves", () => {
   });
 
   it("slides down a window's side to the taskbar", async () => {
-    const t = await act("slideDown", onLedge(2, 1300));
+    const t = setup(3);
+    await t.c.start(onLedge(2, 1300));
+    expect(t.c.force("slideDown")).toBe(true);
+    // Where he is when he first stands on the taskbar (later strolls may take him anywhere).
+    let landedX: number | null = null;
+    await t.fc.run(40_000, () => {
+      if (landedX === null && t.c.surface.kind === "floor" && t.c.mode === "stand") landedX = t.c.body.x;
+    });
     expect(t.events).toContain("slide");
-    expect(t.c.surface.kind).toBe("floor");
+    expect(landedX).not.toBeNull();
     // Next to the window, not inside it.
-    expect(t.c.body.x < 1100 || t.c.body.x > 1600).toBe(true);
+    expect(landedX! < 1100 || landedX! > 1600, `landed at ${landedX}`).toBe(true);
   });
 
   it("bounces on the taskbar like a trampoline (higher each time) and lands", async () => {

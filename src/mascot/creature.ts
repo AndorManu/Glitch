@@ -4,7 +4,7 @@
 // a fake desktop in dev/stage.html.
 //
 // Timers (never requestAnimationFrame):
-// - the Animator's one keyframe timer (under 2.5/s while idle, see IDLE_BUDGET);
+// - the Animator's one keyframe timer (under 10/s while idle: the tail never stops, see IDLE_BUDGET);
 // - the brain timer: one pending at most (rest, or the current step's wait);
 // - the motion timer, ONLY while the window actually moves: 30 Hz walking,
 //   climbing and settling, 60 Hz in the air or while held;

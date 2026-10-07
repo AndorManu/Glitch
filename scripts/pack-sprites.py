@@ -116,8 +116,7 @@ ALIGN = {
     "wake": ("sleep0", STAND),
     **{s: (STAND, STAND) for s in ["scratch", "groom", "shake_off", "hop_idle", "look_back", "tail_chase", "sneeze"]},
     # Round 4: the living idle loops and the fun fidgets.
-    "idle_tail": (STAND, STAND),
-    "idle_tail_sit": ("sit0", "sit0"),
+    # (idle_tail* / idle_tail_sit*: drawn on idle0..6 / sit0..1 themselves, nothing to align.)
     **{s: (STAND, STAND) for s in ["dance_beat", "celebrate_focus", "sweat_fan", "worried_battery", "hold_sign", "knock_screen", "streamer", "chubby_idle", "hats"]},
     **{s: ("sit0", "sit0") for s in ["glasses_type", "watch_tv"]},
     "fetch_ball": ("walk0", None),

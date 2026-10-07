@@ -491,6 +491,20 @@ def clean_cursor(frames: list[np.ndarray], mode: str = "grip") -> tuple[list[np.
     return steady, grips
 
 
+def tail_sets(frames: list[np.ndarray], sets: dict, report: dict) -> None:
+    """The moving tail of a loop on other drawn bodies (art/frames files): one
+    derived sheet per body, so blinks, breaths and ear flicks keep the tail
+    going. `sets` = {sheet name: {"body": frame file stem, "rects": ..., "drop": ...}}."""
+    for name, c in sets.items():
+        body = np.array(Image.open(OUT / f"{c['body']}.png").convert("RGBA"))
+        out = tail_composite([body, *frames], {**c, "base": 0, "drop": [0, *[d + 1 for d in c.get("drop", ())]]})
+        for i, f in enumerate(out):
+            Image.fromarray(f, "RGBA").save(OUT / f"{name}-{i}.png")
+        contact(out, DEV / f"slices-{name}.png")
+        report[name] = {"frames": len(out), "body": c["body"]}
+        print(name, json.dumps(report[name]))
+
+
 def tail_composite(frames: list[np.ndarray], cfg: dict) -> list[np.ndarray]:
     """A stable body with only the tail moving.
 
@@ -500,6 +514,10 @@ def tail_composite(frames: list[np.ndarray], cfg: dict) -> list[np.ndarray]:
     base body by the best whole-pixel shift. The tail goes behind the body:
     pasted only where the base body is not. Frames in `drop` are left out.
     """
+    if cfg.get("body"):
+        # The body from another drawn frame (art/frames/<body>.png), the tail from every frame here.
+        body_img = np.array(Image.open(OUT / f"{cfg['body']}.png").convert("RGBA"))
+        return tail_composite([body_img, *frames], {"rects": cfg["rects"], "base": 0, "drop": [0, *[d + 1 for d in cfg.get("drop", ())]]})
     base = frames[cfg.get("base", 0)]
     H, W = base.shape[:2]
     R = np.zeros((H, W), bool)
@@ -631,6 +649,8 @@ def process(name: str, cfg: dict, report: dict) -> list[np.ndarray]:
     clipped = [i for i, (f, p) in enumerate(zip(frames, placed)) if (p[:, :, 3] > 0).sum() < (f[:, :, 3] > 0).sum()]
     if clipped:
         print(f"  WARNING {name}: frames {clipped} clipped by the canvas")
+    if cfg.get("tail_sets"):
+        tail_sets(placed, cfg["tail_sets"], report)
     if cfg.get("tail_composite"):
         placed = tail_composite(placed, cfg["tail_composite"])
     report[name] = {
@@ -710,6 +730,26 @@ SHEETS["idle_tail_sit"] = {"n": 12, "ref": 0, "target": 47, "tolerance": 0}
 # Their bodies are redrawn (jitter) every frame: a stable body, only the tail moving.
 SHEETS["idle_tail"]["tail_composite"] = {"base": 0, "rects": [[0, 0, 29, 90], [29, 70, 35, 90]]}
 SHEETS["idle_tail_sit"]["tail_composite"] = {"base": 0, "rects": [[0, 0, 30, 90], [30, 72, 33, 90]], "drop": [8, 9]}
+# And the tail on the original idle / sit drawings (the bodies the blinks, breaths and
+# ear flicks are drawn on), so the base loop is his own body with a tail that never
+# stops: idle_tail (idle0), idle_tail_in (idle1, breathing in), idle_tail_ear (idle2),
+# idle_tail_blink_a/b/c (idle4-6); idle_tail_sit (sit0), idle_tail_sit_blink (sit1).
+_IDLE_R = [[0, 0, 28, 90], [28, 70, 34, 90]]
+_SIT_R = [[0, 64, 26, 90], [26, 69, 30, 90], [30, 74, 33, 90]]
+SHEETS["idle_tail"]["tail_sets"] = {
+    "idle_tail_in": {"body": "idle-1", "rects": _IDLE_R},
+    "idle_tail_ear": {"body": "idle-2", "rects": _IDLE_R},
+    "idle_tail_blink_a": {"body": "idle-4", "rects": _IDLE_R},
+    "idle_tail_blink_b": {"body": "idle-5", "rects": _IDLE_R},
+    "idle_tail_blink_c": {"body": "idle-6", "rects": _IDLE_R},
+}
+SHEETS["idle_tail"]["tail_composite"] = {"body": "idle-0", "rects": _IDLE_R}
+SHEETS["idle_tail_sit"]["tail_sets"] = {"idle_tail_sit_blink": {"body": "sit-1", "rects": _SIT_R, "drop": [8, 9]}}
+SHEETS["idle_tail_sit"]["tail_composite"] = {"body": "sit-0", "rects": _SIT_R, "drop": [8, 9]}
+#: Derived sheets (written by tail_sets above): packed, never sliced from a source.
+DERIVED = ["idle_tail_in", "idle_tail_ear", "idle_tail_blink_a", "idle_tail_blink_b", "idle_tail_blink_c", "idle_tail_sit_blink"]
+for _name in DERIVED:
+    SHEETS[_name] = {"derived": True}
 # Fun fidgets for the feature agents (round 4), wired under their file names.
 for _name in ["dance_beat", "celebrate_focus", "hold_sign", "sweat_fan", "worried_battery", "glasses_type",
               "knock_screen", "hide_peek", "watch_tv", "fetch_ball"]:
@@ -740,6 +780,8 @@ def main():
     report = {}
     for name, cfg in SHEETS.items():
         if only and name not in only:
+            continue
+        if cfg.get("derived"):
             continue
         if not (GEN / f"{name}.png").exists():
             print("missing", name)

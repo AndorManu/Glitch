@@ -127,11 +127,13 @@ describe("animations", () => {
       ...["happy", "startled", "laugh", "grabCursor", "peek", "fall", "land", "glitchOut", "gone", "glitchIn", "chaosSpin"],
       ...["crouch", "splat", "dizzy", "peekEdge", "lookAround", "build", "malfunction", "wave"],
       ...["wake", "sad", "angry", "scared", "eat", "celebrate", "point", "pull_up", "bounce", "wall_jump", "sneeze", "annoyed", "calmDown", "smugBite"],
+      ...["celebrate_focus", "worried_battery", "knock_screen", "hide_peek", "streamer", "look_dirs", "high_five", "happy_spin", "jump_scare"],
     ] as AnimationName[];
     const loops: AnimationName[] = [
       ...["idle", "walk", "think", "ask", "sleep", "carryCursor", "dragWindow", "pushWindow", "dangle", "napRock"],
       ...["cling", "climb", "run", "airUp", "airDown", "tumble", "flail", "sitEdge", "held", "heldKick", "listen", "talk", "dance", "typing", "sit"],
       ...["tail_copter", "glide", "fall_flail", "hang_ledge", "slide_down", "sit_edge_swing", "fish", "struggle", "clingCursor", "sulk", "biteCursor"],
+      ...["idle_tail", "idle_tail_sit", "dance_beat", "hold_sign", "sweat_fan", "glasses_type", "watch_tv", "fetch_ball", "chubby_idle", "hats", "petted"],
     ] as AnimationName[];
     // These hand over to a loop that isn't idle.
     const special: Partial<Record<AnimationName, AnimationName>> = { lookBack: "cling", yawn: "sleep", grumpy: "sulk" };
@@ -267,7 +269,7 @@ describe("CPU budgets (60 s of fake time)", () => {
         }
       }
     }
-    expect(bursts).toBeGreaterThan(40 * 2); // 60 s of idle has a few bursts in every run
+    expect(bursts).toBeGreaterThanOrEqual(30); // 60 s of idle has a burst or two in every run (loops are 15-40 s)
     console.info(`idle: worst seed ${worst.toFixed(2)} repaints-or-wakeups/s`);
   });
 

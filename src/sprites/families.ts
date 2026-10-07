@@ -13,6 +13,15 @@ const FAMILY_PREFIX: [string, Family][] = [
   // standing, facing you
   ...["idle", "talk", "wave", "think", "laugh", "celebrate", "sad", "angry", "scared", "eat", "dance", "typing", "point", "dizzy", "sneeze", "listen", "surprised"].map((p) => [p, "front"] as [string, Family]),
   ...["scratch", "groom", "shake_off", "hop_idle", "tail_chase", "look_back", "annoyed", "bite_cursor"].map((p) => [p, "front"] as [string, Family]),
+  // the living idle (tail loops on idle0-6's bodies) and the round-4 sheets
+  ...["idle_tail", "idle_tail_in", "idle_tail_ear", "idle_tail_blink_a", "idle_tail_blink_b", "idle_tail_blink_c"].map((p) => [p, "front"] as [string, Family]),
+  ...["dance_beat", "celebrate_focus", "hold_sign", "sweat_fan", "worried_battery", "knock_screen", "hide_peek", "chubby_idle", "streamer", "hats"].map((p) => [p, "front"] as [string, Family]),
+  ...["look_dirs", "petted", "high_five", "happy_spin", "jump_scare"].map((p) => [p, "front"] as [string, Family]),
+  ["idle_tail_sit", "sit"],
+  ["idle_tail_sit_blink", "sit"],
+  ["glasses_type", "sit"],
+  ["watch_tv", "sit"],
+  ["fetch_ball", "side"],
   ...["pose_front", "pose_happy", "pose_think", "pose_laugh", "pose_wave"].map((p) => [p, "front"] as [string, Family]),
   // side view (walking, running, jumping, pushing, stretching)
   ...["walk", "run", "jump", "push", "grab_tab", "stretch", "pose_side", "pose_walk", "pose_notify", "pose_push"].map((p) => [p, "side"] as [string, Family]),
