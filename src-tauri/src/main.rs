@@ -1,6 +1,7 @@
 // No console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod autoupdate;
 mod chaos;
 mod chaos_native;
 mod commands;
@@ -87,6 +88,8 @@ fn main() {
             let app = app.clone();
             tauri::async_runtime::spawn(async move { commands::open_chat(&app, false) });
         }))
+        // Auto-update (src/autoupdate.rs). No JS permissions: commands only.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // Voice push-to-talk hotkey (registered by voice::setup, not here).
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
@@ -95,6 +98,7 @@ fn main() {
             app.manage(chaos::ChaosState::default());
             voice::setup(app.handle());
             stream::setup(app.handle());
+            autoupdate::setup(app.handle());
             hover::start(app.handle().clone());
             os::configure(app);
             build_tray(app.handle())?;
@@ -166,6 +170,11 @@ fn main() {
             stream::stream_test_event,
             stream::stream_copy,
             stream::stream_mirror,
+            autoupdate::update_status,
+            autoupdate::update_check,
+            autoupdate::update_set_auto,
+            autoupdate::update_later,
+            autoupdate::update_install,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Glitch")

@@ -398,8 +398,8 @@ pub fn stream_test_event(app: AppHandle, kind: String) -> Result<(), UiError> {
     Ok(())
 }
 
-/// Copy the OBS URL ("url") or the bot token ("write_token"). Done in Rust
-/// so the secrets never have to be handed to the settings page.
+/// Copy the OBS URL ("url") or the bot token ("write_token"). Done in Rust:
+/// the webview clipboard API needs focus and permission juggling.
 #[tauri::command]
 pub fn stream_copy(app: AppHandle, what: String) -> Result<(), UiError> {
     let s = app.state::<AppState>().settings().stream_overlay;

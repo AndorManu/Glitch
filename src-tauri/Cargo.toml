@@ -19,8 +19,9 @@ tokio = { version = "1", features = ["sync", "time", "fs", "io-util", "net"] }
 # Twitch chat over TLS for the stream overlay (src/stream/sources.rs). Same
 # OS TLS as reqwest below, already in the dependency tree.
 tokio-native-tls = "0.3"
-# Auto-update from GitHub Releases (src/updater.rs), signature-checked.
-tauri-plugin-updater = "2"
+# Auto-update from GitHub Releases (src/autoupdate.rs), signature-checked.
+# OS TLS like reqwest below (no rustls/ring build).
+tauri-plugin-updater = { version = "2", default-features = false, features = ["native-tls", "zip"] }
 
 # Voice commands (src/voice/). Speech-to-text runs on this computer with
 # whisper.cpp (built from source by whisper-rs-sys; needs cmake + a C++

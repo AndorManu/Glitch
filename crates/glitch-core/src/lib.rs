@@ -5,6 +5,7 @@
 
 pub mod agent;
 pub mod ai;
+pub mod autoupdate;
 pub mod chaos;
 pub mod confirm;
 pub mod desktop;
