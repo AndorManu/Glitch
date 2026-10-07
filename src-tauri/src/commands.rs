@@ -254,6 +254,11 @@ pub fn toggle_panel(app: AppHandle) {
 }
 
 #[tauri::command]
+pub fn show_panel(app: AppHandle) {
+    windows::show_panel(&app);
+}
+
+#[tauri::command]
 pub fn hide_panel(app: AppHandle) {
     windows::hide_panel(&app);
 }

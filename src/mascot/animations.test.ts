@@ -37,9 +37,8 @@ describe("animations", () => {
     expect(frameDelay({ frames: ["a", "b"], fps: 240 })).toBe(Math.round(1000 / MAX_FPS));
   });
 
-  it("idle animation wakes the CPU at most a few times per second", () => {
-    expect(1000 / frameDelay(ANIMATIONS.idle)).toBeLessThanOrEqual(4);
-    expect(1000 / frameDelay(ANIMATIONS.sleep)).toBeLessThanOrEqual(1);
+  it("sleeping wakes the CPU at most every two seconds", () => {
+    expect(frameDelay(ANIMATIONS.sleep)).toBeGreaterThanOrEqual(2000);
   });
 });
 
@@ -58,6 +57,34 @@ describe("Animator", () => {
     expect(timers.size).toBe(1);
     a.stop();
     expect(timers.size).toBe(0);
+  });
+
+  it("holds repeated frames: one timer, no redundant redraws", () => {
+    const drawn: string[] = [];
+    const { clock, timers, fire } = fakeClock();
+    const a = new Animator((f) => drawn.push(f), { ...ANIMATIONS, idle: { frames: ["a", "a", "a", "b"], fps: 1 } }, clock);
+    a.play("idle");
+    expect(drawn).toEqual(["a"]);
+    expect(fire()).toBe(3000);
+    expect(drawn).toEqual(["a", "b"]);
+    expect(fire()).toBe(1000);
+    expect(drawn).toEqual(["a", "b", "a"]);
+    expect(timers.size).toBe(1);
+  });
+
+  it("idle: under one repaint and one timer wakeup per second on average", () => {
+    let draws = 0;
+    let wakeups = 0;
+    let elapsed = 0;
+    const { clock, fire } = fakeClock();
+    const a = new Animator(() => draws++, ANIMATIONS, clock);
+    a.play("idle");
+    while (elapsed < 60_000) {
+      elapsed += fire();
+      wakeups++;
+    }
+    expect(draws / (elapsed / 1000)).toBeLessThan(1);
+    expect(wakeups / (elapsed / 1000)).toBeLessThan(1);
   });
 
   it("one-shot animations return to idle", () => {

@@ -10,16 +10,21 @@ export interface Animation {
   once?: boolean;
 }
 
+function hold(frame: string, count: number): string[] {
+  return Array<string>(count).fill(frame);
+}
+
 /** Hard cap so no animation can ever burn CPU, whatever its config says. */
 export const MAX_FPS = 12;
 
 export const ANIMATIONS: Record<AnimationName, Animation> = {
-  // ~4 s loop: mostly still, one sway, one blink.
-  idle: { frames: ["idle0", "idle0", "idle0", "idle1", "idle0", "idle0", "blink", "idle0", "idle0", "idle1", "idle0", "idle0"], fps: 3 },
+  // 6 s loop at 4 fps: mostly still, one quick blink, one antenna sway.
+  // Repeated frames are held, so this is only ~0.7 repaints per second.
+  idle: { frames: [...hold("idle0", 10), "blink", ...hold("idle0", 8), "idle1", "idle1", ...hold("idle0", 3)], fps: 4 },
   walk: { frames: ["walk0", "walk1"], fps: 6 },
   think: { frames: ["think0", "think1"], fps: 3 },
   happy: { frames: ["happy", "happy", "idle0", "happy", "happy", "idle0"], fps: 4, once: true },
-  sleep: { frames: ["sleep0", "sleep1"], fps: 1 },
+  sleep: { frames: ["sleep0", "sleep1"], fps: 0.5 },
 };
 
 /** Delay between frames in ms, respecting MAX_FPS. */
@@ -41,12 +46,13 @@ const realClock: Clock = {
 /**
  * Plays an animation by calling `draw(frameName)` on a timer.
  * Exactly one timer is pending at any time; single-frame animations schedule
- * no timer at all.
+ * no timer at all; repeated frames are held (one timer, no redraw).
  */
 export class Animator {
   private current: AnimationName = "idle";
   private index = 0;
   private timer: unknown = null;
+  private lastDrawn: string | null = null;
 
   constructor(
     private readonly draw: (frame: string) => void,
@@ -62,6 +68,7 @@ export class Animator {
     if (name === this.current && this.timer !== null) return;
     this.current = name;
     this.index = 0;
+    this.lastDrawn = null; // always draw the first frame of a new animation
     this.tick();
   }
 
@@ -80,10 +87,18 @@ export class Animator {
       }
       this.index = 0;
     }
-    this.draw(anim.frames[this.index]);
-    this.index += 1;
+    const frame = anim.frames[this.index];
+    // Repaints are the expensive part: skip them when nothing changes.
+    if (frame !== this.lastDrawn) {
+      this.draw(frame);
+      this.lastDrawn = frame;
+    }
+    // Hold repeated frames with one longer timer instead of several wakeups.
+    let hold = 1;
+    while (anim.frames[this.index + hold] === frame) hold += 1;
+    this.index += hold;
     if (anim.frames.length > 1 || anim.once) {
-      this.timer = this.clock.setTimeout(this.tick, frameDelay(anim));
+      this.timer = this.clock.setTimeout(this.tick, frameDelay(anim) * hold);
     }
   };
 }

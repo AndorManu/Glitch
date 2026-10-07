@@ -1,8 +1,8 @@
 // The mascot window: draws Glitch, plays animations, wanders, opens the chat.
 //
-// CPU budget: no requestAnimationFrame. Idle = ~3 timer wakeups per second
-// (sleep = 1/s); walking = 20 window moves/s, only for a few seconds every
-// 25-75 s. Everything stops while the chat panel is open.
+// CPU budget: no requestAnimationFrame. Idle = under one repaint per second
+// (sleep = one per 2 s); walking = 15 window moves/s, only for a few seconds
+// every 25-75 s. Walking stops while the chat panel is open.
 
 import { listen } from "@tauri-apps/api/event";
 import { currentMonitor, getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
@@ -15,7 +15,7 @@ import { DEFAULT_WALKER, facesLeft, positionAt, type Walk, Walker } from "./walk
 
 const WINDOW_CSS_PX = 96; // must match tauri.conf.json
 const ART_SCALE = 5; // 16px art -> 80 css px
-const MOVE_FPS = 20;
+const MOVE_FPS = 15;
 const SLEEP_AFTER_MS = 10 * 60_000;
 const DRAG_THRESHOLD_PX = 4;
 
@@ -197,8 +197,10 @@ function applySettings(s: Settings): void {
 async function main(): Promise<void> {
   sprites = await loadSprites(GLITCH);
   draw(lastFrame);
+  let settings: Settings | null = null;
   try {
-    applySettings(await api.getSettings());
+    settings = await api.getSettings();
+    applySettings(settings);
   } catch (e) {
     console.error("could not load settings", e);
   }
@@ -212,6 +214,8 @@ async function main(): Promise<void> {
   window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener("change", () => draw(lastFrame));
   // Show only now that the first frame is drawn (no blank/white flash).
   await win.show();
+  // First run: open the setup wizard next to Glitch.
+  if (settings && !settings.onboarding_done) void api.showPanel();
   animator.play("idle");
   resetSleepTimer();
   scheduleWalk();

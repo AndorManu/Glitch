@@ -76,6 +76,7 @@ export const api = {
   updateSettings: (patch: Partial<Pick<Settings, "model" | "movement_enabled" | "onboarding_done">>) =>
     invoke<Settings>("update_settings", { patch }),
   togglePanel: () => invoke<void>("toggle_panel"),
+  showPanel: () => invoke<void>("show_panel"),
   hidePanel: () => invoke<void>("hide_panel"),
   quit: () => invoke<void>("quit"),
 };

@@ -60,10 +60,9 @@ fn main() {
             app.manage(AppState::new(settings_path));
             os::configure(app);
             build_tray(app.handle())?;
+            // The mascot page shows itself once drawn, and opens the setup
+            // wizard on first run (so the panel can be placed next to it).
             windows::place_mascot(app.handle());
-            if !app.state::<AppState>().settings().onboarding_done {
-                windows::show_panel(app.handle());
-            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -77,6 +76,7 @@ fn main() {
             commands::get_settings,
             commands::update_settings,
             commands::toggle_panel,
+            commands::show_panel,
             commands::hide_panel,
             commands::quit,
         ])

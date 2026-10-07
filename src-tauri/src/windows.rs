@@ -9,6 +9,8 @@ use crate::layout::{self, Rect};
 
 pub const MASCOT: &str = "mascot";
 pub const PANEL: &str = "panel";
+/// Must match the mascot size in tauri.conf.json.
+const MASCOT_SIZE: f64 = 96.0;
 const PANEL_W: f64 = 360.0;
 const PANEL_H: f64 = 540.0;
 
@@ -18,18 +20,24 @@ fn work_area(win: &WebviewWindow) -> Option<Rect> {
     Some(Rect { x: wa.position.x, y: wa.position.y, w: wa.size.width as i32, h: wa.size.height as i32 })
 }
 
-fn window_rect(win: &WebviewWindow) -> Option<Rect> {
+fn window_rect(win: &WebviewWindow, fallback_logical: (f64, f64)) -> Option<Rect> {
     let pos = win.outer_position().ok()?;
     let size = win.outer_size().ok()?;
-    Some(Rect { x: pos.x, y: pos.y, w: size.width as i32, h: size.height as i32 })
+    // A window that hasn't been shown yet may report 0x0.
+    let scale = win.scale_factor().unwrap_or(1.0);
+    let w = if size.width > 0 { size.width as i32 } else { (fallback_logical.0 * scale) as i32 };
+    let h = if size.height > 0 { size.height as i32 } else { (fallback_logical.1 * scale) as i32 };
+    Some(Rect { x: pos.x, y: pos.y, w, h })
 }
 
 /// Put Glitch in the bottom-right corner on start-up. The page shows the
 /// window itself once its first frame is drawn (avoids a blank flash).
 pub fn place_mascot(app: &AppHandle) {
     let Some(m) = app.get_webview_window(MASCOT) else { return };
-    let (Some(area), Some(rect), Ok(scale)) = (work_area(&m), window_rect(&m), m.scale_factor()) else { return };
-    let (x, y) = layout::mascot_home(area, rect.w, (24.0 * scale) as i32);
+    let (Some(area), Ok(scale)) = (work_area(&m), m.scale_factor()) else { return };
+    // Not `outer_size()`: a window that hasn't been shown yet may report 0x0.
+    let size = (MASCOT_SIZE * scale).round() as i32;
+    let (x, y) = layout::mascot_home(area, size, (24.0 * scale) as i32);
     let _ = m.set_position(PhysicalPosition::new(x, y));
 }
 
@@ -64,14 +72,22 @@ pub fn show_panel(app: &AppHandle) {
             }
         },
     };
-    if let (Some(mascot), Ok(size)) = (app.get_webview_window(MASCOT), panel.outer_size()) {
-        if let (Some(area), Some(m)) = (work_area(&mascot), window_rect(&mascot)) {
-            let gap = (8.0 * mascot.scale_factor().unwrap_or(1.0)) as i32;
-            let (x, y) = layout::panel_position(m, size.width as i32, size.height as i32, area, gap);
-            let _ = panel.set_position(PhysicalPosition::new(x, y));
-        }
+    let position = app.get_webview_window(MASCOT).and_then(|mascot| {
+        let area = work_area(&mascot)?;
+        let m = window_rect(&mascot, (MASCOT_SIZE, MASCOT_SIZE))?;
+        let p = window_rect(&panel, (PANEL_W, PANEL_H))?;
+        let gap = (8.0 * mascot.scale_factor().unwrap_or(1.0)) as i32;
+        let (x, y) = layout::panel_position(m, p.w, p.h, area, gap);
+        Some(PhysicalPosition::new(x, y))
+    });
+    if let Some(pos) = position {
+        let _ = panel.set_position(pos);
     }
     let _ = panel.show();
+    // Some window managers ignore positions set before the first show.
+    if let Some(pos) = position {
+        let _ = panel.set_position(pos);
+    }
     let _ = panel.set_focus();
     let _ = app.emit("panel-visibility", true);
 }
