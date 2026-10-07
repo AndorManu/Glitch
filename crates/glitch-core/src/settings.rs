@@ -33,6 +33,78 @@ pub struct Settings {
     pub notes_trusted: bool,
     /// Voice commands (push-to-talk). Missing in older files → defaults.
     pub voice: VoiceSettings,
+    /// Streaming overlay (OBS browser source). Off by default.
+    pub stream: StreamSettings,
+    /// Update checks against GitHub Releases.
+    pub updates: UpdateSettings,
+}
+
+/// The OBS overlay (src-tauri/src/stream/). Missing in older files: off.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StreamSettings {
+    pub enabled: bool,
+    /// Port on 127.0.0.1 for the overlay page and the event webhook.
+    pub port: u16,
+    /// Secret in the overlay URL; made on first start, new one on "New link".
+    pub token: String,
+    /// "mirror": the desktop Glitch's animation and bubble.
+    /// "walk": a separate stream Glitch walking along the bottom.
+    pub mode: String,
+    /// Size multiplier (1 = 160 px).
+    pub size: f32,
+    /// Where he stands in mirror mode, and where the walker starts: "left", "center", "right".
+    pub position: String,
+    /// React to follows, subs, raids and chat lines.
+    pub react: bool,
+    /// Show chat lines in his bubble (otherwise only follows, subs, raids).
+    pub show_chat: bool,
+    /// Also show what Glitch says in the private desktop chat. Off: chats
+    /// with him stay off stream.
+    pub mirror_chat: bool,
+    /// Listen to Streamer.bot's WebSocket server.
+    pub streamerbot: bool,
+    pub streamerbot_url: String,
+    /// Twitch channel to read chat from anonymously ("" = off).
+    pub twitch_channel: String,
+}
+
+impl Default for StreamSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: 7799,
+            token: String::new(),
+            mode: "mirror".into(),
+            size: 1.0,
+            position: "right".into(),
+            react: true,
+            show_chat: true,
+            mirror_chat: false,
+            streamerbot: false,
+            streamerbot_url: crate::stream::streamerbot::DEFAULT_URL.into(),
+            twitch_channel: String::new(),
+        }
+    }
+}
+
+/// Auto-update (tauri-plugin-updater). On by default: a check is one small
+/// HTTPS request to GitHub; nothing installs without the user's click.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdateSettings {
+    /// Check on start and once a day.
+    pub auto_check: bool,
+    /// "Later" on this version: no bubble for it until a day has passed.
+    pub snoozed_version: Option<String>,
+    /// Unix seconds of the "Later" click.
+    pub snoozed_at: u64,
+}
+
+impl Default for UpdateSettings {
+    fn default() -> Self {
+        Self { auto_check: true, snoozed_version: None, snoozed_at: 0 }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -68,6 +140,8 @@ impl Default for Settings {
             screen_enabled: true,
             notes_trusted: false,
             voice: VoiceSettings::default(),
+            stream: StreamSettings::default(),
+            updates: UpdateSettings::default(),
         }
     }
 }
@@ -176,6 +250,28 @@ mod tests {
             },
             ..Default::default()
         };
+        s.save(&path).unwrap();
+        assert_eq!(Settings::load(&path), s);
+    }
+
+    #[test]
+    fn stream_and_updates_default_for_old_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, r#"{"model":"qwen3.5:2b"}"#).unwrap();
+        let s = Settings::load(&path);
+        assert!(!s.stream.enabled, "the overlay is off until turned on");
+        assert_eq!(s.stream.port, 7799);
+        assert_eq!(s.stream.mode, "mirror");
+        assert!(!s.stream.mirror_chat, "private chats stay off stream");
+        assert!(s.stream.token.is_empty());
+        assert!(s.updates.auto_check);
+        std::fs::write(&path, r#"{"stream":{"enabled":true,"twitch_channel":"x"},"updates":{"auto_check":false}}"#)
+            .unwrap();
+        let s = Settings::load(&path);
+        assert!(s.stream.enabled && s.stream.react);
+        assert_eq!(s.stream.twitch_channel, "x");
+        assert!(!s.updates.auto_check);
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);
     }

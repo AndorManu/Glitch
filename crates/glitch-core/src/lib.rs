@@ -12,6 +12,7 @@ pub mod memory;
 pub mod models;
 pub mod platform;
 pub mod settings;
+pub mod stream;
 pub mod tools;
 pub mod vision;
 pub mod voice;

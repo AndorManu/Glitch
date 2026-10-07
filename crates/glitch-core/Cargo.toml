@@ -14,6 +14,10 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "6"
 # canonicalize without Windows `\\?\` verbatim prefixes (paths stay openable).
 dunce = "1"
+# Overlay token and WebSocket keys/masks (src/stream/); already in the tree.
+getrandom = "0.3"
+# WebSocket handshake (src/stream/ws.rs).
+sha1_smol = "1"
 # Scaling screenshots down and encoding them as JPEG for the vision model
 # (src/vision.rs). PNG only to decode the eval's test screenshots.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
