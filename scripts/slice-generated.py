@@ -126,6 +126,39 @@ def merge_small(segs, frac=0.3):
     return out
 
 
+def _palette() -> np.ndarray:
+    """The original character's palette (art/puppet/src/palette.txt, recovered
+    from the original 16 poses by recover-grid.py)."""
+    rows = []
+    for line in (ROOT / "art" / "puppet" / "src" / "palette.txt").read_text().splitlines():
+        hexv = line.split()[1].lstrip("#")
+        rows.append([int(hexv[i : i + 2], 16) for i in (0, 2, 4)])
+    return np.array(rows, float)
+
+
+PALETTE = _palette()
+#: Colours closer than this to an original palette colour snap to it; others
+#: (props: the fishing rod, the laptop, the fish) keep their own colour.
+SNAP_DIST = 42
+
+
+def snap_palette(a: np.ndarray) -> np.ndarray:
+    """Nearest-colour pass to the original palette: the generated sheets drift
+    a little in hue and carry soft in-between colours (thousands per frame
+    where the original has ~26); snapping makes every sheet use the same fur,
+    cream, outline and glitch colours."""
+    out = a.copy()
+    op = a[:, :, 3] > 0
+    px = a[op][:, :3].astype(float)
+    d = ((px[:, None, :] - PALETTE[None]) ** 2).sum(2)
+    j = d.argmin(1)
+    near = np.sqrt(d[np.arange(len(j)), j]) < SNAP_DIST
+    snapped = px.copy()
+    snapped[near] = PALETTE[j[near]]
+    out[op, :3] = snapped.astype(np.uint8)
+    return out
+
+
 def body_height(c: np.ndarray) -> int:
     """Height of the character in a source crop, ignoring the loose glitch
     pixels (magenta/purple/cyan) that float around him."""
@@ -328,7 +361,7 @@ def process(name: str, cfg: dict, report: dict) -> list[np.ndarray]:
     votes = 0
     for i, c in enumerate(crops):
         _, ox, oy = best_pitch(c, use * 2 - 0.01, use * 2 + 0.01)
-        art = trim(drop_strays(trim(dehalo(sample(c, use, ox % use, oy % use)))))
+        art = snap_palette(trim(drop_strays(trim(dehalo(sample(c, use, ox % use, oy % use))))))
         ex = glitch_eye_x(art)
         if ex is not None:
             votes += 1 if ex > art.shape[1] / 2 else -1
