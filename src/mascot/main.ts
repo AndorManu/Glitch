@@ -8,6 +8,7 @@
 // The window only moves while he walks/climbs (30 Hz) or flies / is carried
 // (60 Hz); otherwise no movement timer runs. See creature.ts.
 
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   currentMonitor,
@@ -140,6 +141,10 @@ async function main(): Promise<void> {
   const renderer = new Renderer(canvas, sprites);
   const c = new Creature(host, renderer);
   creature = c;
+  // Debug builds (`tauri dev` / `tauri build --debug`): creature events on the Rust console.
+  if (import.meta.env.DEV || import.meta.env.TAURI_ENV_DEBUG === "true") {
+    c.onEvent = (what) => void invoke("chaos_debug_log", { what }).catch(() => {});
+  }
   let settings: Settings | null = null;
   try {
     settings = await api.getSettings();

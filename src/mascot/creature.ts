@@ -679,6 +679,7 @@ export class Creature {
     const stuck = riding && !H.busy && Math.abs(want - H.applied) > 60 * u;
     if (arrived || stuck) {
       if (riding && H.busy) return; // let the last move land first
+      if (this.onEvent) this.event(`haul-end:${Math.round(this.s)}:applied=${Math.round(H.applied)}${stuck ? ":stuck" : ""}`);
       this.endHaul();
       this.nextStep();
     }
@@ -1010,7 +1011,10 @@ export class Creature {
     this.interaction();
     if (this.asleep) this.wake();
     this.interrupt();
-    const plan = await this.director.plan(act).catch(() => null);
+    const plan = await this.director.plan(act, true).catch((e) => {
+      this.event(`chaos-error:${String(e)}`);
+      return null;
+    });
     this.event(`chaos:${act}:${plan ? "go" : "no"}`);
     if (!plan || this.mode !== "stand" || this.plan) {
       if (!this.plan) this.scheduleBrain(3000);
@@ -1082,6 +1086,7 @@ export class Creature {
           this.loco.haul = { h: step.haul, s0: this.s, virt: this.s, sent: 0, applied: 0, busy: false, ledge0: riding && isTop(surf) ? { ...surf.ledge } : undefined, done: false };
           this.event("haul");
         }
+        if (this.onEvent) this.event(`walk:${surf.kind}:${Math.round(this.s)}->${Math.round(to)}${step.haul ? ":haul" : ""}`);
         this.animator.play(step.anim ?? (step.gait === "run" ? "run" : step.gait === "climb" ? "climb" : "walk"));
         this.ensureMotion();
         return;
@@ -1100,7 +1105,8 @@ export class Creature {
               if (Array.isArray(r)) plan.steps.splice(this.stepIndex, 0, ...r);
               this.nextStep();
             },
-            () => {
+            (e) => {
+              this.event(`call-error:${String(e)}`);
               if (this.plan === plan) this.finishPlan();
             },
           );
@@ -1318,6 +1324,8 @@ export class Creature {
     if (this.asleep) return this.wake();
     this.interaction();
     if (this.mode !== "stand" || this.press || this.hold) return;
+    // Mischief involving the cursor (chasing, carrying it) brings it onto him: carry on.
+    if (this.plan?.name === "mischief") return;
     // Noticed the cursor: stop and look at it.
     if (this.loco || this.plan) {
       this.interrupt();

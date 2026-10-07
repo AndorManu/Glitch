@@ -146,6 +146,7 @@ fn main() {
             chaos::chaos_note_move,
             chaos::chaos_note_close,
             chaos::chaos_note_open_now,
+            chaos::chaos_debug_log,
             voice::commands::voice_status,
             voice::commands::update_voice_settings,
             voice::commands::voice_start,

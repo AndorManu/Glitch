@@ -217,7 +217,7 @@ export function planChase(world: World, surface: Surface, s: number, cursor: Vec
   if (cursor.x < lo - 60 * u || cursor.x > hi + 60 * u) return null;
   const side: 1 | -1 = cursor.x >= c.x ? 1 : -1;
   // Stop just behind it.
-  const to = clampTo(surface, cursor.x - side * 34 * u, world);
+  const to = clampTo(surface, cursor.x - side * 46 * u, world);
   if (Math.abs(to - s) < 30 * u) return null;
   return { to, side };
 }
@@ -228,6 +228,7 @@ export class ChaosDirector {
   private nextAt: number;
   private readonly last = new Map<Act, number>();
   private lastLine = -1;
+  private forced = false;
 
   constructor(
     private readonly host: ChaosHost,
@@ -274,10 +275,16 @@ export class ChaosDirector {
     return null;
   }
 
-  /** Plan this act now if it fits (cooldowns ignored: Rust's limits still apply). */
-  async plan(act: Act): Promise<Plan | null> {
+  /**
+   * Plan this act now if it fits (cooldowns ignored: Rust's limits still
+   * apply). `forced` (debug trigger): skip the act's own dice, e.g. always
+   * try to catch the cursor when in reach.
+   */
+  async plan(act: Act, forced = false): Promise<Plan | null> {
+    this.forced = forced;
     const w = this.me.world;
-    if (!w) return null;
+    // Not from his own glitch platform (it has to break under him first).
+    if (!w || this.me.surface.kind === "platform") return null;
     switch (act) {
       case "window":
         return this.planWindow(w);
@@ -344,13 +351,16 @@ export class ChaosDirector {
   }
 
   private async planPushAct(w: World): Promise<Plan | null> {
-    if (this.me.surface.kind !== "floor") return null;
     const wins = await this.host.windows();
     const pick = planPush(w, wins, this.me.body.x, this.rand);
     if (!pick) return null;
     const push = chaosAnim("push");
+    const onFloor = this.me.surface.kind === "floor";
     return mischief(
-      { do: "walk", to: pick.stand, gait: Math.abs(pick.stand - this.me.s) > 450 * w.scale ? "run" : "walk" },
+      // Not on the taskbar (a window top, a wall): glitch down next to it.
+      onFloor
+        ? { do: "walk", to: pick.stand, gait: Math.abs(pick.stand - this.me.s) > 450 * w.scale ? "run" : "walk" }
+        : { do: "teleport", surface: FLOOR, s: pick.stand },
       { do: "face", dir: pick.dir },
       {
         do: "call",
@@ -368,12 +378,23 @@ export class ChaosDirector {
 
   private async planChaseAct(w: World): Promise<Plan | null> {
     const cursor = await this.me.cursor();
-    const surface = this.me.surface;
-    const chase = planChase(w, surface, this.me.s, cursor);
-    if (!chase) return null;
     const u = w.scale;
+    let surface = this.me.surface;
+    let s = this.me.s;
+    const pre: Step[] = [];
+    if (surface.kind !== "floor" && !isTop(surface)) {
+      // On a wall / the ceiling: glitch down to the taskbar a little way off.
+      surface = FLOOR;
+      const mid = w.area.x + w.area.w / 2;
+      s = clampTo(FLOOR, cursor.x + (cursor.x > mid ? -1 : 1) * 320 * u, w);
+      pre.push({ do: "teleport", surface: FLOOR, s });
+    }
+    const chase = planChase(w, surface, s, cursor);
+    if (!chase) return null;
     const sneak = this.rand() < 0.45;
+    const forced = this.forced;
     const steps: Step[] = [
+      ...pre,
       { do: "anim", name: "lookAround" },
       sneak ? { do: "walk", to: chase.to, gait: "walk" } : { do: "walk", to: chase.to, gait: "run", anim: chaosAnim("chase") },
       { do: "face", dir: chase.side },
@@ -386,7 +407,7 @@ export class ChaosDirector {
         const now = await this.me.cursor();
         const b = this.me.body;
         const reach = Math.abs(now.x - b.x) < 110 * u && Math.abs(now.y - (b.y - 10 * u)) < 90 * u;
-        if (!reach || this.rand() < 0.35) return [{ do: "anim", name: "laugh" }];
+        if (!reach || (!forced && this.rand() < 0.35)) return [{ do: "anim", name: "laugh" }];
         const p = await this.host.grabCursor().catch(() => null);
         if (!p) return [{ do: "anim", name: "laugh" }];
         const s = this.me.s;
@@ -455,12 +476,21 @@ export class ChaosDirector {
   }
 
   private planPaws(w: World): Plan | null {
-    const surface = this.me.surface;
-    if (!(surface.kind === "floor" || isTop(surface))) return null;
+    let surface = this.me.surface;
+    let s = this.me.s;
+    const first: Step[] = [];
+    if (surface.kind !== "floor" && !isTop(surface)) {
+      // Off the wall first: glitch down to the taskbar, into a puddle of glitch.
+      surface = FLOOR;
+      const [lo, hi] = surfaceRange(FLOOR, w);
+      s = lo + (hi - lo) * (0.3 + 0.4 * this.rand());
+      first.push({ do: "teleport", surface: FLOOR, s });
+    }
     const [lo, hi] = surfaceRange(surface, w);
     if (hi - lo < 200 * w.scale) return null;
-    const far = this.me.s - lo > hi - this.me.s ? lo + (hi - lo) * 0.15 * this.rand() : hi - (hi - lo) * 0.15 * this.rand();
+    const far = s - lo > hi - s ? lo + (hi - lo) * 0.15 * this.rand() : hi - (hi - lo) * 0.15 * this.rand();
     return mischief(
+      ...first,
       { do: "anim", name: chaosAnim("sneeze") },
       { do: "call", run: () => (this.me.stepInGlitch(20_000), true) },
       { do: "walk", to: far, gait: "walk" },

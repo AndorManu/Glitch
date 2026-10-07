@@ -410,6 +410,12 @@ pub fn chaos_note_open_now(app: AppHandle) -> bool {
 
 // ------------------------------------------------------------- debugging
 
+/// Debug builds: the mascot page's creature events, on the console.
+#[tauri::command]
+pub fn chaos_debug_log(what: String) {
+    dlog(format_args!("page: {}", what.chars().take(200).collect::<String>()));
+}
+
 /// Debug builds only: `GLITCH_CHAOS_DEBUG=window|cursor|note|paws|peek|knock|push|chase`
 /// makes Glitch do that a few seconds after start (and every 25 s after),
 /// so the behaviours can be checked on a real desktop.

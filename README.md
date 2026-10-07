@@ -5,8 +5,8 @@ doubles as a small, private AI assistant. Click Glitch to chat. Glitch runs a
 small AI model **on your own computer** with [Ollama](https://ollama.com), so
 your chats don't leave your machine.
 
-This is **milestone 1: the foundation** (plus voice commands). "Chaos mode"
-and Claude Code notifications are planned for later and are not in this build.
+This is **milestone 1: the foundation** (plus voice commands and chaos
+mode). Claude Code notifications are planned for later.
 
 What works in this milestone:
 
@@ -35,7 +35,9 @@ What works in this milestone:
 * **Voice commands**: hold the mic button in the chat (or Ctrl+Shift+Space /
   Cmd+Shift+Space anywhere), talk, let go. Speech-to-text runs on your
   computer too (see [Voice commands](#voice-commands)).
-* Settings: choose the model, walking on/off, voice, memory, clear chat, quit.
+* **Chaos mode** (on by default, gentle; tray "Chaos mode" or Settings): see
+  [Chaos mode](#chaos-mode).
+* Settings: choose the model, walking on/off, chaos mode, voice, memory, clear chat, quit.
 
 ---
 
@@ -177,6 +179,39 @@ AVX2 (roughly older than 2013, and some budget Celeron/Pentium chips) voice
 is switched off instead of risking a crash. A future signed/notarized macOS
 build with the hardened runtime will also need the
 `com.apple.security.device.audio-input` entitlement.
+
+## Chaos mode
+
+Every 45 to 120 seconds at most, Glitch may get up to some mischief:
+
+| Act | What he does |
+|---|---|
+| Window drag | glitch-teleports onto another app's window, grabs its top edge and walks backwards: the window slides a few hundred px (Windows) |
+| Push | on the taskbar, pushes a window that reaches down to it from the side (Windows) |
+| Cursor | runs after the mouse cursor or sneaks up behind it; now and then catches it and drags it a little (Windows) |
+| Sticky note | drags a pixel note with a silly line in from the screen edge (× or Esc closes it; one at a time) |
+| Paw prints | steps in glitch and leaves magenta paw prints that fade after ~20 s (click-through overlay) |
+| Peek / knock | peeks in from a screen edge, knocks on the inside of the screen glass |
+
+**Limits, enforced in Rust** (`crates/glitch-core/src/chaos.rs`,
+`src-tauri/src/chaos.rs`): other apps' windows are only ever *moved*
+(`SetWindowPos` with no-size / no-z-order / no-activate): never resized,
+closed, minimised, focused or typed into, and always kept fully on the work
+area. At most one window grab every 4 minutes (max 420 px, 9 s) and one
+cursor grab every 2 minutes (max 260 px, 1.5 s). Nothing starts unless the
+keyboard and mouse have been idle for 4 s, and any input ends a grab at once;
+moving the mouse against him makes him let go of the cursor. Skipped:
+fullscreen apps / games / presentations (`SHQueryUserNotificationState`),
+maximised, elevated (admin), cloaked, tool and system windows, the window you
+work in, Glitch's own windows. Everything stops the moment chaos or walking is
+switched off or the chat opens. No files are ever touched. macOS: only the
+harmless acts (notes, paw prints, peeking, chasing); moving other apps'
+windows there would need the Accessibility permission.
+
+**Trying it out** (debug builds): `GLITCH_CHAOS_DEBUG=window` (or `push`,
+`chase`, `note`, `paws`, `peek`, `knock`) makes Glitch do that act 8 s after
+start and every 25 s; `GLITCH_CHAOS_FAST=1` shortens the rate limits to 5 s.
+In `npm run tauri dev` the console also has `__glitch.chaos("note")`.
 
 ---
 
