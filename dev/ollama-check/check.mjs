@@ -8,9 +8,22 @@
 //   node dev/ollama-check/check.mjs --all           # every installed tool-capable model
 //   node dev/ollama-check/check.mjs --pull          # download the model if missing
 //   node dev/ollama-check/check.mjs --wait-unload   # also wait for keep_alive to unload (~2.5 min)
+//   node dev/ollama-check/check.mjs --eval [--runs 3] [--only vision]
+//                                                   # the full agent eval (below)
 //
 // Writes dev/ollama-check/report.json and exits 1 if a check fails.
+//
+// --eval runs crates/glitch-core/examples/live_eval.rs: Glitch's REAL agent
+// loop (system prompt, tools, screen prefetch, multi-step loop, approvals)
+// against the real model with a fake desktop. Vision cases show it rendered
+// screenshots with known text (fixtures/*.png, made by render-fixtures.mjs:
+// an error dialog, a code editor with a bug, a web article, a text editor);
+// multi-step cases script the clipboard, files, selection and timers
+// ("what's 15% of the number in my clipboard", "find my latest screenshot and
+// open it", ...). Each case runs --runs times (default 3); see
+// dev/ollama-check/eval-report.json for every answer and tool call.
 
+import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 
@@ -294,7 +307,20 @@ async function pull(model) {
   if (!success) throw new Error(`pull ${model}: download ended before it finished`);
 }
 
+function runEval() {
+  const pass = ["--model", opt("--model") ?? recommended(), "--url", BASE, "--runs", opt("--runs") ?? "3"];
+  if (opt("--only")) pass.push("--only", opt("--only"));
+  if (opt("--min-rate")) pass.push("--min-rate", opt("--min-rate"));
+  const r = spawnSync("cargo", ["run", "-q", "-p", "glitch-core", "--example", "live_eval", "--", ...pass], {
+    cwd: new URL("../..", here),
+    stdio: "inherit",
+    shell: process.platform === "win32",
+  });
+  process.exitCode = r.status ?? 1;
+}
+
 async function main() {
+  if (flag("--eval")) return runEval();
   console.log(`Glitch live Ollama check  (${osName}, ${(os.totalmem() / 1024 ** 3).toFixed(1)} GB RAM, ${BASE})\n`);
   let version;
   try {

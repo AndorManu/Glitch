@@ -149,6 +149,16 @@ async function renderSettings(): Promise<void> {
             void api.updateSettings({ chaos_enabled: on }).catch(() => renderSettings());
           },
         ),
+        toggleSwitch(
+          "Let Glitch see the screen",
+          "Only when you ask about something on it. The screenshot stays on this computer, is never saved, and password fields are covered.",
+          s.screen_enabled ?? true,
+          (on) => {
+            s.screen_enabled = on;
+            shownKey = settingsKey(s);
+            void api.updateSettings({ screen_enabled: on }).catch(() => renderSettings());
+          },
+        ),
         h(
           "div",
           { class: "row" },

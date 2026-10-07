@@ -7,6 +7,15 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
+# Debug builds: scaling and JPEG-encoding a 4K screenshot unoptimised takes
+# seconds; optimised it takes ~50 ms.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+
 [profile.release]
 # Small, fast binary. The app is mostly idle, so size matters more than peak speed.
 codegen-units = 1

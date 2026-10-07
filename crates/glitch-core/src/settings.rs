@@ -26,6 +26,11 @@ pub struct Settings {
     pub keep_alive: String,
     /// Whether Glitch remembers things between chats (memory.json).
     pub memory_enabled: bool,
+    /// "Let Glitch see the screen": the look_at_screen tool. Missing in older
+    /// files -> on (it only ever runs when a request needs it).
+    pub screen_enabled: bool,
+    /// The user allowed take_note once; later notes don't ask again.
+    pub notes_trusted: bool,
     /// Voice commands (push-to-talk). Missing in older files → defaults.
     pub voice: VoiceSettings,
 }
@@ -60,6 +65,8 @@ impl Default for Settings {
             ollama_url: ollama::DEFAULT_URL.to_string(),
             keep_alive: ollama::DEFAULT_KEEP_ALIVE.to_string(),
             memory_enabled: true,
+            screen_enabled: true,
+            notes_trusted: false,
             voice: VoiceSettings::default(),
         }
     }
@@ -101,6 +108,7 @@ mod tests {
         assert_eq!(s, Settings::default());
         assert!(s.movement_enabled);
         assert!(s.chaos_enabled);
+        assert!(s.screen_enabled && !s.notes_trusted);
         assert_eq!(s.keep_alive, "2m");
     }
 

@@ -546,3 +546,58 @@ button:focus:not(:focus-visible) { outline: none; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .bubble.away { transform: none; }
 }
+
+/* ------------------------------------------------- live work (while busy) */
+/* The step list ("Reading your clipboard ✓") and the "👀 looking at your
+   screen" badge: above the thought cloud, or at the top of the reply that
+   streams in. */
+.work {
+  width: max-content;
+  max-width: calc(100vw - 12px);
+  margin: 0 auto 6px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.work[hidden] { display: none; }
+.thought .work {
+  padding: 5px 10px;
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  border-radius: 12px;
+  filter: drop-shadow(0 2px 0 var(--shadow));
+}
+.up .thought .work { margin: 6px auto 0; }
+.balloon.live .work { margin: 0 0 4px; width: auto; color: var(--muted); }
+.looking {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: 600;
+  animation: peek 1.2s ease-in-out infinite;
+}
+.steps { margin: 0; padding: 0; list-style: none; }
+.looking + .steps { margin-top: 4px; }
+.step { display: flex; align-items: center; gap: 6px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 270px; }
+.step .label { overflow: hidden; text-overflow: ellipsis; }
+.step .icon {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+}
+.step.running .icon { border: 2px solid var(--accent-soft); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+.step.done .icon { color: var(--accent); }
+.step.failed { color: var(--muted); }
+.step.failed .icon { color: var(--danger); }
+.balloon.live { animation: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes peek { 50% { opacity: 0.65; } }
+@media (prefers-reduced-motion: reduce) {
+  .step.running .icon, .looking { animation: none; }
+}

@@ -12,7 +12,9 @@ import {
   CHAT_CLEARED_EVENT,
   MASCOT_TALK_EVENT,
   voiceApi,
+  type AgentProgress,
   type BubbleLayout,
+  type Reminder,
   type Settings,
   type VoiceDownloadEvent,
   type VoiceEvent,
@@ -66,6 +68,11 @@ function dispatch(e: BubbleEvent): void {
   const t = transition(state, e);
   state = t.state;
   if (state !== prev) view.render(state);
+  // A timer that rang while Glitch was busy speaks up once he's done.
+  if (!state.busy && pendingReminders.length) {
+    const text = pendingReminders.shift()!;
+    queueMicrotask(() => dispatch({ type: "reminder", text }));
+  }
   if (t.request) {
     if (t.request.kind === "send") view.clearInput();
     stopSpeaking();
@@ -89,6 +96,31 @@ async function perform(r: Request): Promise<void> {
   }
   view.setEcho(null);
   if (visible) view.focus();
+}
+
+// Live progress while Glitch works: steps, "looking at your screen", and
+// the reply streaming in.
+void listen<AgentProgress>("agent-progress", (e) => dispatch({ type: "progress", p: e.payload }));
+
+/** Timers that rang while Glitch was busy (shown right after). */
+const pendingReminders: string[] = [];
+void listen<Reminder>("reminder", (e) => {
+  if (state.busy) pendingReminders.push(e.payload.message);
+  else dispatch({ type: "reminder", text: e.payload.message });
+});
+
+// Keep the model loaded while the chat is open, so answers start at once.
+const WARM_EVERY_MS = 4 * 60_000;
+let warmTimer: ReturnType<typeof setInterval> | null = null;
+function keepWarm(on: boolean): void {
+  if (warmTimer) clearInterval(warmTimer);
+  warmTimer = null;
+  if (on) {
+    void api.warmModel().catch(() => {});
+    warmTimer = setInterval(() => void api.warmModel().catch(() => {}), WARM_EVERY_MS);
+  } else {
+    void api.coolModel().catch(() => {});
+  }
 }
 
 void listen(CHAT_CLEARED_EVENT, () => {
@@ -239,6 +271,7 @@ function onShown(): void {
     hiddenAt = null;
     dispatch({ type: "shown", awayMs });
     view.enter();
+    keepWarm(true);
   }
   view.focus();
 }
@@ -247,6 +280,7 @@ function onHidden(): void {
   if (!visible) return;
   visible = false;
   hiddenAt = Date.now();
+  keepWarm(false);
   // Closing the chat stops listening and talking.
   micDispatch({ type: "cancel" });
   stopSpeaking();

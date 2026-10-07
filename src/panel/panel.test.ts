@@ -105,6 +105,7 @@ describe("settings redraws", () => {
     expect(settingsKey({ ...s, model: "qwen3:4b" })).not.toBe(settingsKey(s));
     expect(settingsKey({ ...s, movement_enabled: false })).not.toBe(settingsKey(s));
     expect(settingsKey({ ...s, onboarding_done: true })).not.toBe(settingsKey(s));
+    expect(settingsKey({ ...s, screen_enabled: false })).not.toBe(settingsKey(s));
   });
 });
 

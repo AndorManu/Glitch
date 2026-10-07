@@ -11,6 +11,10 @@ export interface Settings {
   ollama_url: string;
   keep_alive: string;
   memory_enabled: boolean;
+  /** "Let Glitch see the screen" (look_at_screen). Missing from old builds: on. */
+  screen_enabled?: boolean;
+  /** The user allowed notes once; later notes don't ask. */
+  notes_trusted?: boolean;
   /** Voice commands (see the voice section at the end of this file). */
   voice?: VoiceSettings;
 }
@@ -73,7 +77,28 @@ export interface PullProgress {
   total: number | null;
 }
 
-export type Mood = "thinking" | "happy" | "asking" | "idle" | "listening" | "talking";
+/** "looking": Glitch is taking a screenshot right now (mapped by the mascot's animator). */
+export type Mood = "thinking" | "happy" | "asking" | "idle" | "listening" | "talking" | "looking";
+
+/** What `look_at_screen` captured. */
+export type CaptureTarget = "screen" | "window" | "cursor";
+
+/**
+ * Sent as "agent-progress" while Glitch works on a message (see Progress in
+ * crates/glitch-core/src/agent.rs): new model rounds, tool steps, the
+ * "looking at your screen" moment, and the reply text as it streams in.
+ */
+export type AgentProgress =
+  | { kind: "thinking" }
+  | { kind: "step"; id: number; tool: string; label: string }
+  | { kind: "step_done"; id: number; ok: boolean }
+  | { kind: "looking"; active: boolean; target: CaptureTarget }
+  | { kind: "text"; delta: string };
+
+/** Sent as "reminder" when a timer Glitch set rings. */
+export interface Reminder {
+  message: string;
+}
 
 export type PanelView = "setup" | "settings";
 
@@ -179,8 +204,12 @@ export const api = {
   sendMessage: (text: string) => invoke<Step>("send_message", { text }),
   confirmAction: (id: string, approved: boolean) => invoke<Step>("confirm_action", { id, approved }),
   resetChat: () => invoke<void>("reset_chat"),
+  /** The chat is open: load the model and keep it loaded (call again every few minutes). */
+  warmModel: () => invoke<void>("warm_model"),
+  /** The chat closed: back to the short keep-alive. */
+  coolModel: () => invoke<void>("cool_model"),
   getSettings: () => invoke<Settings>("get_settings"),
-  updateSettings: (patch: Partial<Pick<Settings, "model" | "movement_enabled" | "chaos_enabled" | "onboarding_done" | "memory_enabled">>) =>
+  updateSettings: (patch: Partial<Pick<Settings, "model" | "movement_enabled" | "chaos_enabled" | "onboarding_done" | "memory_enabled" | "screen_enabled">>) =>
     invoke<Settings>("update_settings", { patch }),
   /** Click on Glitch: toggles the chat bubble (or opens setup on first run). */
   mascotClicked: () => invoke<void>("mascot_clicked"),

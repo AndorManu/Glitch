@@ -252,7 +252,8 @@ impl MemoryStore {
     pub fn save_carry_over(&mut self, history: &[Message]) {
         let msgs: Vec<SavedMessage> = history
             .iter()
-            .filter(|m| matches!(m.role, Role::User | Role::Assistant) && !m.content.trim().is_empty())
+            // Private replies (about the screen or the clipboard) never go to disk.
+            .filter(|m| matches!(m.role, Role::User | Role::Assistant) && !m.private && !m.content.trim().is_empty())
             .map(|m| SavedMessage { role: m.role, text: m.content.clone() })
             .collect();
         let start = msgs.len().saturating_sub(MAX_CARRY_OVER);
@@ -279,6 +280,9 @@ impl MemoryStore {
 pub fn compaction_request(summary: &str, chunk: &[Message]) -> Vec<Message> {
     let mut transcript = String::new();
     for m in chunk {
+        if m.private {
+            continue; // what Glitch said about the screen or the clipboard
+        }
         match m.role {
             Role::User => transcript.push_str(&format!("User: {}\n", m.content.trim())),
             Role::Assistant if !m.content.trim().is_empty() => {

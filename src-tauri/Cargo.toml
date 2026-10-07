@@ -26,6 +26,10 @@ tauri-plugin-global-shortcut = "2.4"
 # Windows, Security.framework on macOS): no extra TLS stack in the binary.
 reqwest = { version = "0.13", default-features = false, features = ["native-tls"] }
 sha1_smol = "1"
+# Only for the debug-build capture check (src/desktop.rs); already in the tree via glitch-core.
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Clipboard text for the read_clipboard / write_clipboard tools.
+arboard = { version = "3", default-features = false }
 open = "5"
 
 # Microphone capture (WASAPI / CoreAudio). Linux isn't a target and would
@@ -43,10 +47,20 @@ windows-sys = { version = "0.61", features = [
   "Win32_Graphics_Gdi",
   "Win32_Security",
   "Win32_System_SystemInformation",
+  "Win32_System_DataExchange",
   "Win32_System_Threading",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
+] }
+
+# UI Automation (COM) for password fields to cover in screenshots and for
+# reading selected text (src/desktop.rs). Already in the tree via webview2-com.
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_System_Variant",
+  "Win32_UI_Accessibility",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -7,11 +7,16 @@ license.workspace = true
 
 [dependencies]
 async-trait = "0.1"
+# Screenshots go to the vision model as base64 (Ollama's `images` field).
+base64 = "0.22"
 # Local dates for the memory journal (already in Tauri's dependency tree).
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "6"
 # canonicalize without Windows `\\?\` verbatim prefixes (paths stay openable).
 dunce = "1"
+# Scaling screenshots down and encoding them as JPEG for the vision model
+# (src/vision.rs). PNG only to decode the eval's test screenshots.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 # ShellExecuteW on Windows instead of spawning a hidden PowerShell per open.
 open = { version = "5", features = ["shellexecute-on-windows"] }
 # Ollama runs on localhost over plain HTTP, so no TLS stack is needed.

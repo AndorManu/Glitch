@@ -19,6 +19,9 @@ const LONG =
   "3. A group of raccoons is called a gaze.\n\n" +
   "They also love shiny things, just like me. Want me to find you some raccoon videos on YouTube? I can open it right up for you.";
 
+const SCREEN_ANSWER =
+  "A pop-up titled \"Glitch screen test\" sits in the middle with a packing list: Lisbon, sunscreen SPF 50, a green umbrella and train ticket 4127. Behind it is your code editor with some logs and a PowerShell window running background tasks.";
+
 const reply = (text, actions = []) => ({ step: { type: "reply", text, actions } });
 const confirm = { step: { type: "confirm", id: "c1", title: "Open the app “Spotify”", detail: "/usr/share/applications/spotify.desktop", actions: [] } };
 
@@ -98,6 +101,59 @@ const scenarios = {
   "11b-empty-pill": { wait: 1500, then: seq(emit("bubble-hidden"), async (p) => p.evaluate(() => { const real = Date.now; Date.now = () => real() + 5 * 60_000; }), 300, emit("bubble-shown"), 700) },
   "12-focus-close": { wait: 1500, then: seq(async (p) => p.keyboard.press("Tab"), 150) },
   "12b-focus-gear": { wait: 1500, then: seq(async (p) => p.keyboard.press("Shift+Tab"), 150) },
+  // Seeing the screen and multi-step work (agent-progress events).
+  "13-looking": {
+    send: "what's on my screen?", result: { hang: true }, wait: 300,
+    then: seq(emit("agent-progress", { kind: "step", id: 1, tool: "look_at_screen", label: "Looking at your screen" }), emit("agent-progress", { kind: "looking", active: true, target: "screen" }), 500),
+  },
+  "13b-steps": {
+    send: "what's 15% of the number in my clipboard?", result: { hang: true }, wait: 300,
+    then: seq(
+      emit("agent-progress", { kind: "step", id: 1, tool: "read_clipboard", label: "Reading your clipboard" }),
+      emit("agent-progress", { kind: "step_done", id: 1, ok: true }),
+      emit("agent-progress", { kind: "thinking" }),
+      emit("agent-progress", { kind: "step", id: 2, tool: "calculate", label: "Calculating 15% of 1299" }),
+      500,
+    ),
+  },
+  "13c-streaming": {
+    send: "summarise this page", result: { hang: true }, wait: 300,
+    then: seq(
+      emit("agent-progress", { kind: "step", id: 1, tool: "look_at_screen", label: "Looking at your window" }),
+      emit("agent-progress", { kind: "step_done", id: 1, ok: true }),
+      emit("agent-progress", { kind: "thinking" }),
+      emit("agent-progress", { kind: "text", delta: "Glitch: Bees vote on a new home: scouts do a **waggle dance**, and " }),
+      300,
+    ),
+  },
+  "13d-streamed-long-reply": {
+    send: "tell me about raccoons", result: { ...reply(LONG, ["Looked at your screen"]), delay: 1200 }, wait: 300,
+    then: seq(emit("agent-progress", { kind: "text", delta: LONG }), 1600),
+  },
+  "13d2-streamed-paragraph": {
+    send: "what's on my screen?",
+    result: { ...reply(SCREEN_ANSWER, ["Looked at your screen"]), delay: 1200 }, wait: 300,
+    then: seq(emit("agent-progress", { kind: "step", id: 1, tool: "look_at_screen", label: "Looking at your screen" }), emit("agent-progress", { kind: "step_done", id: 1, ok: true }), emit("agent-progress", { kind: "text", delta: SCREEN_ANSWER }), 1600),
+  },
+  "13d3-streamed-chunks-long": {
+    send: "what's on my screen?",
+    result: { ...reply(SCREEN_ANSWER + " " + SCREEN_ANSWER + "\n\nWant me to close anything?", ["Looked at your screen"]), delay: 2500 }, wait: 300,
+    then: seq(
+      ...(SCREEN_ANSWER + " " + SCREEN_ANSWER + "\n\nWant me to close anything?").match(/.{1,12}/gs).map((d) => emit("agent-progress", { kind: "text", delta: d })),
+      2800,
+    ),
+  },
+  "13e-reminder": { wait: 1200, then: seq(emit("reminder", { message: "Time to stretch!" }), 1500) },
+  "13f-dark-steps": {
+    dark: true, send: "find my latest screenshot and open it", result: { hang: true }, wait: 300,
+    then: seq(
+      emit("agent-progress", { kind: "step", id: 1, tool: "search_files", label: "Searching files for “screenshot”" }),
+      emit("agent-progress", { kind: "step_done", id: 1, ok: true }),
+      emit("agent-progress", { kind: "step", id: 2, tool: "open_path", label: "Opening Screenshot 2026-10-06 183012.png" }),
+      emit("agent-progress", { kind: "step_done", id: 2, ok: false }),
+      500,
+    ),
+  },
   "09-dark-welcome": { dark: true, wait: 1500 },
   "09b-dark-confirm": { dark: true, send: "open spotify", result: confirm, wait: 900 },
   "09c-dark-thinking": { dark: true, send: "hi", result: { hang: true }, wait: 700 },
@@ -140,7 +196,7 @@ function mock(sc) {
         case "confirm_action": {
           const r = sc.result ?? { step: { type: "reply", text: "ok", actions: [] } };
           if (r.hang) return new Promise(() => {});
-          await new Promise((res) => setTimeout(res, 250));
+          await new Promise((res) => setTimeout(res, r.delay ?? 250));
           if (r.error) throw r.error;
           return r.step;
         }

@@ -4,6 +4,7 @@
 mod chaos;
 mod chaos_native;
 mod commands;
+mod desktop;
 mod hover;
 mod layout;
 mod ledge_watch;
@@ -88,7 +89,7 @@ fn main() {
         // Voice push-to-talk hotkey (registered by voice::setup, not here).
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
-            app.manage(AppState::new(app.path().app_config_dir()?));
+            app.manage(AppState::new(app.handle(), app.path().app_config_dir()?));
             app.manage(hover::Hitbox::default());
             app.manage(chaos::ChaosState::default());
             voice::setup(app.handle());
@@ -110,6 +111,8 @@ fn main() {
             commands::send_message,
             commands::confirm_action,
             commands::reset_chat,
+            commands::warm_model,
+            commands::cool_model,
             commands::get_settings,
             commands::update_settings,
             commands::mascot_clicked,
