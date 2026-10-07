@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { WELCOME } from "../shared/chat-text";
+import { CLEARED, WELCOME } from "../shared/chat-text";
 import { canSend, COLLAPSE_AFTER_MS, initialState, pendingConfirm, transition, type BubbleState } from "./state";
 
 const confirmStep = { type: "confirm" as const, id: "c1", title: "Open the app “Spotify”", detail: "/usr/bin/spotify", actions: [] };
@@ -13,6 +13,17 @@ describe("bubble state", () => {
     const s = initialState();
     expect(s.speech).toEqual({ kind: "reply", text: WELCOME, actions: [] });
     expect(s.busy).toBe(false);
+  });
+
+  it("starts fresh after Clear chat, even mid-thought or mid-question", () => {
+    const busy = run(initialState(), { type: "send", text: "hi" });
+    const s = run(busy, { type: "cleared" });
+    expect(s.busy).toBe(false);
+    expect(s.speech).toEqual({ kind: "reply", text: CLEARED, actions: [] });
+    expect(s.rev).toBeGreaterThan(busy.rev);
+    const asking = run(initialState(), { type: "step", step: confirmStep }, { type: "cleared" });
+    expect(pendingConfirm(asking)).toBeNull();
+    expect(canSend(asking, "x")).toBe(true);
   });
 
   it("sends trimmed text once and thinks", () => {

@@ -19,7 +19,7 @@ import {
   TRAIL_W,
 } from "./shapes";
 import { canSend, type BubbleState, type Speech } from "./state";
-import { actionChip, breakChunks, centerOn, tailWithin } from "./text";
+import { actionChip, breakChunks, centerOn, narrowestFit, tailWithin } from "./text";
 import { Typewriter } from "./typewriter";
 import { micActive, micHint, setupText, type MicState } from "./voice";
 
@@ -306,7 +306,7 @@ export class BubbleView {
   private showSpeech(speech: Speech, rev: number): void {
     const { shown, typed, text } = this.buildSpeech(speech, rev);
     this.replace(shown);
-    const typer = new Typewriter(typed, text, () => this.on.seen());
+    const typer = new Typewriter(typed, text, () => this.on.seen(), shown.balloon.querySelector<HTMLElement>(".scroll"));
     this.typer = typer;
     snugWidth(shown.balloon);
     const scroll = shown.balloon.querySelector<HTMLElement>(".scroll");
@@ -491,12 +491,11 @@ function snugWidth(balloon: HTMLElement): void {
     lo = Math.max(lo, el.scrollWidth + frame);
   });
   if (lo >= full - 4) return;
-  let hi = full;
-  while (hi - lo > 2) {
-    const mid = Math.floor((lo + hi) / 2);
-    balloon.style.width = `${mid}px`;
-    if (balloon.offsetHeight > height) lo = mid;
-    else hi = mid;
-  }
-  balloon.style.width = `${hi}px`;
+  // offsetWidth is rounded: the natural width may be a fraction wider, so
+  // allow one extra pixel and let narrowestFit test it.
+  const best = narrowestFit(lo, full + 1, (w) => {
+    balloon.style.width = `${w}px`;
+    return balloon.offsetHeight <= height;
+  });
+  balloon.style.width = best === null ? "" : `${best}px`;
 }

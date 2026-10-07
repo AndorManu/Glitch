@@ -32,7 +32,8 @@ export async function renderMemory(root: HTMLElement): Promise<void> {
     const forget = h("button", { class: "icon-x", type: "button", title: "Forget this", "aria-label": `Forget: ${f.text}` }, "×");
     forget.addEventListener("click", async () => {
       forget.disabled = true;
-      await api.forgetMemory(f.id);
+      forget.closest("li")?.classList.add("leaving");
+      await api.forgetMemory(f.id).catch(() => {});
       rerender();
     });
     list.append(h("li", {}, h("span", {}, f.text), forget));
@@ -51,22 +52,28 @@ export async function renderMemory(root: HTMLElement): Promise<void> {
       : null;
 
   // Two clicks to wipe everything, so it can't happen by accident.
-  const wipe = h("button", { class: "secondary small danger-text", type: "button" }, "Forget everything");
-  let armed = false;
+  const wipe = h("button", { class: "secondary small danger-text", type: "button", "aria-live": "polite" }, "Forget everything");
+  let armed: ReturnType<typeof setTimeout> | null = null;
+  const disarm = () => {
+    if (armed) clearTimeout(armed);
+    armed = null;
+    wipe.classList.remove("armed");
+    wipe.textContent = "Forget everything";
+  };
   wipe.addEventListener("click", async () => {
     if (!armed) {
-      armed = true;
+      wipe.classList.add("armed");
       wipe.textContent = "Sure? Click again";
-      setTimeout(() => {
-        armed = false;
-        wipe.textContent = "Forget everything";
-      }, 4000);
+      armed = setTimeout(disarm, 4000);
       return;
     }
+    clearTimeout(armed);
     wipe.disabled = true;
-    await api.clearMemory();
+    wipe.textContent = "Forgetting…";
+    await api.clearMemory().catch(() => {});
     rerender();
   });
+  wipe.addEventListener("blur", () => armed && disarm());
 
   const parts: (Node | null)[] = [
     toggle,

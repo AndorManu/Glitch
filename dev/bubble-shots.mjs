@@ -1,15 +1,15 @@
 // Screenshots of the chat bubble window with Tauri IPC mocked, composited on a
 // fake desktop above (or below) Glitch so the tail can be judged.
-// Needs the Vite dev server: npx vite --port 1420 --strictPort
+// Needs the Vite dev server: npx vite --port 1420 --strictPort (or set GLITCH_DEV_URL)
 // Usage: node dev/bubble-shots.mjs [outDir] [only-scenario-substring]
-import { chromium } from "playwright";
+import { BASE, launch } from "./browser.mjs";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const OUT = process.argv[2] ?? join(tmpdir(), "glitch-bubble-shots");
 const ONLY = process.argv[3];
-const BASE = "http://localhost:1420";
+
 mkdirSync(OUT, { recursive: true });
 
 const LONG =
@@ -22,8 +22,32 @@ const LONG =
 const reply = (text, actions = []) => ({ step: { type: "reply", text, actions } });
 const confirm = { step: { type: "confirm", id: "c1", title: "Open the app “Spotify”", detail: "/usr/share/applications/spotify.desktop", actions: [] } };
 
-/** send: message typed and sent; type: typed only; wait: ms before the shot. */
+const LINK =
+  "Here you go: https://www.youtube.com/results?search_query=lofi+hip+hop+radio+beats+to+relax+and+study+to&sp=EgIQAQ%253D%253D and the playlist is at https://open.spotify.com/playlist/37i9dQZF1DWWQRwui0ExPn";
+
+/** Voice on, as Rust reports it (makes the mic button show up). */
+const VOICE = {
+  available: true, unavailable_reason: null, os: "windows", enabled: true, phase: "idle",
+  hotkey: { label: "Ctrl+Shift+Space", registered: true, error: null },
+  model: "base", recommended: "base", model_auto: true,
+  models: [{ id: "base", label: "Base", blurb: "", file: "", size_bytes: 148897792, size_mb: 142, downloaded: true }],
+  language: "auto", languages: [], speak_replies: false, download: null, offer_pending: false,
+};
+const emit = (event, payload = null) => async (page) => page.evaluate(([e, p]) => window.__emit(e, p), [event, payload]);
+const seq = (...steps) => async (page) => { for (const st of steps) typeof st === "number" ? await page.waitForTimeout(st) : await st(page); };
+/** Freeze every running animation/transition `ms` into its run, for in-between frames. */
+const freezeAt = (ms) => async (page) =>
+  page.evaluate((t) => document.getAnimations().filter((a) => a.playState === "running").forEach((a) => { a.pause(); a.currentTime = t; }), ms);
+const needsModel = { phase: "needs_model", model: { id: "base", label: "Base", blurb: "", file: "", size_bytes: 148897792 } };
+
+/**
+ * send: message typed and sent; type: typed only; wait: ms before the shot;
+ * then: extra steps (page) after the wait; voice: mic on.
+ */
 const scenarios = {
+  "00-opening-frame": { wait: 1200, then: seq(emit("bubble-hidden"), 300, emit("bubble-shown"), 0, freezeAt(110)) },
+  "00b-opening-overshoot": { wait: 1200, then: seq(emit("bubble-hidden"), 300, emit("bubble-shown"), 0, freezeAt(230)) },
+  "00c-closing-frame": { wait: 1200, then: seq(async (p) => p.keyboard.press("Escape"), 0, freezeAt(90)) },
   "01-welcome": { wait: 1500 },
   "02-typing": { type: "open elon musk's profile on x please", wait: 400 },
   "02b-typing-multiline": { type: "Can you open YouTube, then search for lofi hip hop radio beats to relax and study to, and also open Spotify so I can compare?", wait: 400 },
@@ -32,18 +56,59 @@ const scenarios = {
   "04-reply-chip": { send: "open elon musk on x", result: reply("Done! His profile is open in your browser.", ["Opened https://x.com/elonmusk"]), wait: 1500 },
   "04b-reply-short": { send: "hi", result: reply("Hey! 👋"), wait: 900 },
   "04c-chips-only": { send: "open youtube and the calculator", result: reply("", ["Opened https://www.youtube.com/", "Opened Calculator", "Couldn't open the app"]), wait: 900 },
+  "04d-reply-links": { send: "lofi please", result: reply(LINK, ["Opened https://www.youtube.com/results?search_query=lofi+hip+hop"]), wait: 1600 },
+  "04e-reply-empty": { send: "…", result: reply(""), wait: 1200 },
   "05-long": { send: "tell me about raccoons", result: reply(LONG, ["Searched files for “raccoon”: 3 found"]), wait: 1800 },
+  "05b-long-typing": { send: "tell me about raccoons", result: reply(LONG, []), wait: 650 },
+  "05c-long-scrolled": {
+    send: "tell me about raccoons", result: reply(LONG, ["Searched files for “raccoon”: 3 found"]), wait: 1800,
+    then: seq(async (p) => p.evaluate(() => { const s = document.querySelector(".balloon .scroll"); s.scrollTop = s.scrollHeight; }), 200),
+  },
   "06-confirm": { send: "open spotify", result: confirm, wait: 900 },
   "07-error": { send: "hi", result: { error: { code: "ollama_unreachable", message: "connection refused" } }, wait: 1300 },
   "07b-error-plain": { send: "hi", result: { error: { code: "ai_error", message: "model crashed (exit status 2)" } }, wait: 1500 },
+  "07c-error-glitch-frame": { send: "hi", result: { error: { code: "ollama_unreachable", message: "connection refused" } }, wait: 560, then: freezeAt(390) },
+  "07d-error-fix-focused": {
+    send: "hi", result: { error: { code: "ollama_unreachable", message: "connection refused" } }, wait: 1300,
+    then: seq(async (p) => p.keyboard.press("Shift+Tab"), async (p) => p.keyboard.press("Shift+Tab"), 150),
+  },
   "08-tail-up": { layout: { tail_up: true, tail_x: 92 }, send: "open elon musk on x", result: reply("Done! His profile is open in your browser.", ["Opened https://x.com/elonmusk"]), wait: 1500 },
   "08b-tail-up-thinking": { layout: { tail_up: true, tail_x: 92 }, send: "hi", result: { hang: true }, wait: 700 },
   "08c-edge-right": { layout: { tail_up: false, tail_x: 262 }, send: "hi", result: reply("Hey! 👋"), wait: 900 },
+  "10-listening": { voice: true, wait: 900, then: seq(emit("voice", { phase: "listening", level: 0.62, hands_free: false }), 250) },
+  "10b-listening-hands-free": { voice: true, wait: 900, then: seq(emit("voice", { phase: "listening", level: 0.2, hands_free: true }), 250) },
+  "10c-transcribing": { voice: true, wait: 900, then: seq(emit("voice", { phase: "listening", level: 0.4, hands_free: false }), 50, emit("voice", { phase: "transcribing" }), 300) },
+  "10d-heard-thinking": { voice: true, result: { hang: true }, wait: 900, then: seq(emit("voice", { phase: "transcribing" }), 50, emit("voice", { phase: "heard", text: "open youtube please" }), 600) },
+  "10e-voice-error": { voice: true, wait: 900, then: seq(emit("voice", { phase: "error", code: "mic_denied", message: "" }), 1400) },
+  "10f-nothing-heard": { voice: true, wait: 900, then: seq(emit("voice", { phase: "idle", reason: "nothing_heard" }), 1400) },
+  "10g-voice-setup": { voice: true, wait: 900, then: seq(emit("voice", needsModel), 1500) },
+  "10h-voice-downloading": {
+    voice: true, wait: 900,
+    then: seq(emit("voice", needsModel), 1500, emit("voice-download", { model: "base", state: "running", done: 61e6, total: 148897792, error: null }), 300),
+  },
+  "10i-voice-download-failed": {
+    voice: true, wait: 900,
+    then: seq(emit("voice", needsModel), 1500, emit("voice-download", { model: "base", state: "failed", done: 0, total: 0, error: { code: "download_offline", message: "" } }), 300),
+  },
+  "10j-voice-ready": {
+    voice: true, wait: 900,
+    then: seq(emit("voice", needsModel), 1500, emit("voice-download", { model: "base", state: "done", done: 1, total: 1, error: null }), 1500),
+  },
+  "11-cleared": { send: "tell me about raccoons", result: reply(LONG), wait: 1500, then: seq(emit("chat-cleared"), 1200) },
+  "11b-empty-pill": { wait: 1500, then: seq(emit("bubble-hidden"), async (p) => p.evaluate(() => { const real = Date.now; Date.now = () => real() + 5 * 60_000; }), 300, emit("bubble-shown"), 700) },
+  "12-focus-close": { wait: 1500, then: seq(async (p) => p.keyboard.press("Tab"), 150) },
+  "12b-focus-gear": { wait: 1500, then: seq(async (p) => p.keyboard.press("Shift+Tab"), 150) },
   "09-dark-welcome": { dark: true, wait: 1500 },
   "09b-dark-confirm": { dark: true, send: "open spotify", result: confirm, wait: 900 },
   "09c-dark-thinking": { dark: true, send: "hi", result: { hang: true }, wait: 700 },
   "09d-dark-reply": { dark: true, send: "open elon musk on x", result: reply("Done! His profile is open in your browser.", ["Opened https://x.com/elonmusk"]), wait: 1500 },
   "09e-dark-error": { dark: true, send: "hi", result: { error: { code: "no_model", message: "" } }, wait: 1300 },
+  "09f-dark-listening": { dark: true, voice: true, wait: 900, then: seq(emit("voice", { phase: "listening", level: 0.62, hands_free: false }), 250) },
+  "09g-dark-voice-downloading": {
+    dark: true, voice: true, wait: 900,
+    then: seq(emit("voice", needsModel), 1500, emit("voice-download", { model: "base", state: "running", done: 61e6, total: 148897792, error: null }), 300),
+  },
+  "09h-dark-long": { dark: true, send: "tell me about raccoons", result: reply(LONG, ["Searched files for “raccoon”: 3 found"]), wait: 1800 },
 };
 
 function mock(sc) {
@@ -67,6 +132,7 @@ function mock(sc) {
           (listeners[args.event] ??= []).push(args.handler);
           return args.handler;
         case "plugin:event|unlisten": return null;
+        case "voice_status": return sc.voice ? sc.voice : null;
         case "resize_bubble":
           window.__height = Math.min(420, Math.max(56, Math.round(args.height)));
           return sc.layout ?? { tail_up: false, tail_x: 150 };
@@ -117,14 +183,14 @@ async function composite(browser, png, height, sc) {
   return out;
 }
 
-const browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium" });
+const browser = await launch();
 for (const [name, sc] of Object.entries(scenarios)) {
   if (ONLY && !name.includes(ONLY)) continue;
   const ctx = await browser.newContext({ viewport: { width: 300, height: 420 }, deviceScaleFactor: 2, colorScheme: sc.dark ? "dark" : "light" });
   const page = await ctx.newPage();
   page.on("pageerror", (e) => console.error(name, "page error:", e.message));
   page.on("console", (m) => m.type() === "error" && console.error(name, "console:", m.text()));
-  await page.addInitScript(mock, sc);
+  await page.addInitScript(mock, { layout: sc.layout, result: sc.result, voice: sc.voice ? VOICE : null });
   await page.goto(`${BASE}/bubble.html`);
   await page.waitForTimeout(150);
   if (sc.type || sc.send) {
@@ -132,6 +198,7 @@ for (const [name, sc] of Object.entries(scenarios)) {
     if (sc.send) await page.keyboard.press("Enter");
   }
   await page.waitForTimeout(sc.wait ?? 800);
+  if (sc.then) await sc.then(page);
   const height = await page.evaluate(() => window.__height);
   await page.setViewportSize({ width: 300, height });
   await page.waitForTimeout(80);

@@ -24,6 +24,9 @@ export function explainError(e: UiError): { text: string; offerSetup: boolean } 
 export const WELCOME =
   "Hi, I'm Glitch! Ask me anything, or try “open YouTube”, “open the Calculator app” or “find a photo of a dog”.";
 
+/** Said after "Clear chat" in Settings. */
+export const CLEARED = "Fresh start! What's on your mind?";
+
 /** Placeholder of the little compose pill. */
 export const PLACEHOLDER = "Say something to Glitch…";
 

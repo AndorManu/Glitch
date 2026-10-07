@@ -1,12 +1,12 @@
 // The panel window: setup wizard and settings. (Chat lives in the bubble.)
 
-import { listen } from "@tauri-apps/api/event";
-import { api, asUiError, type PanelView, type Settings, type SetupStatus, type VoiceDownloadEvent } from "../shared/ipc";
+import { emit, listen } from "@tauri-apps/api/event";
+import { api, asUiError, CHAT_CLEARED_EVENT, type PanelView, type Settings, type SetupStatus, type VoiceDownloadEvent } from "../shared/ipc";
 import { drawAvatar } from "./avatar";
 import { h } from "./dom";
 import { renderMemory } from "./memory";
 import { formatGb, layout, ollamaSummary, prettyModelName, SetupView, sameModel } from "./setup";
-import { loading, toggleSwitch } from "./ui";
+import { busyButton, enterView, loading, settingsKey, toggleSwitch } from "./ui";
 import { onVoiceDownload, renderVoice } from "./voice";
 
 type View = PanelView;
@@ -24,12 +24,17 @@ const subtitle = document.getElementById("subtitle")!;
 let current: View = "setup";
 
 function showView(v: View): void {
+  const changed = v !== current || views[v].hidden;
   current = v;
   for (const [name, el] of Object.entries(views)) el.hidden = name !== v;
+  if (changed) enterView(views[v]);
   settingsButton.hidden = v === "settings";
   subtitle.textContent = subtitles[v];
   if (v === "setup") void setup.refresh();
-  if (v === "settings") void renderSettings();
+  if (v === "settings") {
+    shownKey = null;
+    void renderSettings();
+  }
 }
 
 const setup = new SetupView(views.setup, {
@@ -42,13 +47,21 @@ function card(title: string, ...children: (Node | null)[]): HTMLElement {
   return h("section", { class: "card" }, h("h3", { class: "card-title" }, title), ...children);
 }
 
+/** What the settings page currently shows (see settingsKey). */
+let shownKey: string | null = null;
+
 async function renderSettings(): Promise<void> {
   const root = views.settings;
-  layout(root, [loading("Loading…")]);
+  // Re-renders (a setting changed elsewhere) keep the old page up and the
+  // scroll position; only the first render shows "Loading…".
+  const scroller = root.querySelector<HTMLElement>(":scope > .scroll");
+  const scrollTop = shownKey !== null && scroller ? scroller.scrollTop : 0;
+  if (shownKey === null) layout(root, [loading("Loading…")]);
   let status: SetupStatus;
   try {
     status = await api.setupStatus();
   } catch (e) {
+    shownKey = null;
     layout(
       root,
       [h("div", { class: "callout error", role: "alert" }, h("b", {}, "Couldn’t load the settings."), h("span", {}, asUiError(e).message))],
@@ -57,6 +70,7 @@ async function renderSettings(): Promise<void> {
     return;
   }
   const s = status.settings;
+  shownKey = settingsKey(s);
 
   const select = h("select", { "aria-label": "Brain (AI model)" });
   const names = status.installed.map((m) => m.name);
@@ -79,6 +93,8 @@ async function renderSettings(): Promise<void> {
   updateWarning();
   select.addEventListener("change", async () => {
     updateWarning();
+    s.model = select.value;
+    shownKey = settingsKey(s);
     await api.updateSettings({ model: select.value });
   });
 
@@ -101,13 +117,19 @@ async function renderSettings(): Promise<void> {
       ),
       card(
         "Glitch",
-        toggleSwitch("Let Glitch walk around", "Off: Glitch stays where you put it.", s.movement_enabled, (on) =>
-          void api.updateSettings({ movement_enabled: on }),
-        ),
+        toggleSwitch("Let Glitch walk around", "Off: Glitch stays where you put it.", s.movement_enabled, (on) => {
+          s.movement_enabled = on;
+          shownKey = settingsKey(s);
+          void api.updateSettings({ movement_enabled: on });
+        }),
         h(
           "div",
           { class: "row" },
-          h("button", { class: "secondary small", type: "button", onclick: async () => { await api.resetChat(); await api.showBubble(); } }, "Clear chat"),
+          busyButton("Clear chat", "Clearing…", async () => {
+            await api.resetChat();
+            await emit(CHAT_CLEARED_EVENT).catch(() => {});
+            await api.showBubble();
+          }),
           h("button", { class: "secondary small", type: "button", onclick: () => showView("setup") }, "Run setup again"),
         ),
       ),
@@ -123,6 +145,8 @@ async function renderSettings(): Promise<void> {
       h("button", { class: "danger", type: "button", onclick: () => void api.quit() }, "Quit Glitch"),
     ],
   );
+  const scroll = root.querySelector<HTMLElement>(":scope > .scroll");
+  if (scroll && scrollTop) scroll.scrollTop = scrollTop;
 }
 
 async function main(): Promise<void> {
@@ -131,8 +155,10 @@ async function main(): Promise<void> {
     if (e.key === "Escape") void api.hidePanel();
   });
   await listen<PanelView>("panel-view", (e) => showView(e.payload));
-  await listen<Settings>("settings-changed", () => {
-    if (current === "settings") void renderSettings();
+  await listen<Settings>("settings-changed", (e) => {
+    // Our own toggles already show the new value (and the voice and memory
+    // cards redraw themselves): only redraw for changes made elsewhere.
+    if (current === "settings" && settingsKey(e.payload) !== shownKey) void renderSettings();
   });
   await listen<VoiceDownloadEvent>("voice-download", (e) => onVoiceDownload(e.payload));
   await listen("memory-changed", () => {

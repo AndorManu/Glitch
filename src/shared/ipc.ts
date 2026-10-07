@@ -128,6 +128,12 @@ export function asUiError(e: unknown): UiError {
   return { code: "unknown", message: String(e) };
 }
 
+/**
+ * Window-to-window event (no Rust involved): the panel's "Clear chat"
+ * finished, so the bubble drops what it was showing.
+ */
+export const CHAT_CLEARED_EVENT = "chat-cleared";
+
 export const api = {
   setupStatus: () => invoke<SetupStatus>("setup_status"),
   startOllama: () => invoke<void>("start_ollama"),
