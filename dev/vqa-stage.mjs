@@ -171,6 +171,8 @@ let cutN = 0;
 async function open(query = "") {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2 });
   page.on("pageerror", (e) => console.error("page error:", e.message));
+  page.on("crash", () => console.error("page crashed at", new Date().toISOString()));
+  page.on("close", () => console.error("page closed at", new Date().toISOString()));
   await page.clock.install({ time: new Date("2026-10-07T09:00:00") });
   await page.goto(`${BASE}/dev/stage.html?seed=${SEED}${query}`, { timeout: 180000, waitUntil: "domcontentloaded" });
   await page.waitForSelector("body[data-ready='1']", { timeout: 180000 });
@@ -510,6 +512,7 @@ const scenarios = {
       ontoWindow: (p) => lerp(p, { x: 360, y: 200 }, 3),
     };
     for (const [name, mk] of Object.entries(kinds)) {
+      if (process.env.THROWS && !process.env.THROWS.split(",").includes(name)) continue;
       let p = await pickUp(page, S);
       const start = name === "intoWall" ? { x: 900, y: 400 } : name === "ceilingDrop" ? { x: 640, y: 30 } : name === "ontoWindow" ? { x: 300, y: 120 } : { x: 760, y: 450 };
       for (const r of lerp(p, start, 12)) {
@@ -529,7 +532,10 @@ const scenarios = {
       const s = await st(page);
       note("throws", name, { seq: seq(S, i0), end: `${s.anim}/${s.mode}/${s.surface}` });
       await S.step(2500);
-      await page.clock.runFor(120000); // let the annoyance decay between throws
+      // calm him down between throws (instead of minutes of fake time)
+      await ev(page, () => {
+        window.__stage.creature.annoyRaw = 0;
+      });
       await S.step(200);
     }
     await S.flush();
@@ -943,7 +949,7 @@ const scenarios = {
         }
       }, 50);
     });
-    for (let m = 0; m < ROAM_MIN; m++) await page.clock.runFor(60_000);
+    for (let m = 0; m < ROAM_MIN * 6; m++) await page.clock.runFor(10_000);
     const r = await page.evaluate(() => ({ plans: window.__roam.plans, anims: window.__roam.anims, poses: window.__qa.poses.length }));
     const poses = await page.evaluate(() => window.__qa.poses.map((p) => [p.anim, p.frame]));
     const count = (arr) => Object.entries(arr.reduce((o, x) => ((o[x] = (o[x] ?? 0) + 1), o), {})).sort((a, b) => b[1] - a[1]);
