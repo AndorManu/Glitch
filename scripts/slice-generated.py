@@ -33,7 +33,7 @@ from collections import deque
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
 GEN = ROOT / "art" / "generated"
@@ -156,6 +156,21 @@ def snap_palette(a: np.ndarray) -> np.ndarray:
     snapped = px.copy()
     snapped[near] = PALETTE[j[near]]
     out[op, :3] = snapped.astype(np.uint8)
+    return out
+
+
+def trim_thin_bottom(a: np.ndarray, keep: int) -> np.ndarray:
+    """A thin line (fishing line) hanging below him: from the bottom up, rows
+    with at most 2 opaque pixels are the line; keep only its top `keep` rows."""
+    op = a[:, :, 3] > 0
+    rows = np.where(op.any(1))[0]
+    if not len(rows):
+        return a
+    y = rows.max()
+    while y >= 0 and op[y].sum() <= 2:
+        y -= 1
+    out = a.copy()
+    out[y + 1 + keep :] = 0
     return out
 
 
@@ -313,6 +328,145 @@ def body_x(a: np.ndarray, tail_side: str) -> float:
     return float(xs.mean()) if len(xs) else w / 2
 
 
+def _components(m: np.ndarray) -> list[np.ndarray]:
+    """8-connected components of a mask, largest first."""
+    h, w = m.shape
+    seen = np.zeros_like(m)
+    comps = []
+    for y0, x0 in zip(*np.where(m)):
+        if seen[y0, x0]:
+            continue
+        pts, q = [], [(y0, x0)]
+        seen[y0, x0] = True
+        while q:
+            y, x = q.pop()
+            pts.append((y, x))
+            for yy in range(y - 1, y + 2):
+                for xx in range(x - 1, x + 2):
+                    if 0 <= yy < h and 0 <= xx < w and m[yy, xx] and not seen[yy, xx]:
+                        seen[yy, xx] = True
+                        q.append((yy, xx))
+        c = np.zeros_like(m)
+        ys, xs = zip(*pts)
+        c[list(ys), list(xs)] = True
+        comps.append(c)
+    return sorted(comps, key=lambda c: -c.sum())
+
+
+def _dilate(m: np.ndarray, r: int) -> np.ndarray:
+    out = m.copy()
+    for _ in range(r):
+        p = np.pad(out, 1)
+        out = out | p[:-2, 1:-1] | p[2:, 1:-1] | p[1:-1, :-2] | p[1:-1, 2:] | p[:-2, :-2] | p[:-2, 2:] | p[2:, :-2] | p[2:, 2:]
+    return out
+
+
+OUTLINE_RGB = np.array([12, 10, 24], np.uint8)
+
+
+def clean_cursor(frames: list[np.ndarray]) -> tuple[list[np.ndarray], list[list[int]]]:
+    """cling_cursor is drawn holding a big white cursor arrow (tip up, shaft
+    down to his paws). The app shows the real cursor instead, so the drawn
+    arrow goes: its white body is the largest near-white component; it and
+    its dark outline (2 px around it) are cleared where they stick out of
+    him, and repainted from the neighbouring fur where they cross his head
+    and body, with the outline closed again. The grip (where the shaft met his
+    paws: the arrow's lowest pixel) is returned per frame, and the frames are
+    shifted so the grip is at the same x in all of them (he hangs steadily
+    from the cursor)."""
+    out, grips = [], []
+    for f in frames:
+        a = f.copy()
+        op = a[:, :, 3] > 0
+        v = a[:, :, :3].astype(int)
+        white = op & (v.min(2) > 200) & ((v.max(2) - v.min(2)) < 35)
+        comps = _components(white)
+        if not comps:
+            out.append(a)
+            grips.append([a.shape[1] // 2, 30])
+            continue
+        arrow = comps[0]
+        ys, xs = np.where(arrow)
+        gy = int(ys.max())
+        gx = int(round(xs[ys == gy].mean()))
+        R = _dilate(arrow, 2) & op
+        body = _components(op & ~R)
+        B = body[0] if body else np.zeros_like(op)
+        h, w = op.shape
+        inside = np.zeros_like(op)
+        for y, x in zip(*np.where(R)):
+            left = B[y, max(0, x - 4) : x].any()
+            right = B[y, x + 1 : min(w, x + 5)].any()
+            below = B[y + 1 : min(h, y + 4), x].any()
+            inside[y, x] = left and right and below
+        a[R & ~inside] = 0
+        # Repaint the inside from neighbouring non-arrow pixels, fur first.
+        todo = inside.copy()
+        known = (a[:, :, 3] > 0) & ~inside
+        for _ in range(12):
+            if not todo.any():
+                break
+            nxt = a.copy()
+            done = []
+            dark = (a[:, :, :3].astype(int).sum(2) < 110)
+            for y, x in zip(*np.where(todo)):
+                cand, dk = [], []
+                for oy, ox in ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)):
+                    yy, xx = y + oy, x + ox
+                    if 0 <= yy < h and 0 <= xx < w and known[yy, xx]:
+                        (dk if dark[yy, xx] else cand).append(tuple(a[yy, xx]))
+                pick = cand or dk
+                if pick:
+                    nxt[y, x] = max(set(pick), key=pick.count)
+                    done.append((y, x))
+            a = nxt
+            for y, x in done:
+                todo[y, x] = False
+                known[y, x] = True
+        a[todo] = 0
+        # Close the outline where the repainted area meets the outside.
+        op2 = a[:, :, 3] > 0
+        p = np.pad(~op2, 1)
+        edge = op2 & (p[:-2, 1:-1] | p[2:, 1:-1] | p[1:-1, :-2] | p[1:-1, 2:]) & _dilate(inside, 1)
+        a[edge, :3] = OUTLINE_RGB
+        # Bits of the arrow's outline left floating above him.
+        for c in _components(a[:, :, 3] > 0)[1:]:
+            if c.sum() <= 8 and not (_dilate(c, 1) & B).any():
+                a[c] = 0
+        out.append(a)
+        grips.append([gx, gy])
+    # Same grip point in every frame: he hangs steadily from the cursor tip.
+    tx = int(round(np.median([g[0] for g in grips])))
+    ty = min(g[1] for g in grips)  # shift up only: nothing is cut off at the bottom
+    steady = []
+    for a, g in zip(out, grips):
+        b = np.roll(np.roll(a, tx - g[0], axis=1), ty - g[1], axis=0)
+        # np.roll wraps: clear what came round the edges.
+        dx, dy = tx - g[0], ty - g[1]
+        if dx > 0:
+            b[:, :dx] = 0
+        elif dx < 0:
+            b[:, dx:] = 0
+        if dy > 0:
+            b[:dy] = 0
+        elif dy < 0:
+            b[dy:] = 0
+        steady.append(b)
+        g[0], g[1] = tx, ty
+    # Before / after, for review.
+    z = 3
+    H, W = frames[0].shape[:2]
+    sheet = Image.new("RGBA", (W * z * len(frames), H * z * 2), (46, 107, 88, 255))
+    for i, (bf, af) in enumerate(zip(frames, steady)):
+        for row, im in enumerate((bf, af)):
+            sheet.alpha_composite(Image.fromarray(im, "RGBA").resize((W * z, H * z), Image.NEAREST), (i * W * z, row * H * z))
+        d = ImageDraw.Draw(sheet)
+        d.rectangle([i * W * z + tx * z, H * z + ty * z, i * W * z + tx * z + z - 1, H * z + ty * z + z - 1], outline=(255, 60, 60, 255))
+    DEV.mkdir(parents=True, exist_ok=True)
+    sheet.save(DEV / "cling-clean.png")
+    return steady, grips
+
+
 def place(a: np.ndarray, anchor_x: float) -> np.ndarray:
     out = np.zeros((CANVAS_H, CANVAS_W, 4), np.uint8)
     h, w = a.shape[:2]
@@ -362,6 +516,8 @@ def process(name: str, cfg: dict, report: dict) -> list[np.ndarray]:
     for i, c in enumerate(crops):
         _, ox, oy = best_pitch(c, use * 2 - 0.01, use * 2 + 0.01)
         art = snap_palette(trim(drop_strays(trim(dehalo(sample(c, use, ox % use, oy % use))))))
+        if "trim_line" in cfg:
+            art = trim(trim_thin_bottom(art, cfg["trim_line"]))
         ex = glitch_eye_x(art)
         if ex is not None:
             votes += 1 if ex > art.shape[1] / 2 else -1
@@ -383,6 +539,10 @@ def process(name: str, cfg: dict, report: dict) -> list[np.ndarray]:
 
     anchors = [body_x(f, tail_side(f)) - cfg.get("shift", 0) for f in frames]
     placed = [place(f, ax) for f, ax in zip(frames, anchors)]
+    if cfg.get("cursor_clean"):
+        placed, grips = clean_cursor(placed)
+        OUT.mkdir(parents=True, exist_ok=True)
+        (OUT / f"{name}-grips.json").write_text(json.dumps(grips))
     clipped = [i for i, (f, p) in enumerate(zip(frames, placed)) if (p[:, :, 3] > 0).sum() < (f[:, :, 3] > 0).sum()]
     if clipped:
         print(f"  WARNING {name}: frames {clipped} clipped by the canvas")
@@ -438,13 +598,20 @@ for _name in ["tail_copter", "glide", "fall_flail", "hang_ledge", "slide_down", 
 for _name in ["struggle", "cling_cursor", "annoyed", "bite_cursor"]:
     SHEETS[_name] = {"cell": 3.8, "n": None}
 # These are drawn bigger: cell set so the head is as big as in idle0 (measured in the lineup).
-for _name, _cell in {"struggle": 4.7, "bite_cursor": 4.6, "fall_flail": 5.7, "hang_ledge": 5.3, "glide": 4.9, "slide_down": 4.9, "sit_edge_swing": 4.75, "wall_jump": 4.9, "pull_up": 4.2}.items():
+for _name, _cell in {"struggle": 4.7, "bite_cursor": 4.6, "cling_cursor": 5.2, "annoyed": 3.8, "fall_flail": 5.7, "hang_ledge": 5.3, "glide": 4.9, "slide_down": 4.9, "sit_edge_swing": 4.75, "wall_jump": 4.9, "pull_up": 4.2}.items():
     SHEETS[_name]["cell"] = _cell
 # The stretch is 8 side-on frames, three pairs touching (auto-splitting can't tell).
 SHEETS["stretch"].update({"n": 8, "target": 54})
 SHEETS["sit_idle_look"]["target"] = 47
 # The wall crawl, rotated onto the floor; a bit smaller so the long body + tail fits the canvas.
 SHEETS["climb"] = {"cell": 4.9, "rotate": -1, "shift": 6}
+
+# The drawn cursor arrow comes out of cling_cursor (the real cursor is there); grip points saved.
+SHEETS["cling_cursor"]["cursor_clean"] = True
+# Arms crossed, standing: as tall as idle0.
+SHEETS["annoyed"] = {"n": None, "ref": 0, "target": 55, "tolerance": 0}
+# The fishing line hangs far below him: cut it at his feet (it goes on over the edge).
+SHEETS["fish"]["trim_line"] = 0  # down to his feet: frames stay on one baseline
 
 
 def main():

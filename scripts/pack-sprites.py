@@ -201,6 +201,18 @@ def align(sheet: str, frames: list[np.ndarray], lookup) -> list[np.ndarray]:
     return [shift_x(f, s) for f, s in zip(frames, shifts)]
 
 
+def grip_lines() -> list[str]:
+    """Grip points saved by slice-generated.py (art/frames/<sheet>-grips.json)."""
+    import json
+
+    lines = []
+    for p in sorted(FRAMES.glob("*-grips.json")):
+        sheet = p.name.removesuffix("-grips.json")
+        for i, (x, y) in enumerate(json.loads(p.read_text())):
+            lines.append(f"  {sheet}{i}: [{x}, {y}],")
+    return lines
+
+
 def main():
     names: list[str] = []
     imgs: list[np.ndarray] = []
@@ -241,6 +253,10 @@ def main():
         "};",
         "export const ANIM_EYES: Record<string, [number, number]> = {",
         *[f"  {n}: [{e[0]}, {e[1]}]," for n, e in zip(names, eyes)],
+        "};",
+        "// Where the cursor tip is held (art px in the frame), for frames drawn holding on to the cursor.",
+        "export const ANIM_GRIPS: Record<string, [number, number]> = {",
+        *grip_lines(),
         "};",
         "",
     ]
