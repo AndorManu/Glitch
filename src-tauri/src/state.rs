@@ -19,6 +19,8 @@ pub struct AppState {
     pub platform: Arc<SystemPlatform>,
     /// Tray "Let Glitch wander" item, kept in sync with the settings.
     pub wander_item: Mutex<Option<CheckMenuItem<Wry>>>,
+    /// Tray "Chaos mode" item, kept in sync with the settings.
+    pub chaos_item: Mutex<Option<CheckMenuItem<Wry>>>,
     /// Last view the panel was asked to show ("setup" or "settings").
     pub panel_view: Mutex<String>,
 }
@@ -42,6 +44,7 @@ impl AppState {
             agent: tokio::sync::Mutex::new(agent),
             platform,
             wander_item: Mutex::new(None),
+            chaos_item: Mutex::new(None),
             panel_view: Mutex::new("setup".into()),
         }
     }
@@ -64,6 +67,10 @@ impl AppState {
         let item = self.wander_item.lock().unwrap().clone();
         if let Some(item) = item {
             let _ = item.set_checked(new.movement_enabled);
+        }
+        let item = self.chaos_item.lock().unwrap().clone();
+        if let Some(item) = item {
+            let _ = item.set_checked(new.chaos_enabled);
         }
         new
     }

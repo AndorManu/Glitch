@@ -13,9 +13,11 @@
 // a new angle); the window move alone carries a walking sprite.
 
 import { ANIMATIONS, type AnimationName, Animator, type Clock, isAnimationName, landKeys, type Pose } from "./animations";
-import { type BehaviourName, Brain, type BrainContext, isBehaviourName, type Plan, type Gait } from "./brain";
+import { type BehaviourName, Brain, type BrainContext, type Haul, isBehaviourName, type Plan, type Gait } from "./brain";
+import { ChaosDirector, type ChaosHost, isAct, knockKeys } from "./chaos";
 import { capSpeed, Pendulum, VelocityTracker } from "./drag";
 import {
+  alongX,
   type Body,
   centerFor,
   clampTo,
@@ -55,6 +57,8 @@ export interface Host {
   setHitbox(rect: BodyRect | null): void;
   /** A plain click (no drag) on Glitch. */
   clicked(): void;
+  /** Chaos mode (other apps' windows, the cursor, paw prints, notes). Absent: no mischief. */
+  chaos?: ChaosHost;
 }
 
 /** What creature.ts needs from the renderer (render.ts `Renderer` fits). */
@@ -102,6 +106,23 @@ interface Loco {
   freezeUntil: number;
   skip: number;
   nextGlitchAt: number;
+  /** Dragging something along (chaos mode). */
+  haul?: HaulState;
+}
+
+interface HaulState {
+  h: Haul;
+  /** Surface coordinate where the walk began. */
+  s0: number;
+  /** Where he'd be if nothing held him back (riding his own window: the window lags behind). */
+  virt: number;
+  /** Offset last asked for / last applied (physical px along the surface). */
+  sent: number;
+  applied: number;
+  busy: boolean;
+  /** Riding the window he drags: its ledge when the walk began. */
+  ledge0?: Ledge;
+  done: boolean;
 }
 
 interface Flight {
@@ -158,6 +179,10 @@ export class Creature {
   plan: Plan | null = null;
   asleep = false;
   movement = true;
+  /** Chaos mode switch (only acts with `movement` on too). */
+  chaosOn = true;
+  /** Chaos mode's planner, if the host supports it. */
+  readonly director: ChaosDirector | null;
   panelOpen = false;
   mood: Mood = "idle";
   hovered = false;
@@ -198,6 +223,10 @@ export class Creature {
   private lastInteraction = 0;
   private excitedUntil = -Infinity;
   private sentHitbox: BodyRect | null | undefined = undefined;
+  /** Stepped in glitch: leave paw prints until then. */
+  private pawsUntil = -Infinity;
+  private pawLast: Vec | null = null;
+  private pawLeft = false;
   /** start() has placed the body. */
   private started = false;
 
@@ -222,6 +251,31 @@ export class Creature {
       this.rand,
     );
     this.animator.onChange = (name) => this.animationChanged(name);
+    const me = this;
+    this.director = host.chaos
+      ? new ChaosDirector(
+          host.chaos,
+          {
+            get world() {
+              return me.world;
+            },
+            get surface() {
+              return me.surface;
+            },
+            get s() {
+              return me.s;
+            },
+            get body() {
+              return { x: me.body.x, y: me.body.y };
+            },
+            now: () => this.now,
+            cursor: () => Promise.resolve(this.host.cursor()),
+            stepInGlitch: (ms) => this.stepInGlitch(ms),
+            knock: () => this.knock(),
+          },
+          this.rand,
+        )
+      : null;
   }
 
   private get now(): number {
@@ -313,6 +367,8 @@ export class Creature {
   private applyWorld(w: World): void {
     this.world = w;
     if (!this.started || this.mode !== "stand" || this.asleep) return;
+    // Dragging a window: he knows where it is better than a snapshot does.
+    if (this.loco?.haul) return;
     const u = w.scale;
     const s = this.surface;
     if (s.kind === "platform") return;
@@ -527,6 +583,7 @@ export class Creature {
     const L = this.loco!;
     const w = this.world!;
     const u = w.scale;
+    if (L.haul) return this.stepHaul(dt);
     if (now < L.freezeUntil) return;
     if (L.skip) {
       // The lag spike is over: he skips ahead.
@@ -562,11 +619,127 @@ export class Creature {
       this.animator.glitchBurst(170);
       this.event("lag");
     }
+    this.maybePaw();
     if (arrived) {
       this.loco = null;
       this.motion = CALM;
       this.nextStep();
     }
+  }
+
+  // ------------------------------------------------- chaos: hauling things
+
+  /**
+   * Walking while dragging something (a window, his note, the cursor). One
+   * move request in flight at most (so <= 30 per second). Riding the window
+   * he drags, he moves with what the window actually did (it may stop at the
+   * screen edge); otherwise the thing follows him.
+   */
+  private stepHaul(dt: number): void {
+    const L = this.loco!;
+    const H = L.haul!;
+    const w = this.world!;
+    const u = w.scale;
+    const riding = H.ledge0 !== undefined;
+    const target = riding ? L.to : clampTo(this.surface, L.to, w);
+    const cur = riding ? H.virt : this.s;
+    const dist = target - cur;
+    const accel = ACCEL * u;
+    L.v = Math.min(SPEED[L.gait] * u, L.v + accel * dt, Math.sqrt(2 * accel * Math.abs(dist)) + 12 * u);
+    const step = Math.sign(dist) * L.v * dt;
+    const arrived = Math.abs(step) >= Math.abs(dist);
+    const next = arrived ? target : cur + step;
+    if (riding) H.virt = next;
+    else this.s = next;
+    const want = next - H.s0;
+    if (!H.busy && Math.abs(want - H.sent) >= 0.5) {
+      H.busy = true;
+      H.sent = want;
+      const along = alongX(this.surface.kind);
+      const r = H.h.move(along ? want : 0, along ? 0 : want);
+      const done = (v: Vec | null) => {
+        H.busy = false;
+        if (this.loco !== L || H.done) return;
+        if (!v) return this.haulRefused();
+        H.applied = along ? v.x : v.y;
+        if (riding) this.rideTo(H);
+      };
+      if (r && typeof (r as Promise<Vec | null>).then === "function") (r as Promise<Vec | null>).then(done, () => done(null));
+      else done(r as Vec | null);
+    }
+    if (this.loco !== L) return;
+    const c = restCenter(this.surface, this.s, w);
+    this.body.x = c.x;
+    this.body.y = c.y;
+    // Leaning into the pull.
+    const faceSign = this.facingLeft ? -1 : 1;
+    this.motion = { ...CALM, shear: (Math.sign(dist) * faceSign * -0.05) / (riding ? 1 : 1.5), pivotY: 0 };
+    this.maybePaw();
+    // Riding a window that got stuck at the screen edge: that's far enough.
+    const stuck = riding && !H.busy && Math.abs(want - H.applied) > 60 * u;
+    if (arrived || stuck) {
+      if (riding && H.busy) return; // let the last move land first
+      this.endHaul();
+      this.nextStep();
+    }
+  }
+
+  /** Riding the window he drags: stand where it went, its top under his feet. */
+  private rideTo(H: HaulState): void {
+    const l0 = H.ledge0!;
+    this.surface = { kind: "ledge", ledge: { ...l0, x: l0.x + H.applied } };
+    this.s = H.s0 + H.applied;
+  }
+
+  private endHaul(): void {
+    const L = this.loco;
+    if (!L?.haul) return;
+    const H = L.haul;
+    if (!H.done) {
+      H.done = true;
+      H.h.release();
+    }
+    this.loco = null;
+    this.motion = CALM;
+  }
+
+  /** Rust said stop (the user moved, time's up, chaos off...): let go, look caught. */
+  private haulRefused(): void {
+    this.event("haul-refused");
+    this.endHaul();
+    this.plan = null;
+    this.waiting = null;
+    this.animator.play("startled", this.restAnim());
+    this.scheduleBrain(5000 + this.rand() * 4000);
+  }
+
+  // ---------------------------------------------- chaos: paw prints, knock
+
+  /** Leave magenta paw prints for a while (chaos mode). */
+  stepInGlitch(ms: number): void {
+    if (!this.host.chaos || !this.chaosOn) return;
+    this.pawsUntil = Math.max(this.pawsUntil, this.now + ms);
+    this.pawLast = null;
+    this.event("glitch-paws");
+  }
+
+  private maybePaw(): void {
+    if (this.now >= this.pawsUntil || !this.host.chaos || !this.chaosOn || !this.movement) return;
+    if (!isStanding(this.surface) || !this.world) return;
+    const u = this.u;
+    const feet = { x: this.body.x, y: this.body.y + HALF * u };
+    if (this.pawLast && Math.hypot(feet.x - this.pawLast.x, feet.y - this.pawLast.y) < 22 * u) return;
+    this.pawLast = feet;
+    this.pawLeft = !this.pawLeft;
+    this.host.chaos.paws([{ x: feet.x, y: feet.y, angle: 0, left: this.pawLeft }]);
+  }
+
+  /** Knock on the inside of the screen glass. */
+  private knock(): Promise<void> {
+    this.facingLeft = !this.facingLeft;
+    this.place();
+    this.animator.interject((_, base) => knockKeys(base));
+    return new Promise((done) => this.clock.setTimeout(done, 1700));
   }
 
   private startCorner(end: -1 | 1): void {
@@ -807,11 +980,45 @@ export class Creature {
   private think = (): void => {
     this.brainTimer = null;
     if (!this.canAct()) return; // whatever blocks him reschedules when it ends
-    void this.pollWorld().then((w) => {
+    void this.pollWorld().then(async (w) => {
       if (!w || !this.canAct()) return;
+      // Chaos mode gets a say first (it mostly says "not now").
+      if (this.director && this.chaosOn && this.movement && isStanding(this.surface)) {
+        const plan = await this.director.maybe().catch(() => null);
+        if (!this.canAct()) return;
+        if (plan) return this.startPlan(plan);
+      }
       this.startPlan(this.brain.next(this.context(w)));
     });
   };
+
+  /** Chaos mode on/off (settings, tray). Off stops any mischief at once. */
+  setChaos(on: boolean): void {
+    this.chaosOn = on;
+    if (on) return;
+    this.pawsUntil = -Infinity;
+    if (this.plan?.name === "mischief" || this.loco?.haul) {
+      this.interrupt();
+      if (this.mode === "stand") this.animator.play(this.restAnim());
+      this.scheduleBrain(4000 + this.rand() * 3000);
+    }
+  }
+
+  /** Do this chaos act now if it fits (debug trigger / dev tools). Rust's limits still apply. */
+  async forceChaos(act: string): Promise<boolean> {
+    if (!this.director || !isAct(act) || !this.world || this.mode !== "stand" || this.hold) return false;
+    this.interaction();
+    if (this.asleep) this.wake();
+    this.interrupt();
+    const plan = await this.director.plan(act).catch(() => null);
+    this.event(`chaos:${act}:${plan ? "go" : "no"}`);
+    if (!plan || this.mode !== "stand" || this.plan) {
+      if (!this.plan) this.scheduleBrain(3000);
+      return false;
+    }
+    this.startPlan(plan);
+    return true;
+  }
 
   private startPlan(plan: Plan): void {
     this.plan = plan;
@@ -856,14 +1063,47 @@ export class Creature {
     const u = w.scale;
     switch (step.do) {
       case "walk": {
-        if (this.mode !== "stand") return this.finishPlan();
-        const to = clampTo(this.surface, step.to, w);
-        if (Math.abs(to - this.s) < 2 * u) return this.nextStep();
+        if (this.mode !== "stand") {
+          step.haul?.release();
+          return this.finishPlan();
+        }
+        const surf = this.surface;
+        // Riding the window he drags: walk "off its end", the window comes along.
+        const riding = step.haul?.ledgeId !== undefined && isTop(surf) && surf.ledge.id === step.haul.ledgeId;
+        const to = riding ? step.to : clampTo(surf, step.to, w);
+        if (Math.abs(to - this.s) < 2 * u) {
+          step.haul?.release();
+          return this.nextStep();
+        }
         const dir = Math.sign(to - this.s);
-        this.facingLeft = facesLeftFor(this.surface.kind, dir);
+        this.facingLeft = facesLeftFor(surf.kind, step.backwards ? -dir : dir);
         this.loco = { to, gait: step.gait, v: 0, dir, freezeUntil: 0, skip: 0, nextGlitchAt: this.now + 2500 + this.rand() * 9000 };
-        this.animator.play(step.gait === "run" ? "run" : step.gait === "climb" ? "climb" : "walk");
+        if (step.haul) {
+          this.loco.haul = { h: step.haul, s0: this.s, virt: this.s, sent: 0, applied: 0, busy: false, ledge0: riding && isTop(surf) ? { ...surf.ledge } : undefined, done: false };
+          this.event("haul");
+        }
+        this.animator.play(step.anim ?? (step.gait === "run" ? "run" : step.gait === "climb" ? "climb" : "walk"));
         this.ensureMotion();
+        return;
+      }
+      case "call": {
+        void Promise.resolve()
+          .then(() => step.run())
+          .then(
+            (r) => {
+              if (this.plan !== plan) {
+                // Interrupted while asking: let go of anything just grabbed.
+                if (Array.isArray(r)) for (const s of r) if (s.do === "walk") s.haul?.release();
+                return;
+              }
+              if (r === false) return this.finishPlan();
+              if (Array.isArray(r)) plan.steps.splice(this.stepIndex, 0, ...r);
+              this.nextStep();
+            },
+            () => {
+              if (this.plan === plan) this.finishPlan();
+            },
+          );
         return;
       }
       case "corner":
@@ -943,6 +1183,8 @@ export class Creature {
     this.event(`teleport:${t.surface.kind}`);
     this.place();
     this.armLedgeWatch();
+    // Teleporting is messy: sometimes he lands in a puddle of glitch.
+    if (this.chaosOn && this.host.chaos && this.rand() < 0.35) this.stepInGlitch(14_000);
   }
 
   /** Drop whatever plan is running; leave the body somewhere sane. */
@@ -951,6 +1193,8 @@ export class Creature {
     this.waiting = null;
     if (this.brainTimer !== null) this.clock.clearTimeout(this.brainTimer);
     this.brainTimer = null;
+    // Let go of whatever he was dragging (another app's window, the cursor).
+    this.endHaul();
     if (this.loco) {
       this.loco = null;
       this.motion = CALM;
@@ -1100,6 +1344,12 @@ export class Creature {
    * something started.
    */
   playAction(name: unknown): boolean {
+    // "chaos:window", "chaos:note"...: a chaos act (debug trigger).
+    if (typeof name === "string" && name.startsWith("chaos:")) {
+      if (!this.director || !isAct(name.slice(6))) return false;
+      void this.forceChaos(name.slice(6));
+      return true;
+    }
     // Behaviours first ("climb" is also the climbing animation); the animation if it can't be planned here.
     if (isBehaviourName(name) && this.force(name)) return true;
     if (isAnimationName(name)) {

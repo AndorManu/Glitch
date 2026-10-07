@@ -15,6 +15,10 @@ pub struct Settings {
     pub model: Option<String>,
     /// Whether Glitch wanders around the screen.
     pub movement_enabled: bool,
+    /// Chaos mode: harmless mischief (dragging other apps' windows a bit,
+    /// playing with the cursor, footprints, sticky notes). Only while
+    /// `movement_enabled` is on too. Missing in older files → on.
+    pub chaos_enabled: bool,
     /// Set once the first-run wizard has been completed.
     pub onboarding_done: bool,
     pub ollama_url: String,
@@ -51,6 +55,7 @@ impl Default for Settings {
         Self {
             model: None,
             movement_enabled: true,
+            chaos_enabled: true,
             onboarding_done: false,
             ollama_url: ollama::DEFAULT_URL.to_string(),
             keep_alive: ollama::DEFAULT_KEEP_ALIVE.to_string(),
@@ -95,6 +100,7 @@ mod tests {
         let s = Settings::load(&dir.path().join("nope.json"));
         assert_eq!(s, Settings::default());
         assert!(s.movement_enabled);
+        assert!(s.chaos_enabled);
         assert_eq!(s.keep_alive, "2m");
     }
 

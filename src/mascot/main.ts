@@ -16,7 +16,7 @@ import {
   PhysicalPosition,
   primaryMonitor,
 } from "@tauri-apps/api/window";
-import { api, type Settings, type WorldSnapshot } from "../shared/ipc";
+import { api, chaosApi, type Settings, type WorldSnapshot } from "../shared/ipc";
 import { GLITCH } from "../sprites/glitch";
 import { loadSprites } from "../sprites/load";
 import { RACCOON } from "../sprites/raccoon";
@@ -66,6 +66,20 @@ const host: Host = {
   ),
   setHitbox: (rect) => void api.setHitbox(rect).catch(() => {}),
   clicked: () => void api.mascotClicked(),
+  chaos: {
+    status: () => chaosApi.status(),
+    windows: () => chaosApi.windows().catch(() => []),
+    grabWindow: (id) => chaosApi.grabWindow(id).catch(() => null),
+    dragWindow: (dx, dy) => chaosApi.dragWindow(dx, dy).then((r) => (r ? { x: r[0], y: r[1] } : null), () => null),
+    releaseWindow: () => void chaosApi.releaseWindow().catch(() => {}),
+    grabCursor: () => chaosApi.grabCursor().then((p) => (p ? { x: p[0], y: p[1] } : null), () => null),
+    dragCursor: (x, y) => chaosApi.dragCursor(x, y).catch(() => false),
+    releaseCursor: () => void chaosApi.releaseCursor().catch(() => {}),
+    paws: (paws) => void chaosApi.paws(paws).catch(() => {}),
+    noteOpen: (line, x, y) => chaosApi.noteOpen(line, x, y).catch(() => null),
+    noteMove: (x, y) => void chaosApi.noteMove(x, y).catch(() => {}),
+    noteIsOpen: () => chaosApi.noteIsOpen(),
+  },
 };
 
 let creature: Creature | null = null;
@@ -114,6 +128,7 @@ export function playAction(name: unknown): boolean {
 
 function applySettings(s: Settings): void {
   creature?.setMovement(s.movement_enabled);
+  creature?.setChaos(s.chaos_enabled ?? true);
 }
 
 async function main(): Promise<void> {
@@ -129,6 +144,7 @@ async function main(): Promise<void> {
   try {
     settings = await api.getSettings();
     c.movement = settings.movement_enabled;
+    c.chaosOn = settings.chaos_enabled ?? true;
   } catch (e) {
     console.error("could not load settings", e);
   }
@@ -153,6 +169,8 @@ async function main(): Promise<void> {
 if (import.meta.env.DEV) {
   (window as unknown as { __glitch: object }).__glitch = {
     play: playAction,
+    /** A chaos act now: "window", "push", "chase", "note", "peek", "knock", "paws". */
+    chaos: (act: string) => creature?.forceChaos(act),
     mood: (m: string) => creature?.setMood(m),
     burst: (ms?: number) => creature?.animator.glitchBurst(ms),
     face: (left: boolean) => {

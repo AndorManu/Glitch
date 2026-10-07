@@ -1,6 +1,8 @@
 // No console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod chaos;
+mod chaos_native;
 mod commands;
 mod hover;
 mod layout;
@@ -28,10 +30,19 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         state.settings().movement_enabled,
         None::<&str>,
     )?;
+    let chaos = CheckMenuItem::with_id(
+        app,
+        "chaos",
+        "Chaos mode",
+        true,
+        state.settings().chaos_enabled,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit Glitch", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&chat, &wander, &settings, &sep, &quit])?;
+    let menu = Menu::with_items(app, &[&chat, &wander, &chaos, &settings, &sep, &quit])?;
     *state.wander_item.lock().unwrap() = Some(wander);
+    *state.chaos_item.lock().unwrap() = Some(chaos);
 
     let mut tray =
         TrayIconBuilder::with_id("glitch").tooltip("Glitch").menu(&menu).show_menu_on_left_click(true).on_menu_event(
@@ -47,6 +58,16 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 }
                 "wander" => {
                     let s = app.state::<AppState>().update_settings(|s| s.movement_enabled = !s.movement_enabled);
+                    if !s.movement_enabled {
+                        chaos::stop_all(app);
+                    }
+                    let _ = app.emit("settings-changed", &s);
+                }
+                "chaos" => {
+                    let s = app.state::<AppState>().update_settings(|s| s.chaos_enabled = !s.chaos_enabled);
+                    if !s.chaos_enabled {
+                        chaos::stop_all(app);
+                    }
                     let _ = app.emit("settings-changed", &s);
                 }
                 "quit" => {
@@ -75,6 +96,7 @@ fn main() {
         .setup(|app| {
             app.manage(AppState::new(app.path().app_config_dir()?));
             app.manage(hover::Hitbox::default());
+            app.manage(chaos::ChaosState::default());
             voice::setup(app.handle());
             hover::start(app.handle().clone());
             os::configure(app);
@@ -83,6 +105,7 @@ fn main() {
             // wizard on first run (so the panel can be placed next to it).
             // Dragging Glitch keeps the chat bubble attached (see place_mascot).
             windows::place_mascot(app.handle());
+            chaos::debug_trigger(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -109,6 +132,20 @@ fn main() {
             commands::world_snapshot,
             commands::set_hitbox,
             commands::quit,
+            chaos::chaos_status,
+            chaos::chaos_windows,
+            chaos::chaos_grab_window,
+            chaos::chaos_drag_window,
+            chaos::chaos_release_window,
+            chaos::chaos_grab_cursor,
+            chaos::chaos_drag_cursor,
+            chaos::chaos_release_cursor,
+            chaos::chaos_paws,
+            chaos::chaos_paws_idle,
+            chaos::chaos_note_open,
+            chaos::chaos_note_move,
+            chaos::chaos_note_close,
+            chaos::chaos_note_open_now,
             voice::commands::voice_status,
             voice::commands::update_voice_settings,
             voice::commands::voice_start,

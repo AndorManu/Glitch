@@ -66,8 +66,8 @@ export function progressBar(): ProgressBar {
  * The settings the settings page draws itself (memory and voice cards keep
  * themselves up to date). Two equal keys: no need to redraw. Unit-tested.
  */
-export function settingsKey(s: Pick<Settings, "model" | "movement_enabled" | "onboarding_done">): string {
-  return JSON.stringify([s.model ?? null, !!s.movement_enabled, !!s.onboarding_done]);
+export function settingsKey(s: Pick<Settings, "model" | "movement_enabled" | "onboarding_done" | "chaos_enabled">): string {
+  return JSON.stringify([s.model ?? null, !!s.movement_enabled, !!s.onboarding_done, s.chaos_enabled ?? true]);
 }
 
 /**

@@ -300,6 +300,7 @@ pub fn get_settings(state: State<'_, AppState>) -> Settings {
 pub struct SettingsPatch {
     model: Option<String>,
     movement_enabled: Option<bool>,
+    chaos_enabled: Option<bool>,
     onboarding_done: Option<bool>,
     memory_enabled: Option<bool>,
 }
@@ -322,6 +323,9 @@ pub async fn update_settings(
         }
         if let Some(v) = patch.movement_enabled {
             s.movement_enabled = v;
+        }
+        if let Some(v) = patch.chaos_enabled {
+            s.chaos_enabled = v;
         }
         if let Some(v) = patch.onboarding_done {
             s.onboarding_done = v;
@@ -347,6 +351,9 @@ pub async fn update_settings(
         tauri::async_runtime::spawn(async move {
             let _ = ollama.unload(&old).await;
         });
+    }
+    if !new.chaos_enabled || !new.movement_enabled {
+        crate::chaos::stop_all(&app);
     }
     let _ = app.emit("settings-changed", &new);
     Ok(new)

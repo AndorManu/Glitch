@@ -124,6 +124,16 @@ async function renderSettings(): Promise<void> {
           shownKey = settingsKey(s);
           void api.updateSettings({ movement_enabled: on }).catch(() => renderSettings());
         }),
+        toggleSwitch(
+          "Chaos mode",
+          "Harmless mischief: nudges your windows a little, plays with the cursor, leaves paw prints and notes. Never while you type or game.",
+          s.chaos_enabled ?? true,
+          (on) => {
+            s.chaos_enabled = on;
+            shownKey = settingsKey(s);
+            void api.updateSettings({ chaos_enabled: on }).catch(() => renderSettings());
+          },
+        ),
         h(
           "div",
           { class: "row" },

@@ -25,9 +25,39 @@ import {
 
 export type Gait = "walk" | "run" | "climb";
 
+/**
+ * Something Glitch drags along while he walks (chaos mode: another app's
+ * window, his sticky note, the cursor). See chaos.ts.
+ */
+export interface Haul {
+  /**
+   * He has moved (dx, dy) physical px since the walk began: move the thing.
+   * Resolves to the offset actually applied (it may be clamped), or null to
+   * let go (refused, the user took over...).
+   */
+  move(dx: number, dy: number): Vec | null | Promise<Vec | null>;
+  /** The walk ended (arrived, interrupted or refused). */
+  release(): void;
+  /**
+   * Set when he stands on the window he drags (its top is this ledge): he
+   * then rides along with it instead of walking off its end.
+   */
+  ledgeId?: number;
+}
+
 export type Step =
-  /** Walk along the current surface to coordinate `to` (centre x on floors/tops/ceiling, y on walls). */
-  | { do: "walk"; to: number; gait: Gait }
+  /**
+   * Walk along the current surface to coordinate `to` (centre x on
+   * floors/tops/ceiling, y on walls). Chaos extras: `anim` instead of the
+   * gait's animation, `backwards` (face against the way he walks), `haul`
+   * (drag something along).
+   */
+  | { do: "walk"; to: number; gait: Gait; anim?: AnimationName; backwards?: boolean; haul?: Haul }
+  /**
+   * Run some code (chaos mode: ask Rust, open a note...). false = abandon the
+   * plan; a list of steps = do these next; true = carry on.
+   */
+  | { do: "call"; run: () => boolean | Step[] | Promise<boolean | Step[]> }
   /** Turn the corner at this end of the current surface onto the next screen edge. */
   | { do: "corner"; end: -1 | 1 }
   /** Play an animation: one-shots until they end, loops for `ms`. */
@@ -66,7 +96,9 @@ export type BehaviourName =
   | "drop"
   | "lookBack"
   | "sleep"
-  | "celebrate";
+  | "celebrate"
+  /** Chaos mode (planned by chaos.ts, never picked by the dice here). */
+  | "mischief";
 
 export interface Plan {
   name: BehaviourName;
@@ -116,6 +148,7 @@ export const BEHAVIOURS: Record<BehaviourName, Entry> = {
   lookBack: { weight: 1, cooldown: 6, moves: false },
   sleep: { weight: 0, cooldown: 0, moves: false },
   celebrate: { weight: 0, cooldown: 0, moves: false },
+  mischief: { weight: 0, cooldown: 0, moves: true },
 };
 
 export function isBehaviourName(name: unknown): name is BehaviourName {
@@ -324,6 +357,8 @@ export class Brain {
         return standing ? steps({ do: "anim", name: "lookAround" }) : null;
       case "sleep":
         return standing ? steps({ do: "anim", name: "yawn" }) : null;
+      case "mischief":
+        return null; // chaos.ts plans these (it needs to ask Rust first)
       case "celebrate": {
         if (!standing) return steps({ do: "anim", name: "happy" });
         if (!ctx.movement || r() < 0.4) return steps({ do: "anim", name: r() < 0.3 ? "laugh" : "happy" });
