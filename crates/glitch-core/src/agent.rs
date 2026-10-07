@@ -23,7 +23,7 @@ pub const COMPACT_AT: usize = 14;
 /// ...keeping roughly this many recent messages word for word.
 pub const KEEP_RECENT: usize = 6;
 
-const MEMORY_PROMPT: &str = "You have a memory. Use the remember tool for lasting facts the user tells you \
+pub const MEMORY_PROMPT: &str = "You have a memory. Use the remember tool for lasting facts the user tells you \
     (their name, pets, preferences, projects) or when they ask you to remember something, and the forget tool \
     when they ask you to forget. Never remember passwords, codes or card numbers. Use what you remember \
     naturally; don't recite it.";
