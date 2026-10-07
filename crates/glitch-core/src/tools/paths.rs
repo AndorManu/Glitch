@@ -363,7 +363,17 @@ mod tests {
     #[test]
     fn network_and_foreign_paths_are_refused_without_touching_them() {
         let h = home();
-        for p in ["/net/attacker.example/s/a.jpg", "/Volumes/stick/a.jpg", "/etc/hosts"] {
+        let foreign: &[&str] = if cfg!(windows) {
+            &[
+                r"\\attacker.example\s\a.jpg",
+                r"\\?\UNC\attacker.example\s\a.jpg",
+                r"Z:\stick\a.jpg",
+                r"C:\Windows\win.ini",
+            ]
+        } else {
+            &["/net/attacker.example/s/a.jpg", "/Volumes/stick/a.jpg", "/etc/hosts"]
+        };
+        for p in foreign {
             assert!(validate(p, &h.platform).unwrap_err().0.contains("your own user folders"), "{p}");
         }
         // `..` is resolved lexically before the check.
