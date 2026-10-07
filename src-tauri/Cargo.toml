@@ -15,7 +15,12 @@ tauri = { version = "2.12.1", features = ["tray-icon", "image-png"] }
 tauri-plugin-single-instance = "2.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["sync", "time", "fs", "io-util"] }
+tokio = { version = "1", features = ["sync", "time", "fs", "io-util", "net"] }
+# Twitch chat over TLS for the stream overlay (src/stream/sources.rs). Same
+# OS TLS as reqwest below, already in the dependency tree.
+tokio-native-tls = "0.3"
+# Auto-update from GitHub Releases (src/updater.rs), signature-checked.
+tauri-plugin-updater = "2"
 
 # Voice commands (src/voice/). Speech-to-text runs on this computer with
 # whisper.cpp (built from source by whisper-rs-sys; needs cmake + a C++

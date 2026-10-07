@@ -1,6 +1,11 @@
 //! Just enough HTTP/1.1 for the overlay server: parse a request head, route
 //! it, and write responses. Small, strict, and bound to 127.0.0.1 by the
-//! caller; every route except static files and `/health` needs the token.
+//! caller. Two secrets (security review M3, 2026-10-08):
+//! - the *view* token sits in the OBS URL (`?token=`) and only reads: the
+//!   page, its config and its event stream;
+//! - the *write* token only works for `POST /stream-event` with JSON, only
+//!   in a header, and never from a browser (any `Origin` header is refused),
+//!   so a leaked OBS URL or a web page can't put text on the stream.
 
 use url::form_urlencoded;
 
@@ -29,10 +34,13 @@ impl Request {
     pub fn query(&self, name: &str) -> Option<&str> {
         self.query.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str())
     }
-    /// The token from `?token=`, `X-Glitch-Token:` or `Authorization: Bearer`.
-    pub fn token(&self) -> Option<&str> {
+    /// The view token: `?token=` in the URL.
+    pub fn view_token(&self) -> Option<&str> {
         self.query("token")
-            .or_else(|| self.header("x-glitch-token"))
+    }
+    /// The write token: `X-Glitch-Token:` or `Authorization: Bearer` (never the URL).
+    pub fn write_token(&self) -> Option<&str> {
+        self.header("x-glitch-token")
             .or_else(|| self.header("authorization").and_then(|v| v.strip_prefix("Bearer ")))
             .map(str::trim)
     }
@@ -114,49 +122,87 @@ pub enum Route {
     Config,
     /// Server-sent events: mirror state, reactions, settings changes.
     Events,
-    /// A stream event (follow/sub/raid/chat) from a bot or webhook.
+    /// A stream event (follow/sub/raid/chat) from a bot or script.
     StreamEvent,
-    /// A built file from the app (`/assets/...`, `/sprites/...`), no token.
+    /// A built file from the app (`/assets/...`, `/sprites/...`). No token:
+    /// the page's own `<script src>` can't carry one. Public app code only.
     Static(String),
-    Health,
-    Preflight,
     BadHost,
+    /// A page from another site (`Origin` header), or a write without JSON.
+    Forbidden,
     Unauthorized,
     MethodNotAllowed,
     NotFound,
 }
 
 /// Decide what to do with a request. Token checks happen here, so nothing
-/// that needs it can be reached without it.
-pub fn route(req: &Request, port: u16, token: &str) -> Route {
+/// that needs one can be reached without it.
+pub fn route(req: &Request, port: u16, view_token: &str, write_token: &str) -> Route {
     if !host_allowed(req.header("host"), port) {
         return Route::BadHost;
     }
     let path = req.path.as_str();
     let get = req.method == "GET" || req.method == "HEAD";
-    if req.method == "OPTIONS" {
-        return Route::Preflight;
-    }
-    if path == "/health" {
-        return if get { Route::Health } else { Route::MethodNotAllowed };
-    }
+    let origin = req.header("origin");
+    // Reads: only our own page may send an Origin (same-origin fetch/EventSource).
+    let own_origin = origin.is_none_or(|o| host_allowed(o.strip_prefix("http://"), port));
     if let Some(file) = static_path(path) {
-        return if get { Route::Static(file) } else { Route::MethodNotAllowed };
+        return if !get {
+            Route::MethodNotAllowed
+        } else if own_origin {
+            Route::Static(file)
+        } else {
+            Route::Forbidden
+        };
     }
-    let known = matches!(path, "/overlay" | "/overlay/" | "/overlay/config" | "/overlay/events" | "/stream-event");
-    if !known {
-        return Route::NotFound;
+    match path {
+        "/overlay" | "/overlay/" | "/overlay/config" | "/overlay/events" => {
+            if !get {
+                return Route::MethodNotAllowed;
+            }
+            if !own_origin {
+                return Route::Forbidden;
+            }
+            if !super::token_matches(view_token, req.view_token().unwrap_or("")) {
+                return Route::Unauthorized;
+            }
+            match path {
+                "/overlay/config" => Route::Config,
+                "/overlay/events" if req.method == "GET" => Route::Events,
+                "/overlay/events" => Route::MethodNotAllowed,
+                _ => Route::Page,
+            }
+        }
+        "/stream-event" => {
+            if req.method != "POST" {
+                return Route::MethodNotAllowed;
+            }
+            // Bots and scripts don't send Origin; browsers always do on POST.
+            if origin.is_some() {
+                return Route::Forbidden;
+            }
+            let json = req
+                .header("content-type")
+                .is_some_and(|c| c.split(';').next().unwrap_or("").trim().eq_ignore_ascii_case("application/json"));
+            if !json {
+                return Route::Forbidden;
+            }
+            if !super::token_matches(write_token, req.write_token().unwrap_or("")) {
+                return Route::Unauthorized;
+            }
+            Route::StreamEvent
+        }
+        _ => Route::NotFound,
     }
-    if !super::token_matches(token, req.token().unwrap_or("")) {
-        return Route::Unauthorized;
-    }
-    match (path, req.method.as_str()) {
-        ("/overlay" | "/overlay/", "GET" | "HEAD") => Route::Page,
-        ("/overlay/config", "GET" | "HEAD") => Route::Config,
-        ("/overlay/events", "GET") => Route::Events,
-        ("/stream-event", "POST" | "GET") => Route::StreamEvent,
-        _ => Route::MethodNotAllowed,
-    }
+}
+
+/// Windows reserved device names: never a file name, even with an extension.
+fn reserved_name(seg: &str) -> bool {
+    let stem = seg.split('.').next().unwrap_or("").to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.len() == 4
+            && stem.as_bytes()[3].is_ascii_digit())
 }
 
 /// `/assets/x.js` -> `assets/x.js`. Only the two folders Vite writes, only
@@ -166,7 +212,7 @@ pub fn static_path(path: &str) -> Option<String> {
     if !(rel.starts_with("assets/") || rel.starts_with("sprites/")) || rel.len() > 200 {
         return None;
     }
-    let ok = rel.split('/').all(|seg| !seg.is_empty() && !seg.starts_with('.'))
+    let ok = rel.split('/').all(|seg| !seg.is_empty() && !seg.starts_with('.') && !reserved_name(seg))
         && rel.chars().all(|c| c.is_ascii_alphanumeric() || "._-/@".contains(c));
     ok.then(|| rel.to_string())
 }
@@ -244,13 +290,15 @@ mod tests {
         assert_eq!(r.method, "POST");
         assert_eq!(r.path, "/stream-event");
         assert_eq!(r.query("x"), Some("a b"));
-        assert_eq!(r.token(), Some("abc"));
+        assert_eq!(r.view_token(), Some("abc"));
+        assert_eq!(r.write_token(), None, "the URL never carries the write token");
         assert_eq!(r.content_length, 12);
         assert_eq!(&raw[r.head_len..], "{\"type\":\"x\"}");
         let r = req("GET / HTTP/1.1\r\nAuthorization: Bearer zz\r\n\r\n");
-        assert_eq!(r.token(), Some("zz"));
+        assert_eq!(r.write_token(), Some("zz"));
         let r = req("GET / HTTP/1.1\r\nX-Glitch-Token: yy\r\n\r\n");
-        assert_eq!(r.token(), Some("yy"));
+        assert_eq!(r.write_token(), Some("yy"));
+        assert_eq!(r.view_token(), None);
     }
 
     #[test]
@@ -272,27 +320,59 @@ mod tests {
         assert!(!host_allowed(None, 7799));
     }
 
+    const W: &str = "fedcba9876543210fedcba9876543210";
+
+    fn r(line: &str, headers: &str) -> Route {
+        route(&req(&format!("{line} HTTP/1.1\r\nHost: 127.0.0.1:7799\r\n{headers}\r\n")), 7799, T, W)
+    }
+
     #[test]
-    fn routing_needs_the_token() {
-        let r = |line: &str| route(&req(&format!("{line} HTTP/1.1\r\nHost: 127.0.0.1:7799\r\n\r\n")), 7799, T);
-        assert_eq!(r(&format!("GET /overlay?token={T}")), Route::Page);
-        assert_eq!(r("GET /overlay?token=wrong"), Route::Unauthorized);
-        assert_eq!(r("GET /overlay"), Route::Unauthorized);
-        assert_eq!(r(&format!("GET /overlay/events?token={T}")), Route::Events);
-        assert_eq!(r(&format!("GET /overlay/config?token={T}")), Route::Config);
-        assert_eq!(r(&format!("POST /stream-event?token={T}")), Route::StreamEvent);
-        assert_eq!(r(&format!("DELETE /stream-event?token={T}")), Route::MethodNotAllowed);
-        assert_eq!(r("GET /assets/overlay-x1.js"), Route::Static("assets/overlay-x1.js".into()));
-        assert_eq!(r("GET /assets/../settings.json"), Route::NotFound);
-        assert_eq!(r("GET /assets/%2e%2e/x"), Route::NotFound);
-        assert_eq!(r("GET /health"), Route::Health);
-        assert_eq!(r("GET /secret"), Route::NotFound);
+    fn reading_needs_the_view_token() {
+        assert_eq!(r(&format!("GET /overlay?token={T}"), ""), Route::Page);
+        assert_eq!(r("GET /overlay?token=wrong", ""), Route::Unauthorized);
+        assert_eq!(r("GET /overlay", ""), Route::Unauthorized);
+        assert_eq!(r(&format!("GET /overlay?token={W}"), ""), Route::Unauthorized, "the write token doesn't read");
+        assert_eq!(r(&format!("GET /overlay/events?token={T}"), ""), Route::Events);
+        assert_eq!(r(&format!("GET /overlay/config?token={T}"), "Origin: http://127.0.0.1:7799\r\n"), Route::Config);
+        assert_eq!(r(&format!("GET /overlay/config?token={T}"), "Origin: https://evil.example\r\n"), Route::Forbidden);
+        assert_eq!(r(&format!("POST /overlay?token={T}"), ""), Route::MethodNotAllowed);
+        assert_eq!(r("GET /assets/overlay-x1.js", ""), Route::Static("assets/overlay-x1.js".into()));
+        assert_eq!(r("GET /assets/overlay-x1.js", "Origin: https://evil.example\r\n"), Route::Forbidden);
+        assert_eq!(r("GET /assets/../settings.json", ""), Route::NotFound);
+        assert_eq!(r("GET /assets/%2e%2e/x", ""), Route::NotFound);
+        assert_eq!(r("GET /health", ""), Route::NotFound);
+        assert_eq!(r(&format!("OPTIONS /stream-event?token={T}"), ""), Route::MethodNotAllowed);
+        assert_eq!(r("GET /secret", ""), Route::NotFound);
         let bad = req(&format!("GET /overlay?token={T} HTTP/1.1\r\nHost: evil.example:7799\r\n\r\n"));
-        assert_eq!(route(&bad, 7799, T), Route::BadHost);
+        assert_eq!(route(&bad, 7799, T, W), Route::BadHost);
         // An empty token (not generated yet) never matches.
         assert_eq!(
-            route(&req("GET /overlay?token= HTTP/1.1\r\nHost: 127.0.0.1:7799\r\n\r\n"), 7799, ""),
+            route(&req("GET /overlay?token= HTTP/1.1\r\nHost: 127.0.0.1:7799\r\n\r\n"), 7799, "", W),
             Route::Unauthorized
+        );
+    }
+
+    #[test]
+    fn writing_needs_the_write_token_in_a_header() {
+        let json = "Content-Type: application/json\r\n";
+        assert_eq!(r("POST /stream-event", &format!("{json}X-Glitch-Token: {W}\r\n")), Route::StreamEvent);
+        let utf8 = format!("Content-Type: application/json; charset=utf-8\r\nAuthorization: Bearer {W}\r\n");
+        assert_eq!(r("POST /stream-event", &utf8), Route::StreamEvent);
+        // Not the view token, not in the URL, not as GET, not without JSON, not from a browser.
+        assert_eq!(r("POST /stream-event", &format!("{json}X-Glitch-Token: {T}\r\n")), Route::Unauthorized);
+        assert_eq!(r(&format!("POST /stream-event?token={W}"), json), Route::Unauthorized);
+        assert_eq!(r(&format!("GET /stream-event?token={W}&type=chat&text=hi"), ""), Route::MethodNotAllowed);
+        assert_eq!(
+            r("POST /stream-event", &format!("Content-Type: text/plain\r\nX-Glitch-Token: {W}\r\n")),
+            Route::Forbidden
+        );
+        assert_eq!(
+            r("POST /stream-event", &format!("{json}X-Glitch-Token: {W}\r\nOrigin: http://127.0.0.1:7799\r\n")),
+            Route::Forbidden
+        );
+        assert_eq!(
+            r("POST /stream-event", &format!("{json}X-Glitch-Token: {W}\r\nOrigin: null\r\n")),
+            Route::Forbidden
         );
     }
 
@@ -303,6 +383,10 @@ mod tests {
         assert_eq!(static_path("/assets/a\\b"), None);
         assert_eq!(static_path("/panel.html"), None);
         assert_eq!(static_path("/assets//x"), None);
+        assert_eq!(static_path("/assets/CON"), None);
+        assert_eq!(static_path("/assets/nul.js"), None);
+        assert_eq!(static_path("/assets/com1.png"), None);
+        assert_eq!(static_path("/assets/console.js").as_deref(), Some("assets/console.js"));
     }
 
     #[test]

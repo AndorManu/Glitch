@@ -34,20 +34,23 @@ pub struct Settings {
     /// Voice commands (push-to-talk). Missing in older files → defaults.
     pub voice: VoiceSettings,
     /// Streaming overlay (OBS browser source). Off by default.
-    pub stream: StreamSettings,
+    pub stream_overlay: StreamSettings,
     /// Update checks against GitHub Releases.
-    pub updates: UpdateSettings,
+    pub auto_update: UpdateSettings,
 }
 
 /// The OBS overlay (src-tauri/src/stream/). Missing in older files: off.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StreamSettings {
     pub enabled: bool,
     /// Port on 127.0.0.1 for the overlay page and the event webhook.
     pub port: u16,
-    /// Secret in the overlay URL; made on first start, new one on "New link".
-    pub token: String,
+    /// Secret in the OBS URL: only *reads* (page, config, events). Made on
+    /// first start; "New link" replaces it.
+    pub view_token: String,
+    /// Secret for `POST /stream-event` (header only, never in a URL).
+    pub write_token: String,
     /// "mirror": the desktop Glitch's animation and bubble.
     /// "walk": a separate stream Glitch walking along the bottom.
     pub mode: String,
@@ -74,7 +77,8 @@ impl Default for StreamSettings {
         Self {
             enabled: false,
             port: 7799,
-            token: String::new(),
+            view_token: String::new(),
+            write_token: String::new(),
             mode: "mirror".into(),
             size: 1.0,
             position: "right".into(),
@@ -85,6 +89,28 @@ impl Default for StreamSettings {
             streamerbot_url: crate::stream::streamerbot::DEFAULT_URL.into(),
             twitch_channel: String::new(),
         }
+    }
+}
+
+/// Secrets stay out of logs and panic messages.
+impl std::fmt::Debug for StreamSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redact = |t: &str| if t.is_empty() { "" } else { "<redacted>" };
+        f.debug_struct("StreamSettings")
+            .field("enabled", &self.enabled)
+            .field("port", &self.port)
+            .field("view_token", &redact(&self.view_token))
+            .field("write_token", &redact(&self.write_token))
+            .field("mode", &self.mode)
+            .field("size", &self.size)
+            .field("position", &self.position)
+            .field("react", &self.react)
+            .field("show_chat", &self.show_chat)
+            .field("mirror_chat", &self.mirror_chat)
+            .field("streamerbot", &self.streamerbot)
+            .field("streamerbot_url", &self.streamerbot_url)
+            .field("twitch_channel", &self.twitch_channel)
+            .finish()
     }
 }
 
@@ -140,8 +166,8 @@ impl Default for Settings {
             screen_enabled: true,
             notes_trusted: false,
             voice: VoiceSettings::default(),
-            stream: StreamSettings::default(),
-            updates: UpdateSettings::default(),
+            stream_overlay: StreamSettings::default(),
+            auto_update: UpdateSettings::default(),
         }
     }
 }
@@ -260,19 +286,29 @@ mod tests {
         let path = dir.path().join("settings.json");
         std::fs::write(&path, r#"{"model":"qwen3.5:2b"}"#).unwrap();
         let s = Settings::load(&path);
-        assert!(!s.stream.enabled, "the overlay is off until turned on");
-        assert_eq!(s.stream.port, 7799);
-        assert_eq!(s.stream.mode, "mirror");
-        assert!(!s.stream.mirror_chat, "private chats stay off stream");
-        assert!(s.stream.token.is_empty());
-        assert!(s.updates.auto_check);
-        std::fs::write(&path, r#"{"stream":{"enabled":true,"twitch_channel":"x"},"updates":{"auto_check":false}}"#)
-            .unwrap();
+        assert!(!s.stream_overlay.enabled, "the overlay is off until turned on");
+        assert_eq!(s.stream_overlay.port, 7799);
+        assert_eq!(s.stream_overlay.mode, "mirror");
+        assert!(!s.stream_overlay.mirror_chat, "private chats stay off stream");
+        assert!(s.stream_overlay.view_token.is_empty() && s.stream_overlay.write_token.is_empty());
+        assert!(s.auto_update.auto_check);
+        let json = r#"{"stream_overlay":{"enabled":true,"twitch_channel":"x"},"auto_update":{"auto_check":false}}"#;
+        std::fs::write(&path, json).unwrap();
         let s = Settings::load(&path);
-        assert!(s.stream.enabled && s.stream.react);
-        assert_eq!(s.stream.twitch_channel, "x");
-        assert!(!s.updates.auto_check);
+        assert!(s.stream_overlay.enabled && s.stream_overlay.react);
+        assert_eq!(s.stream_overlay.twitch_channel, "x");
+        assert!(!s.auto_update.auto_check);
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);
+    }
+
+    #[test]
+    fn tokens_never_show_in_debug_output() {
+        let mut s = Settings::default();
+        s.stream_overlay.view_token = "viewsecret123".into();
+        s.stream_overlay.write_token = "writesecret456".into();
+        let d = format!("{s:?}");
+        assert!(!d.contains("viewsecret123") && !d.contains("writesecret456"));
+        assert!(d.contains("<redacted>"));
     }
 }

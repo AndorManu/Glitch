@@ -10,6 +10,7 @@ mod layout;
 mod ledge_watch;
 mod os;
 mod state;
+mod stream;
 mod voice;
 mod windows;
 mod world_native;
@@ -93,6 +94,7 @@ fn main() {
             app.manage(hover::Hitbox::default());
             app.manage(chaos::ChaosState::default());
             voice::setup(app.handle());
+            stream::setup(app.handle());
             hover::start(app.handle().clone());
             os::configure(app);
             build_tray(app.handle())?;
@@ -158,6 +160,12 @@ fn main() {
             voice::commands::voice_cancel_download,
             voice::commands::voice_delete_model,
             voice::commands::voice_open_mic_settings,
+            stream::stream_status,
+            stream::update_stream_settings,
+            stream::stream_new_token,
+            stream::stream_test_event,
+            stream::stream_copy,
+            stream::stream_mirror,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Glitch")

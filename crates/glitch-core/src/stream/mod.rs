@@ -108,14 +108,6 @@ pub fn parse_webhook_json(body: &[u8]) -> Result<StreamEvent, String> {
     Ok(StreamEvent::new(kind, &value_text(b.user), &value_text(b.text)))
 }
 
-/// `GET /stream-event?type=follow&user=ana&text=...` (for tools that can only
-/// fetch a URL, like Streamer.bot's "Fetch URL" sub-action).
-pub fn parse_webhook_query(query: &[(String, String)]) -> Result<StreamEvent, String> {
-    let get = |k: &str| query.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str()).unwrap_or("");
-    let kind = EventKind::parse(get("type")).ok_or("add type=follow, sub, raid or chat")?;
-    Ok(StreamEvent::new(kind, get("user"), get("text")))
-}
-
 /// How Glitch reacts: an animation (a name the mascot's `playAction` knows)
 /// and the line in his speech bubble.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -237,9 +229,6 @@ mod tests {
         assert_eq!((e.kind, e.user.as_str(), e.text.as_str()), (EventKind::Chat, "c", "hello world"));
         assert!(parse_webhook_json(br#"{"type":"donate"}"#).unwrap_err().contains("unknown type"));
         assert!(parse_webhook_json(b"nope").is_err());
-        let q = vec![("type".to_string(), "sub".to_string()), ("user".to_string(), "Dee".to_string())];
-        assert_eq!(parse_webhook_query(&q).unwrap().kind, EventKind::Sub);
-        assert!(parse_webhook_query(&[]).is_err());
     }
 
     #[test]

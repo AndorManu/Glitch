@@ -26,7 +26,7 @@ pub struct UiError {
 }
 
 impl UiError {
-    fn new(code: &'static str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self { code, message: message.into() }
     }
 }
@@ -186,7 +186,9 @@ pub async fn send_message(app: AppHandle, state: State<'_, AppState>, text: Stri
 /// (the model is still loaded right now, so this is cheap), and save the end
 /// of the chat so it survives a restart. Runs in the background.
 fn after_turn(app: &AppHandle, model: &str, result: &Result<Step, AgentError>) {
-    let Ok(Step::Reply { actions, .. }) = result else { return };
+    let Ok(Step::Reply { actions, text }) = result else { return };
+    // The stream overlay shows it too, only if the user allowed that.
+    crate::stream::said(app, text);
     let memory_touched = actions.iter().any(|a| a.starts_with("Remembered") || a.starts_with("Forgot"));
     let (app, model) = (app.clone(), model.to_string());
     tauri::async_runtime::spawn(async move {
