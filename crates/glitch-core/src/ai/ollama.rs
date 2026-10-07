@@ -26,7 +26,9 @@ pub const DEFAULT_NUM_CTX: u32 = 4096;
 const QUICK_TIMEOUT: Duration = Duration::from_secs(3);
 /// First message may need to load the model from disk; slow PCs need time.
 const CHAT_TIMEOUT: Duration = Duration::from_secs(300);
-const PULL_STALL_TIMEOUT: Duration = Duration::from_secs(60);
+/// No bytes at all for this long = stalled. Generous: after a big blob is
+/// downloaded Ollama verifies its sha256 without sending anything.
+const PULL_STALL_TIMEOUT: Duration = Duration::from_secs(180);
 
 pub struct OllamaClient {
     base_url: String,
@@ -180,7 +182,7 @@ impl OllamaClient {
             Ok(done)
         };
         let mut success = false;
-        // A stalled download must not hang forever: no data for a minute = error.
+        // A stalled download must not hang forever: no data for 3 minutes = error.
         while let Some(chunk) = tokio::time::timeout(PULL_STALL_TIMEOUT, resp.chunk())
             .await
             .map_err(|_| AiError::TimedOut)?
