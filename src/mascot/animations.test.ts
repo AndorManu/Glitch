@@ -9,6 +9,7 @@ import {
   ANIMATIONS,
   Animator,
   burst,
+  IDLE_BUDGET,
   type Clock,
   isAnimationName,
   type Keyframe,
@@ -64,9 +65,14 @@ function simulate(name: AnimationName, ms: number, seed = 1, anims: Record<Anima
 
 /** All keys an animation can produce (makers are random: sample many seeds). */
 function allKeys(anim: Animation): Keyframe[] {
-  if (typeof anim.keys !== "function") return anim.keys;
   const out: Keyframe[] = [];
-  for (let seed = 1; seed <= 200; seed++) out.push(...anim.keys(mulberry32(seed)));
+  for (let seed = 1; seed <= 200; seed++) {
+    const mem = {};
+    if (typeof anim.keys === "function") out.push(...anim.keys(mulberry32(seed), mem));
+    else out.push(...anim.keys);
+    if (anim.intro) out.push(...anim.intro(mulberry32(seed), mem));
+    if (anim.outro) out.push(...anim.outro(mulberry32(seed), mem));
+  }
   out.push(...burst(mulberry32(7)));
   return out;
 }
@@ -105,7 +111,7 @@ describe("animations", () => {
   });
 
   it("the walk plays all 8 drawn frames in order", () => {
-    const frames = (ANIMATIONS.walk.keys as (r: () => number) => Keyframe[])(mulberry32(3)).map((k) => k.frame);
+    const frames = (ANIMATIONS.walk.keys as (r: () => number, m: object) => Keyframe[])(mulberry32(3), {}).map((k) => k.frame);
     expect(frames).toEqual(["walk0", "walk1", "walk2", "walk3", "walk4", "walk5", "walk6", "walk7"]);
   });
 
@@ -237,14 +243,14 @@ describe("Animator", () => {
 });
 
 describe("CPU budgets (60 s of fake time)", () => {
-  it("idle, bursts included: under 1.5 repaints and 1.5 timer wakeups per second", () => {
+  it("idle, bursts included: under IDLE_BUDGET repaints and timer wakeups per second", () => {
     let bursts = 0;
     let worst = 0;
     for (let seed = 1; seed <= 40; seed++) {
       const r = simulate("idle", 60_000, seed);
       const s = r.elapsed / 1000;
-      expect(r.draws / s, `seed ${seed} repaints/s`).toBeLessThan(1.5);
-      expect(r.wakeups / s, `seed ${seed} wakeups/s`).toBeLessThan(1.5);
+      expect(r.draws / s, `seed ${seed} repaints/s`).toBeLessThan(IDLE_BUDGET);
+      expect(r.wakeups / s, `seed ${seed} wakeups/s`).toBeLessThan(IDLE_BUDGET);
       expect(r.maxPending).toBe(1);
       worst = Math.max(worst, r.draws / s, r.wakeups / s);
       // Bursts: count runs of glitchy repaints; each is short and at most 20 fps.

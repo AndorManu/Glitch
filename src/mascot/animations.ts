@@ -7,6 +7,10 @@
 // sx/sy scale around the feet (or `pivot`). glitch 0..1 drives render.ts.
 
 import type { GridPropName } from "./props";
+import { bridge, clip, edges, familyOf, has, pickVariant } from "./transitions";
+
+/** Animations that are a way of moving along: walking hands over to these without stopping first. */
+const GAITS = ["walk", "run", "climb", "carryCursor", "dragWindow", "pushWindow", "cling"];
 
 export type Fx = "trail" | "sparkle" | "zzz" | "eye" | "dust" | "dizzy" | "eq";
 
@@ -53,7 +57,9 @@ export interface Pose {
   props: PropPlacement[];
 }
 
-export type KeyMaker = (rand: () => number) => Keyframe[];
+/** Per-animator memory makers can use (cooldowns, last variant picked...). */
+export type Memory = Record<string, unknown>;
+export type KeyMaker = (rand: () => number, mem: Memory) => Keyframe[];
 
 export interface Animation {
   /** Fixed keys, or a maker called again on every loop (random variation). */
@@ -61,11 +67,27 @@ export interface Animation {
   /** Play once then switch to `next` (default "idle") instead of looping. */
   once?: boolean;
   next?: AnimationName;
+  /** Played once before the first loop (e.g. walk_start). */
+  intro?: KeyMaker;
+  /** Played when switching to a different animation (e.g. walk_stop). */
+  outro?: KeyMaker;
+  /**
+   * false: start right away, never through a transition clip (physics-driven
+   * and urgent animations: falling, being held, startled...).
+   */
+  bridge?: boolean;
 }
 
 /** Hard cap so no animation can ever burn CPU, whatever its keys say. */
 export const MAX_FPS = 20;
 export const MIN_KEY_MS = Math.ceil(1000 / MAX_FPS);
+/**
+ * Average repaints (and timer wakeups) per second allowed while resting.
+ * Raised from 1.5 to 2 for the drawn idle fidgets (sneeze, scratch, groom,
+ * sitting down and standing up again...): still a tiny cost, one 160x160
+ * canvas drawImage per repaint.
+ */
+export const IDLE_BUDGET = 2;
 /** Walk keys: 12 fps drawn frames (the window itself moves at 30 Hz, see creature.ts). */
 const WALK_MS = 83;
 /** Run keys: ~14 fps. */
@@ -133,38 +155,96 @@ function walkCycle(rand: () => number, _lean = 0, extra?: Extra): Keyframe[] {
 
 // ------------------------------------------------------------------- moods
 
-/** Sits down for a calm moment (sit0-7): blinks, looks around. */
-function fidgetSit(rand: () => number = Math.random): Keyframe[] {
-  return [k("sit0", 1800 + rand() * 1200), k("sit1", 160), k("sit0", 1200), k("sit3", 1500), k("sit4", 800), k("sit5", 1200), k("sit0", 700)];
+/** A calm sit in the sit family (sit0-7, sit_idle_look when drawn): blinks, looks around. */
+function sitLoop(rand: () => number = Math.random): Keyframe[] {
+  const keys = [k("sit0", 1800 + rand() * 1200), k("sit1", 160), k("sit0", 1200)];
+  if (has("sit_idle_look")) keys.push(...clip("sit_idle_look", 160, { ease: 2, hold: 600 }));
+  else keys.push(k("sit3", 1500), k("sit4", 800), k("sit5", 1200));
+  keys.push(k("sit0", 700));
+  return keys;
 }
 
-function fidget(rand: () => number): Keyframe[] {
-  switch (Math.floor(rand() * 7)) {
-    case 0: // now and then a sneeze: itch, ah... ah... (anticipation), CHOO, rub the nose
-      if (rand() < 0.5) return [k("idle1", 1800 + rand() * 1500)];
-      return [
-        k("sneeze0", 150),
-        k("sneeze1", 260),
-        k("sneeze2", 300),
-        k("sneeze3", 380),
-        k("sneeze4", 140, { glitch: 0.45, fx: "eye" }),
-        k("sneeze5", 220),
-        k("sneeze6", 360),
-        k("sneeze7", 220),
-      ];
-    case 6:
-      return fidgetSit(rand);
-    case 1: // glance sideways (sometimes both ways)
-      return rand() < 0.5 ? [k("side", 1400 + rand() * 900)] : [k("side", 1100), k("side", 1000, { flip: true })];
-    case 2:
-      return hop("idle0", 6 + rand() * 4);
-    case 3: // the glitch eye twitches
-      return [k("idle0", 60, { glitch: 0.2, fx: "eye" }), k("idle0", 120, { fx: "eye" }), k("idle0", 60, { glitch: 0.35, fx: "eye" })];
-    case 4: // swish the tail
-      return [k("idle1", 1800 + rand() * 1500)];
-    default: // a slow stretch
-      return [k("idle0", 400, { sx: 0.96, sy: 1.05 }), k("idle0", 500, { sx: 0.95, sy: 1.06, dy: -1 }), k("idle0", 300, { sx: 1.03, sy: 0.97 })];
+/** The sit loop on its own (the `sit` animation is entered and left through the transition clips). */
+const fidgetSit = sitLoop;
+
+/** A sheet played as an idle fidget: eased in and out, ending back on idle0. */
+const sheetFidget = (name: string, ms: number, o: { ease?: number; hold?: number } = {}): Keyframe[] => [...clip(name, ms, { ease: o.ease ?? 2, hold: o.hold }), k("idle0", 200)];
+
+interface Fidget {
+  id: string;
+  weight: number;
+  /** Idle loops (8-25 s each) before it may come again. */
+  cooldown: number;
+  make: (rand: () => number, mem: Memory) => Keyframe[] | null;
+}
+
+/** Sit down, sit a while, stand up again: each step a drawn clip, a different stand-up each time. */
+function sitBreak(rand: () => number, mem: Memory): Keyframe[] | null {
+  const down = edges()["front>sit"];
+  const up = edges()["sit>front"];
+  if (!down || !up) return null;
+  const last = ((mem.lastClip as Record<string, string>) ??= {});
+  const d = pickVariant(down, rand, last["front>sit"]);
+  const u = pickVariant(up, rand, last["sit>front"]);
+  last["front>sit"] = d.id;
+  last["sit>front"] = u.id;
+  return [...d.keys(rand), ...sitLoop(rand), ...u.keys(rand), k("idle0", 200)];
+}
+
+const FIDGETS: Fidget[] = [
+  { id: "tail", weight: 2, cooldown: 1, make: (r) => [k("idle1", 1800 + r() * 1500)] },
+  { id: "eye", weight: 1, cooldown: 1, make: () => [k("idle0", 60, { glitch: 0.2, fx: "eye" }), k("idle0", 120, { fx: "eye" }), k("idle0", 60, { glitch: 0.35, fx: "eye" })] },
+  {
+    id: "sneeze",
+    weight: 1.5,
+    cooldown: 4,
+    // itch, ah... ah... (anticipation), CHOO with a spark, rub the nose
+    make: () => [k("sneeze0", 150), k("sneeze1", 260), k("sneeze2", 300), k("sneeze3", 380), k("sneeze4", 140, { glitch: 0.45, fx: "eye" }), k("sneeze5", 220), k("sneeze6", 360), k("sneeze7", 220), k("idle0", 200)],
+  },
+  { id: "sit", weight: 2, cooldown: 2, make: sitBreak },
+  { id: "scratch", weight: 2, cooldown: 2, make: () => (has("scratch") ? sheetFidget("scratch", 110) : null) },
+  { id: "groom", weight: 2, cooldown: 2, make: () => (has("groom") ? sheetFidget("groom", 120) : null) },
+  { id: "stretch", weight: 1.5, cooldown: 3, make: () => (has("stretch") ? sheetFidget("stretch", 130, { hold: 500 }) : null) },
+  { id: "shake_off", weight: 1, cooldown: 3, make: () => (has("shake_off") ? sheetFidget("shake_off", 80) : null) },
+  { id: "hop", weight: 1.5, cooldown: 2, make: (r) => (has("hop_idle") ? sheetFidget("hop_idle", 85, { ease: 1 }) : hop("idle0", 6 + r() * 4)) },
+  { id: "look_back", weight: 2, cooldown: 2, make: () => (has("look_back") ? sheetFidget("look_back", 120, { hold: 700 }) : null) },
+  { id: "tail_chase", weight: 0.3, cooldown: 8, make: () => (has("tail_chase") ? [...clip("tail_chase", 85, { ease: 1 }), ...clip("tail_chase", 85, { ease: 0 }), k("idle0", 200)] : null) },
+  {
+    id: "glance",
+    weight: 2,
+    cooldown: 1,
+    // Turns his head to the side (the first half of the turn), looks, turns back.
+    make: (r) => {
+      if (!has("turn_front_to_side")) return [k("side", 1400 + r() * 900)];
+      const half = clip("turn_front_to_side", 90, { ease: 1, pick: [0, 1, 2] });
+      return [...half, k(half[half.length - 1].frame, 900 + r() * 700), ...[...half].reverse(), k("idle0", 200)];
+    },
+  },
+];
+
+/**
+ * One idle fidget, weighted, never the same one twice in a row, each with a
+ * cooldown in idle loops (per animator, in `mem`).
+ */
+function fidget(rand: () => number, mem: Memory = {}): Keyframe[] {
+  const loop = ((mem.idleLoop as number) ?? 0) + 1;
+  mem.idleLoop = loop;
+  const used = ((mem.fidgetUsed as Record<string, number>) ??= {});
+  const ok = FIDGETS.filter((f) => f.id !== mem.lastFidget && loop - (used[f.id] ?? -99) > f.cooldown);
+  let total = ok.reduce((t, f) => t + f.weight, 0);
+  while (ok.length) {
+    let r = rand() * total;
+    const f = ok.find((x) => (r -= x.weight) <= 0) ?? ok[ok.length - 1];
+    const keys = f.make(rand, mem);
+    if (keys && keys.length) {
+      mem.lastFidget = f.id;
+      used[f.id] = loop;
+      return keys;
+    }
+    ok.splice(ok.indexOf(f), 1);
+    total -= f.weight;
   }
+  return [k("idle1", 1800)];
 }
 
 /**
@@ -172,7 +252,7 @@ function fidget(rand: () => number): Keyframe[] {
  * every 4.5-7 s, sometimes a fidget, then a glitch burst. One loop lasts
  * 8-25 s, so bursts come at random intervals.
  */
-function idleKeys(rand: () => number): Keyframe[] {
+function idleKeys(rand: () => number, mem: Memory = {}): Keyframe[] {
   const keys: Keyframe[] = [];
   const until = 8000 + rand() * 17000;
   const fidgetAt = rand() < 0.65 ? until * (0.25 + 0.5 * rand()) : Infinity;
@@ -199,7 +279,7 @@ function idleKeys(rand: () => number): Keyframe[] {
     }
     if (!fidgeted && t >= fidgetAt) {
       fidgeted = true;
-      const extra = fidget(rand);
+      const extra = fidget(rand, mem);
       keys.push(...extra);
       t += sum(extra);
     }
@@ -716,7 +796,13 @@ export type AnimationName =
 export const ANIMATIONS: Record<AnimationName, Animation> = {
   // moods
   idle: { keys: idleKeys },
-  walk: { keys: (r) => walkCycle(r) },
+  walk: {
+    keys: (r) => walkCycle(r),
+    // From standing facing you: the drawn first steps (turns side-on as he sets off).
+    intro: (_r, mem) => (familyOf(String(mem.fromFrame ?? "")) === "front" && has("walk_start") ? clip("walk_start", 85, { ease: 1 }) : []),
+    // Stopping (unless he goes straight into another gait): the drawn stop, settling side-on.
+    outro: (_r, mem) => (has("walk_stop") && !GAITS.includes(String(mem.next)) ? clip("walk_stop", 90, { ease: 1, hold: 200 }) : []),
+  },
   think: { keys: thinkKeys },
   ask: { keys: askKeys },
   happy: { keys: happyKeys, once: true },
@@ -788,6 +874,16 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   heldKick: { keys: heldKickKeys },
   listen: { keys: listenKeys },
 };
+
+/**
+ * Started by the physics or by surprise: these begin at once, never through a
+ * transition clip (a fall can't wait for him to stand up first).
+ */
+const NO_BRIDGE: AnimationName[] = [
+  "startled", "dangle", "fall", "land", "glitchOut", "gone", "glitchIn", "chaosSpin", "cling", "climb", "crouch", "airUp",
+  "airDown", "tumble", "flail", "splat", "dizzy", "lookBack", "malfunction", "held", "heldKick", "peek", "peekEdge",
+];
+for (const n of NO_BRIDGE) ANIMATIONS[n].bridge = false;
 
 export function isAnimationName(name: unknown): name is AnimationName {
   return typeof name === "string" && Object.prototype.hasOwnProperty.call(ANIMATIONS, name);
@@ -862,6 +958,8 @@ export class Animator {
   private timer: unknown = null;
   private lastPose: Pose | null = null;
   private tick = 0;
+  /** Memory for key makers and transition variants (per animator, so runs stay reproducible). */
+  readonly mem: Memory = {};
   /** Called after every switch of animation (also when a one-shot hands over to its follow-up). */
   onChange: ((name: AnimationName) => void) | null = null;
 
@@ -890,12 +988,22 @@ export class Animator {
    * Switch animation. A `once` animation then plays `then` (default: its
    * `next`, else "idle"). Re-playing the running loop does nothing.
    */
-  play(name: AnimationName, then?: AnimationName): void {
+  play(name: AnimationName, then?: AnimationName, lead: Keyframe[] = []): void {
     const anim = this.animations[name];
-    if (name === this.current && !anim.once && this.keys.length > 0) return;
+    if (name === this.current && !anim.once && this.keys.length > 0 && lead.length === 0) return;
+    const prev = this.animations[this.current];
+    const leaving = name !== this.current && this.keys.length > 0 && prev?.outro && this.index < this.keys.length + 1;
+    this.mem.next = name;
+    const outro = leaving && anim.bridge !== false ? prev.outro!(this.random, this.mem) : [];
     this.current = name;
     this.then = then ?? anim.next ?? "idle";
-    this.keys = this.resolve(anim);
+    // What is on screen once the outro and the lead-in have played.
+    const shown = [...outro, ...lead].at(-1)?.frame ?? this.lastPose?.frame ?? null;
+    this.mem.fromFrame = shown;
+    const body = [...(anim.intro && anim.bridge !== false ? anim.intro(this.random, this.mem) : []), ...this.resolve(anim)];
+    // Never cut between pose families: bridge to the first frame of the new animation.
+    const glue = anim.bridge === false || body.length === 0 ? [] : bridge(shown, body[0].frame, this.random, this.mem as { lastClip?: Record<string, string> });
+    this.keys = [...outro, ...lead, ...glue, ...body];
     this.index = 0;
     this.lastPose = null; // always draw the first key of a new animation
     this.step();
@@ -926,7 +1034,7 @@ export class Animator {
   }
 
   private resolve(anim: Animation): Keyframe[] {
-    return typeof anim.keys === "function" ? anim.keys(this.random) : anim.keys;
+    return typeof anim.keys === "function" ? anim.keys(this.random, this.mem) : anim.keys;
   }
 
   private step = (): void => {

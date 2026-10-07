@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Pose } from "./animations";
+import { IDLE_BUDGET, type Pose } from "./animations";
 import { Creature, type CreatureClock, type Host, LEDGE_WATCH_MS, SLEEP_AFTER_MS, type View, WORLD_MIN_MS } from "./creature";
 import { mulberry32 } from "./glitchfx";
 import { HALF, type Vec, type World } from "./physics";
@@ -130,7 +130,7 @@ describe("creature: standing, resting, budgets", () => {
     expect(t.c.surface.kind).toBe("floor");
   });
 
-  it("resting: under 1.5 repaints and 1.5 timer wakeups per second, no window moves, no polling", async () => {
+  it("resting: under IDLE_BUDGET repaints and timer wakeups per second, no window moves, no polling", async () => {
     for (let seed = 1; seed <= 8; seed++) {
       const t = setup({ seed });
       await t.c.start({ x: 1700, y: 880 });
@@ -140,8 +140,8 @@ describe("creature: standing, resting, budgets", () => {
       const from = t.fc.now;
       await t.fc.run(120_000);
       const secs = 120;
-      expect(rate(t.rec.renders, from, from + 120_000), `seed ${seed} repaints/s`).toBeLessThan(1.5);
-      expect((t.fc.wakeups - w0) / secs, `seed ${seed} wakeups/s`).toBeLessThan(1.5);
+      expect(rate(t.rec.renders, from, from + 120_000), `seed ${seed} repaints/s`).toBeLessThan(IDLE_BUDGET);
+      expect((t.fc.wakeups - w0) / secs, `seed ${seed} wakeups/s`).toBeLessThan(IDLE_BUDGET);
       expect(rate(t.rec.moves, from, from + 120_000)).toBe(0);
       expect(rate(t.rec.polls, from, from + 120_000)).toBe(0);
       console.info(`resting seed ${seed}: ${rate(t.rec.renders, from, from + 120_000).toFixed(2)} repaints/s, ${((t.fc.wakeups - w0) / secs).toFixed(2)} wakeups/s`);
@@ -160,8 +160,8 @@ describe("creature: standing, resting, budgets", () => {
     const w0 = t.fc.wakeups;
     const from = t.fc.now;
     await t.fc.run(120_000);
-    expect(rate(t.rec.renders, from, from + 120_000)).toBeLessThan(1.5);
-    expect((t.fc.wakeups - w0) / 120).toBeLessThan(1.5);
+    expect(rate(t.rec.renders, from, from + 120_000)).toBeLessThan(IDLE_BUDGET);
+    expect((t.fc.wakeups - w0) / 120).toBeLessThan(IDLE_BUDGET);
     console.info(`resting on a window top: ${rate(t.rec.renders, from, from + 120_000).toFixed(2)} repaints/s, ${((t.fc.wakeups - w0) / 120).toFixed(2)} wakeups/s`);
     const polls = t.rec.polls.filter((p) => p >= from);
     expect(polls.length).toBeGreaterThan(30); // it does keep an eye on the window under him

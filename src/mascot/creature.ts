@@ -4,7 +4,7 @@
 // a fake desktop in dev/stage.html.
 //
 // Timers (never requestAnimationFrame):
-// - the Animator's one keyframe timer (about 1/s while idle);
+// - the Animator's one keyframe timer (under 2/s while idle, see IDLE_BUDGET);
 // - the brain timer: one pending at most (rest, or the current step's wait);
 // - the motion timer, ONLY while the window actually moves: 30 Hz walking,
 //   climbing and settling, 60 Hz in the air or while held;
@@ -12,7 +12,8 @@
 // While moving, a repaint happens only when the picture changes (a new key,
 // a new angle); the window move alone carries a walking sprite.
 
-import { ANIMATIONS, type AnimationName, Animator, type Clock, isAnimationName, landKeys, type Pose } from "./animations";
+import { ANIMATIONS, type AnimationName, Animator, type Clock, isAnimationName, type Keyframe, landKeys, type Pose } from "./animations";
+import { familyOf, turnKeys } from "./transitions";
 import { type BehaviourName, Brain, type BrainContext, isBehaviourName, type Plan, type Gait } from "./brain";
 import { capSpeed, Pendulum, VelocityTracker } from "./drag";
 import {
@@ -275,6 +276,28 @@ export class Creature {
   }
 
   private talkTimer: unknown = null;
+
+  /**
+   * Face left/right. Standing (side-on or facing you), he turns round with
+   * the drawn turn; elsewhere (walls, air) the picture just mirrors. Returns
+   * the turn keys for the caller to lead its next animation with; the
+   * renderer's facing switches now (keys with flip show the old facing until
+   * the turn passes the front view).
+   */
+  private turn(left: boolean): Keyframe[] {
+    if (left === this.facingLeft) return [];
+    const frame = this.animator.pose?.frame ?? "idle0";
+    this.facingLeft = left;
+    if (this.mode !== "stand" || !isStanding(this.surface) || this.asleep) return [];
+    const fam = familyOf(frame);
+    return fam === "side" || fam === "front" ? turnKeys(fam, left, frame) : [];
+  }
+
+  /** Turn round on the spot, then carry on with what was playing. */
+  private turnNow(left: boolean): void {
+    const keys = this.turn(left);
+    if (keys.length) this.animator.interject(() => keys);
+  }
 
   /**
    * The chat bubble started showing a reply of `chars` characters: move his
@@ -891,9 +914,14 @@ export class Creature {
         const to = clampTo(this.surface, step.to, w);
         if (Math.abs(to - this.s) < 2 * u) return this.nextStep();
         const dir = Math.sign(to - this.s);
-        this.facingLeft = facesLeftFor(this.surface.kind, dir);
-        this.loco = { to, gait: step.gait, v: 0, dir, freezeUntil: 0, skip: 0, nextGlitchAt: this.now + 2500 + this.rand() * 9000 };
-        this.animator.play(step.gait === "run" ? "run" : step.gait === "climb" ? "climb" : "walk");
+        const left = facesLeftFor(this.surface.kind, dir);
+        // Already side-on and turning round: the drawn turn first, standing still meanwhile.
+        let lead: Keyframe[] = [];
+        if (familyOf(this.animator.pose?.frame ?? "idle0") === "side") lead = this.turn(left);
+        else this.facingLeft = left;
+        const wait = lead.reduce((t, k) => t + k.ms, 0);
+        this.loco = { to, gait: step.gait, v: 0, dir, freezeUntil: this.now + wait, skip: 0, nextGlitchAt: this.now + 2500 + this.rand() * 9000 };
+        this.animator.play(step.gait === "run" ? "run" : step.gait === "climb" ? "climb" : "walk", undefined, lead);
         this.ensureMotion();
         return;
       }
@@ -911,7 +939,7 @@ export class Creature {
         return;
       }
       case "face":
-        this.facingLeft = facesLeftFor(this.surface.kind, step.dir);
+        this.turnNow(facesLeftFor(this.surface.kind, step.dir));
         this.place();
         return this.nextStep();
       case "jump": {
@@ -1077,8 +1105,8 @@ export class Creature {
       if (this.mode === "stand" && this.world && isStanding(this.surface)) {
         // Turn towards the bubble (it opens towards the middle of the screen).
         const a = this.world.area;
-        this.facingLeft = this.body.x > a.x + a.w / 2;
         if (["walk", "run", "climb"].includes(this.animator.animation)) this.animator.play(this.restAnim());
+        this.turnNow(this.body.x > a.x + a.w / 2);
         this.place();
       }
     } else if (!this.plan) {
@@ -1119,7 +1147,7 @@ export class Creature {
     void Promise.resolve(this.host.cursor()).then(
       (p) => {
         if (this.mode !== "stand" || !isStanding(this.surface) || !this.world) return;
-        if (Math.abs(p.x - this.body.x) > 8 * this.u) this.facingLeft = p.x < this.body.x;
+        if (Math.abs(p.x - this.body.x) > 8 * this.u) this.turnNow(p.x < this.body.x);
         this.place();
       },
       () => {},

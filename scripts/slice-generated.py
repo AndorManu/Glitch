@@ -126,15 +126,27 @@ def merge_small(segs, frac=0.3):
     return out
 
 
+def body_height(c: np.ndarray) -> int:
+    """Height of the character in a source crop, ignoring the loose glitch
+    pixels (magenta/purple/cyan) that float around him."""
+    v = c[:, :, :3].astype(int)
+    glitchy = ((v[..., 0] > 120) & (v[..., 2] > 140) & (v[..., 1] < 120)) | ((v[..., 2] > 150) & (v[..., 1] > 150) & (v[..., 0] < 120))
+    rows = np.where(((c[:, :, 3] > 0) & ~glitchy).sum(1) >= 3)[0]
+    return int(rows.max() - rows.min() + 1) if len(rows) else c.shape[0]
+
+
 def split_touching(segs, mask, n):
     """Frames whose tails touch the next one come out as one wide segment:
     cut it at the thinnest columns (the gap between the bodies)."""
     col = mask.sum(0)
-    while len(segs) < n:
+    while True:
         widths = [b - a for a, b in segs]
         i = int(np.argmax(widths))
         a, b = segs[i]
         typical = float(np.median(widths)) if len(segs) > 2 else (b - a) / 2
+        # n given: split until there are n frames. Otherwise only clearly double-wide segments.
+        if (n and len(segs) >= n) or (not n and (b - a) < 1.6 * typical):
+            break
         k = max(2, round((b - a) / typical))
         cuts = []
         for j in range(1, k):
@@ -307,9 +319,10 @@ def process(name: str, cfg: dict, report: dict) -> list[np.ndarray]:
     cell = pitch / 2
     # Normalise to the original character's size: the reference frame's height in art px.
     ref = crops[cfg.get("ref", 0)]
-    natural_h = ref.shape[0] / cell
+    ref_h = body_height(ref)
+    natural_h = ref_h / cell
     target_h = cfg.get("target", TARGET_STAND_H)
-    scale_cell = ref.shape[0] / target_h
+    scale_cell = ref_h / target_h
     use = cfg["cell"] if "cell" in cfg else cell if abs(natural_h / target_h - 1) < cfg.get("tolerance", 0.04) else scale_cell
     frames = []
     votes = 0
@@ -326,7 +339,7 @@ def process(name: str, cfg: dict, report: dict) -> list[np.ndarray]:
         # Drawn climbing a wall on his right: turn the wall into the floor (the
         # app turns him onto the wall itself), climbing up becomes walking right.
         frames = [np.rot90(f, cfg["rotate"]).copy() for f in frames]
-    elif votes < 0:
+    elif votes < 0 and not cfg.get("keep_facing"):
         frames = [f[:, ::-1].copy() for f in frames]
     # Body centred; `shift` moves a whole sheet (e.g. the long run tail must fit the canvas).
     anchors = [body_x(f, "left") - cfg.get("shift", 0) for f in frames]
@@ -365,6 +378,20 @@ for _name in ["think", "sleep", "wake", "dangle", "climb", "laugh", "sad", "angr
               "peek", "push", "spin", "teleport", "listen", "celebrate", "dance", "eat", "grab_tab",
               "dizzy", "sneeze", "typing", "point", "land", "sit"]:
     SHEETS[_name] = {"cell": 3.8}
+# Transitions and idle fidgets (round 3).
+for _name in ["sit_down", "stand_up_paws", "stand_up_hop", "stand_up_glitch", "turn_front_to_side", "turn_side_to_front",
+              "turn_around", "turn_to_back", "walk_start", "walk_stop", "lie_down", "get_up", "shake_off", "scratch", "groom",
+              "stretch", "tail_chase", "look_back", "hop_idle", "sit_idle_look"]:
+    # Any number of frames; scaled so the standing end of the clip is exactly as
+    # tall as idle0 (55 art px), so the transition meets the loops it joins.
+    SHEETS[_name] = {"n": None, "ref": 0, "target": 55, "tolerance": 0, "keep_facing": _name.startswith("turn")}
+for _name in ["stand_up_paws", "stand_up_hop", "stand_up_glitch", "turn_side_to_front", "walk_stop", "get_up"]:
+    SHEETS[_name]["ref"] = -1  # these end standing
+SHEETS["turn_around"]["target"] = 54  # side-on, like walk0
+# Sitting: as tall as the sitting end of sit_down / the start of stand_up_* (~47 px
+# when standing is 55), so sitting down lands exactly on the sit loop.
+SHEETS["sit"] = {"ref": 0, "target": 47, "tolerance": 0}
+SHEETS["sit_idle_look"]["target"] = 47
 # The wall crawl, rotated onto the floor; a bit smaller so the long body + tail fits the canvas.
 SHEETS["climb"] = {"cell": 4.9, "rotate": -1, "shift": 6}
 
