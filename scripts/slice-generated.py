@@ -175,6 +175,24 @@ def sample(rgba: np.ndarray, cell: float, ox: float, oy: float) -> np.ndarray:
     return out
 
 
+def dehalo(a: np.ndarray, passes: int = 2) -> np.ndarray:
+    """Drop light, unsaturated pixels on the silhouette edge (left over from
+    the white background's anti-aliasing); the black outline stays."""
+    a = a.copy()
+    for _ in range(passes):
+        op = a[:, :, 3] > 0
+        inner = np.zeros_like(op)
+        inner[1:-1, 1:-1] = op[:-2, 1:-1] & op[2:, 1:-1] & op[1:-1, :-2] & op[1:-1, 2:]
+        edge = op & ~inner
+        rgb = a[:, :, :3].astype(int)
+        light = (rgb.mean(2) > 150) & ((rgb.max(2) - rgb.min(2)) < 70)
+        kill = edge & light
+        if not kill.any():
+            break
+        a[kill] = 0
+    return a
+
+
 def trim(a: np.ndarray) -> np.ndarray:
     op = a[:, :, 3] > 0
     if not op.any():
@@ -249,17 +267,18 @@ def process(name: str, cfg: dict, report: dict) -> list[np.ndarray]:
     frames = []
     for i, c in enumerate(crops):
         _, ox, oy = best_pitch(c, use * 2 - 0.01, use * 2 + 0.01)
-        art = trim(sample(c, use, ox % use, oy % use))
+        art = trim(dehalo(sample(c, use, ox % use, oy % use)))
         ex = glitch_eye_x(art)
         facing = "right" if ex is None or ex > art.shape[1] / 2 else "left"
         if cfg.get("side") and facing == "left":
             art = art[:, ::-1].copy()
         frames.append(art)
-    anchors = [body_x(f, "left") for f in frames]
-    if cfg.get("anchor") == "common":
-        m = float(np.median(anchors))
-        anchors = [m + (a - m) * 0.0 + (f.shape[1] - frames[0].shape[1]) * 0 for a, f in zip(anchors, frames)]
+    # Body centred; `shift` moves a whole sheet (e.g. the long run tail must fit the canvas).
+    anchors = [body_x(f, "left") - cfg.get("shift", 0) for f in frames]
     placed = [place(f, ax) for f, ax in zip(frames, anchors)]
+    clipped = [i for i, (f, p) in enumerate(zip(frames, placed)) if (p[:, :, 3] > 0).sum() < (f[:, :, 3] > 0).sum()]
+    if clipped:
+        print(f"  WARNING {name}: frames {clipped} clipped by the canvas")
     report[name] = {
         "frames": len(placed),
         "block_px": round(pitch, 2),
@@ -282,7 +301,7 @@ SHEETS = {
     "talk": {"ref": 0},
     "wave": {"ref": 0},
     "walk": {"side": True, "ref": 0, "target": 55},
-    "run": {"side": True, "ref": 0, "target": 44, "n": 6},
+    "run": {"side": True, "ref": 0, "target": 44, "n": 6, "shift": 7},
     "jump": {"side": True, "ref": 0, "target": 55},
 }
 
