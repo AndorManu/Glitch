@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::ai::{AiError, AiProvider, ChatRequest, Message, Role, ToolCall};
-use crate::confirm::{approval_in_turn, Approval, ConfirmError, ConfirmationGate};
+use crate::confirm::{approval_checked, Approval, ConfirmError, ConfirmationGate};
 use crate::desktop::{CaptureTarget, Desktop, NoDesktop};
 use crate::memory::{self, MemoryStore, Remembered};
 use crate::platform::{Os, Platform};
@@ -731,7 +731,12 @@ impl Agent {
                     // names) is anywhere in the chat, it could be steering the
                     // model, in this message or a later one: gate it all.
                     let tainted = self.outside_content_in_context();
-                    match approval_in_turn(&action, tainted) {
+                    // May resolve a web page's name (DNS): off the async threads.
+                    let (platform, a) = (self.platform.clone(), action.clone());
+                    let approval = tokio::task::spawn_blocking(move || approval_checked(&a, tainted, &*platform))
+                        .await
+                        .unwrap_or(Approval::AskUser);
+                    match approval {
                         Approval::Automatic => self.execute(model, action).await,
                         Approval::AskUser => {
                             let only_because_outside =

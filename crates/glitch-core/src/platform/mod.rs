@@ -19,6 +19,7 @@ pub mod macos;
 pub mod windows;
 
 use std::io;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -42,6 +43,12 @@ pub trait Platform: Send + Sync {
     /// Folders `search_files` looks in.
     fn search_roots(&self) -> Vec<PathBuf>;
     fn home_dir(&self) -> Option<PathBuf>;
+    /// The addresses a host name points to (DNS), to tell whether a web page
+    /// is really on the local network. Blocking; may take a few seconds.
+    fn resolve_host(&self, host: &str) -> io::Result<Vec<IpAddr>> {
+        use std::net::ToSocketAddrs;
+        Ok((host, 443).to_socket_addrs()?.map(|a| a.ip()).collect())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

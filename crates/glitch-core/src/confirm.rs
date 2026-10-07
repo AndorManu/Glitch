@@ -13,7 +13,8 @@
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
 
-use crate::tools::{Action, Description};
+use crate::platform::Platform;
+use crate::tools::{urls, Action, Description};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Approval {
@@ -76,6 +77,24 @@ pub fn approval_in_turn(action: &Action, outside_content: bool) -> Approval {
         Approval::AskUser
     } else {
         approval_for(action)
+    }
+}
+
+/// [`approval_in_turn`], plus a DNS lookup for a web page that would open at
+/// once: a name pointing at the local network (`router.attacker.example` ->
+/// 192.168.1.1), or at nothing, asks too. The lookup only happens when the
+/// answer would otherwise be "run it", so in a chat with outside content a
+/// name made up by injected text never reaches a DNS server unseen.
+/// Blocking: call it off the async threads.
+pub fn approval_checked(action: &Action, outside_content: bool, platform: &dyn Platform) -> Approval {
+    let approval = approval_in_turn(action, outside_content);
+    match action {
+        Action::OpenUrl { url }
+            if approval == Approval::Automatic && urls::reaches_private_network(url, |h| platform.resolve_host(h)) =>
+        {
+            Approval::AskUser
+        }
+        _ => approval,
     }
 }
 
@@ -203,6 +222,21 @@ mod tests {
             Approval::Automatic
         );
         assert_eq!(approval_in_turn(&Action::Calculate { expression: "1".into() }, true), Approval::Automatic);
+    }
+
+    #[test]
+    fn names_that_resolve_to_the_local_network_ask() {
+        use crate::tools::fake::FakePlatform;
+        let p =
+            FakePlatform { dns: vec![("router.evil.example".into(), [192, 168, 1, 1].into())], ..Default::default() };
+        let url = |u: &str| Action::OpenUrl { url: u.into() };
+        assert_eq!(approval_checked(&url("https://example.com/"), false, &p), Approval::Automatic);
+        assert_eq!(approval_checked(&url("http://router.evil.example/apply.cgi"), false, &p), Approval::AskUser);
+        assert_eq!(approval_checked(&url("https://gone.invalid/"), false, &p), Approval::AskUser);
+        assert_eq!(approval_checked(&url("http://[::ffff:192.168.1.1]/"), false, &p), Approval::AskUser);
+        // Other actions are unchanged.
+        assert_eq!(approval_checked(&app(), false, &p), Approval::AskUser);
+        assert_eq!(approval_checked(&Action::DateTime, true, &p), Approval::Automatic);
     }
 
     #[test]

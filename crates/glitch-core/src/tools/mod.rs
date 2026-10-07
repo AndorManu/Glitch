@@ -754,6 +754,7 @@ pub fn append_note(file: &std::path::Path, text: &str) -> std::io::Result<()> {
 pub(crate) mod fake {
     //! A fake platform that records what would have been opened.
     use std::io;
+    use std::net::IpAddr;
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
 
@@ -765,6 +766,9 @@ pub(crate) mod fake {
         pub roots: Vec<PathBuf>,
         pub apps: Vec<AppEntry>,
         pub opened: Mutex<Vec<String>>,
+        /// DNS answers. Names not listed resolve to a public address, except
+        /// `*.invalid`, which doesn't resolve at all.
+        pub dns: Vec<(String, IpAddr)>,
     }
 
     impl Platform for FakePlatform {
@@ -788,6 +792,16 @@ pub(crate) mod fake {
         }
         fn home_dir(&self) -> Option<PathBuf> {
             self.home.clone()
+        }
+        fn resolve_host(&self, host: &str) -> io::Result<Vec<IpAddr>> {
+            let listed: Vec<IpAddr> = self.dns.iter().filter(|(h, _)| h == host).map(|(_, ip)| *ip).collect();
+            if !listed.is_empty() {
+                Ok(listed)
+            } else if host.ends_with(".invalid") {
+                Err(io::Error::new(io::ErrorKind::NotFound, "no such host"))
+            } else {
+                Ok(vec![IpAddr::from([93, 184, 215, 14])])
+            }
         }
     }
 }
