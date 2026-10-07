@@ -7,14 +7,25 @@
     <link rel="stylesheet" href="/src/panel/panel.css" />
   </head>
   <body>
-    <header>
-      <canvas id="avatar" width="32" height="32" aria-hidden="true"></canvas>
-      <h1>Glitch</h1>
-      <button id="settings-button" class="ghost" hidden>Settings</button>
+    <header class="top">
+      <div class="avatar" aria-hidden="true"><canvas id="avatar" width="48" height="48"></canvas></div>
+      <div class="titles">
+        <h1>Glitch</h1>
+        <p id="subtitle" class="subtitle">Your desktop raccoon</p>
+      </div>
+      <button id="settings-button" class="icon-button" type="button" title="Settings" aria-label="Settings" hidden>
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M10.3 2h3.4l.5 2.6c.6.2 1.2.5 1.7.9l2.5-.9 1.7 2.9-2 1.8c.1.6.1 1.2 0 1.8l2 1.8-1.7 2.9-2.5-.9c-.5.4-1.1.7-1.7.9l-.5 2.6h-3.4l-.5-2.6c-.6-.2-1.2-.5-1.7-.9l-2.5.9-1.7-2.9 2-1.8a6 6 0 0 1 0-1.8l-2-1.8 1.7-2.9 2.5.9c.5-.4 1.1-.7 1.7-.9L10.3 2Zm1.7 7a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"
+            transform="translate(0 1)"
+          />
+        </svg>
+      </button>
     </header>
     <main>
-      <section id="setup" hidden></section>
-      <section id="settings" hidden></section>
+      <section id="setup" class="view" hidden></section>
+      <section id="settings" class="view" hidden></section>
     </main>
     <script type="module" src="/src/panel/main.ts"></script>
   </body>

@@ -1,6 +1,6 @@
 // A 15-line stand-in for a UI framework.
 
-type Child = Node | string | null | undefined | false;
+export type Child = Node | string | null | undefined | false;
 type Attrs = Record<string, string | boolean | number | EventListener | undefined>;
 
 export function h<K extends keyof HTMLElementTagNameMap>(

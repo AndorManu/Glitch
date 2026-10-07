@@ -2,11 +2,10 @@
 
 import { listen } from "@tauri-apps/api/event";
 import { api, asUiError, type PanelView, type Settings, type SetupStatus } from "../shared/ipc";
-import { GLITCH } from "../sprites/glitch";
-import { loadSprites } from "../sprites/load";
-import { RACCOON } from "../sprites/raccoon";
-import { clear, h } from "./dom";
-import { SetupView, sameModel } from "./setup";
+import { drawAvatar } from "./avatar";
+import { h } from "./dom";
+import { formatGb, layout, ollamaSummary, prettyModelName, SetupView, sameModel } from "./setup";
+import { loading, toggleSwitch } from "./ui";
 
 type View = PanelView;
 
@@ -14,13 +13,19 @@ const views: Record<View, HTMLElement> = {
   setup: document.getElementById("setup")!,
   settings: document.getElementById("settings")!,
 };
+const subtitles: Record<View, string> = {
+  setup: "Let’s get me ready",
+  settings: "Settings",
+};
 const settingsButton = document.getElementById("settings-button") as HTMLButtonElement;
+const subtitle = document.getElementById("subtitle")!;
 let current: View = "setup";
 
 function showView(v: View): void {
   current = v;
   for (const [name, el] of Object.entries(views)) el.hidden = name !== v;
   settingsButton.hidden = v === "settings";
+  subtitle.textContent = subtitles[v];
   if (v === "setup") void setup.refresh();
   if (v === "settings") void renderSettings();
 }
@@ -31,27 +36,41 @@ const setup = new SetupView(views.setup, {
 
 settingsButton.addEventListener("click", () => showView("settings"));
 
+function card(title: string, ...children: (Node | null)[]): HTMLElement {
+  return h("section", { class: "card" }, h("h3", { class: "card-title" }, title), ...children);
+}
+
 async function renderSettings(): Promise<void> {
   const root = views.settings;
-  clear(root, h("p", { class: "muted" }, "Loading…"));
+  layout(root, [loading("Loading…")]);
   let status: SetupStatus;
   try {
     status = await api.setupStatus();
   } catch (e) {
-    clear(root, h("p", { class: "error" }, asUiError(e).message));
+    layout(
+      root,
+      [h("div", { class: "callout error", role: "alert" }, h("b", {}, "Couldn’t load the settings."), h("span", {}, asUiError(e).message))],
+      [h("button", { class: "primary", type: "button", onclick: () => void renderSettings() }, "Try again")],
+    );
     return;
   }
   const s = status.settings;
 
-  const select = h("select", { "aria-label": "Model" });
+  const select = h("select", { "aria-label": "Brain (AI model)" });
   const names = status.installed.map((m) => m.name);
   if (s.model && !names.some((n) => sameModel(n, s.model!))) names.unshift(s.model);
   for (const n of names) {
     const info = status.installed.find((m) => m.name === n);
-    const label = info ? `${n} (${info.size_gb} GB)${info.supports_tools === false ? " – no tools" : ""}` : `${n} (not downloaded)`;
+    const label = info
+      ? `${prettyModelName(n)} (${formatGb(info.size_gb)})${info.supports_tools === false ? " – chat only" : ""}`
+      : `${prettyModelName(n)} (not downloaded)`;
     select.append(h("option", { value: n, selected: !!s.model && sameModel(n, s.model) }, label));
   }
-  const toolWarning = h("p", { class: "note", hidden: true }, "This model can chat but can't open things for you.");
+  const toolWarning = h(
+    "p",
+    { class: "callout warn", hidden: true },
+    "This brain can chat, but it can’t open apps or websites for you.",
+  );
   const updateWarning = () => {
     toolWarning.hidden = status.installed.find((m) => m.name === select.value)?.supports_tools !== false;
   };
@@ -61,51 +80,45 @@ async function renderSettings(): Promise<void> {
     await api.updateSettings({ model: select.value });
   });
 
-  const move = h("input", { type: "checkbox", checked: s.movement_enabled });
-  move.addEventListener("change", () => void api.updateSettings({ movement_enabled: move.checked }));
+  const ollama = ollamaSummary(status);
 
-  const ollamaLine =
-    status.ollama.state === "running"
-      ? `Ollama ${status.ollama.version ?? ""} is running.`
-      : status.ollama.state === "stopped"
-        ? "Ollama is installed but not running."
-        : "Ollama is not installed.";
-
-  clear(
+  layout(
     root,
-    h("h2", {}, "Settings"),
-    h("label", { class: "field" }, h("span", {}, "Brain (AI model)"), names.length ? select : h("span", { class: "muted" }, "No models downloaded yet")),
-    toolWarning,
-    h("button", { onclick: () => showView("setup") }, "Download a different model…"),
-    h("label", { class: "toggle" }, move, h("span", {}, "Let Glitch walk around the screen")),
-    h("p", { class: "muted small" }, `${ollamaLine} This computer has ${status.recommendation.total_ram_gb} GB of memory.`),
-    h(
-      "div",
-      { class: "row" },
-      h("button", { onclick: async () => { await api.resetChat(); await api.showBubble(); } }, "Clear chat"),
-      h("button", { onclick: () => showView("setup") }, "Run setup again"),
-    ),
-    h("div", { class: "row" }, h("button", { class: "danger", onclick: () => void api.quit() }, "Quit Glitch")),
+    [
+      card(
+        "Brain",
+        names.length
+          ? h("label", { class: "select" }, select)
+          : h("p", { class: "hint" }, "No brains downloaded yet."),
+        toolWarning,
+        h("button", { class: "link", type: "button", onclick: () => showView("setup") }, "Download another brain…"),
+      ),
+      card(
+        "Glitch",
+        toggleSwitch("Let Glitch walk around", "Off: Glitch stays where you put it.", s.movement_enabled, (on) =>
+          void api.updateSettings({ movement_enabled: on }),
+        ),
+        h(
+          "div",
+          { class: "row" },
+          h("button", { class: "secondary small", type: "button", onclick: async () => { await api.resetChat(); await api.showBubble(); } }, "Clear chat"),
+          h("button", { class: "secondary small", type: "button", onclick: () => showView("setup") }, "Run setup again"),
+        ),
+      ),
+      h("p", { class: `info ${ollama.state}` }, h("span", { class: "dot", "aria-hidden": "true" }), h("span", {}, ollama.text)),
+    ],
+    [
+      s.onboarding_done
+        ? h("button", { class: "primary", type: "button", onclick: () => void api.showBubble() }, "Back to chat")
+        : null,
+      h("span", { class: "spacer" }),
+      h("button", { class: "danger", type: "button", onclick: () => void api.quit() }, "Quit Glitch"),
+    ],
   );
 }
 
-async function drawAvatar(): Promise<void> {
-  const sprites = await loadSprites(RACCOON).catch(() => loadSprites(GLITCH));
-  const img = sprites.frame("idle0");
-  const c = document.getElementById("avatar") as HTMLCanvasElement;
-  const dpr = window.devicePixelRatio || 1;
-  c.width = c.height = 32 * dpr;
-  const ctx = c.getContext("2d")!;
-  ctx.imageSmoothingEnabled = !sprites.pixelated;
-  ctx.imageSmoothingQuality = "high";
-  const scale = Math.min(c.width / img.width, c.height / img.height);
-  const w = img.width * scale;
-  const h = img.height * scale;
-  ctx.drawImage(img, (c.width - w) / 2, (c.height - h) / 2, w, h);
-}
-
 async function main(): Promise<void> {
-  void drawAvatar();
+  void drawAvatar(document.getElementById("avatar") as HTMLCanvasElement, 48);
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") void api.hidePanel();
   });

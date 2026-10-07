@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { SetupStatus } from "../shared/ipc";
 import { GLITCH } from "../sprites/glitch";
 import { checkGrid } from "../sprites/load";
-import { modelOptions, progressText, sameModel } from "./setup";
+import { squareCrop } from "./avatar";
+import { chooseLabel, formatGb, modelOptions, ollamaSummary, prettyModelName, progressText, sameModel } from "./setup";
 
 function status(installed: SetupStatus["installed"], model: string | null = null): SetupStatus {
   return {
@@ -44,6 +45,39 @@ describe("setup wizard helpers", () => {
     expect(progressText({ status: "pulling abc", completed: 50, total: 200 })).toEqual({ label: "Downloading… 25%", percent: 25 });
     expect(progressText({ status: "success", completed: null, total: null }).label).toBe("Done!");
     expect(progressText({ status: "something new", completed: null, total: null }).label).toBe("something new");
+  });
+});
+
+describe("panel display helpers", () => {
+  it("prettifies model tags", () => {
+    expect(prettyModelName("qwen3.5:4b")).toBe("Qwen 3.5 · 4B");
+    expect(prettyModelName("llama3.2:latest")).toBe("Llama 3.2");
+    expect(prettyModelName("gemma3n:e2b")).toBe("Gemma 3n");
+    expect(prettyModelName("mistral")).toBe("Mistral");
+    expect(prettyModelName("phi3:3.8b-mini-q4")).toBe("Phi 3 · 3.8B");
+    expect(prettyModelName("deepseek-r1:8b")).toBe("Deepseek-r1 · 8B");
+  });
+
+  it("formats sizes and the choose button", () => {
+    expect(formatGb(3.4)).toBe("3.4 GB");
+    expect(formatGb(2.04)).toBe("2 GB");
+    expect(chooseLabel({ installed: true, sizeGb: 2 })).toBe("Use this brain");
+    expect(chooseLabel({ installed: false, sizeGb: 3.4 })).toBe("Download & continue (≈3.4 GB)");
+  });
+
+  it("summarises Ollama and memory in one line", () => {
+    expect(ollamaSummary(status([]))).toEqual({ state: "running", text: "Ollama 0.12.0 is running · 7.8 GB of memory" });
+    const stopped = status([]);
+    stopped.ollama = { ...stopped.ollama, state: "stopped", version: null };
+    expect(ollamaSummary(stopped).text).toBe("Ollama is installed but not running · 7.8 GB of memory");
+  });
+
+  it("crops a square portrait out of a wide frame", () => {
+    expect(squareCrop(16, 16)).toEqual({ x: 0, y: 0, w: 16, h: 16 });
+    expect(squareCrop(276, 180)).toEqual({ x: 48, y: 0, w: 180, h: 180 });
+    // focus near the right edge is clamped inside the frame
+    expect(squareCrop(276, 180, 1)).toEqual({ x: 96, y: 0, w: 180, h: 180 });
+    expect(squareCrop(276, 180, 0.62, 1.2)).toEqual({ x: 96, y: 0, w: 150, h: 150 });
   });
 });
 
