@@ -63,6 +63,45 @@ function setup(world: World, window: Vec) {
   return { c, fc, view, poses, setCursor: (p: Vec) => (cursor = p), get win() { return win; } };
 }
 
+describe("annoyed: clings on to the cursor", () => {
+  it("after a few pickups a gentle drop makes him hang on by the drawn grip, then let go", async () => {
+    const world: World = { area: { x: 0, y: 0, w: 1920, h: 1040 }, scale: 1, ledges: [] };
+    const t = setup(world, { x: 900, y: 1040 - 160 });
+    await t.c.start({ x: 900, y: 1040 - 160 });
+    await t.fc.run(500);
+    let anims: string[] = [];
+    for (let n = 0; n < 3; n++) {
+      await t.fc.run(4000); // landed again
+      const local = { x: 80, y: 110 };
+      const grab = { x: t.win.x + local.x, y: t.win.y + local.y };
+      t.setCursor(grab);
+      t.c.pointerDown(local);
+      t.c.pointerMove({ x: 80, y: 100 });
+      for (let i = 1; i <= 10; i++) {
+        t.setCursor({ x: grab.x, y: grab.y - i * 4 });
+        await t.fc.run(30);
+      }
+      await t.fc.run(500);
+      anims = [];
+      t.c.animator.onChange = (a) => anims.push(a);
+      t.c.pointerUp();
+      await t.fc.run(200);
+      if (anims.includes("clingCursor")) {
+        expect(t.c.held).toBe(true); // still hanging on
+        const cur = { x: grab.x, y: grab.y - 40 };
+        // The body centre sits the drawn grip offset below the cursor: hanging under it.
+        expect(t.c.body.y).toBeGreaterThan(cur.y);
+        expect(Math.abs(t.c.body.x - cur.x)).toBeLessThan(40);
+        await t.fc.run(1500);
+        expect(t.c.held).toBe(false); // let go
+        t.c.dispose();
+        return;
+      }
+    }
+    throw new Error(`never clung on (last: ${anims.join(",")}, annoyance ${t.c.annoyance.toFixed(2)})`);
+  });
+});
+
 describe("held by the cursor", () => {
   for (const [where, x] of [
     ["near the right edge", 1880],

@@ -14,6 +14,8 @@
 
 import { ANIMATIONS, type AnimationName, Animator, type Clock, isAnimationName, type Keyframe, landKeys, type Pose } from "./animations";
 import { familyOf, turnKeys } from "./transitions";
+import { ANIM_FRAME_H, ANIM_FRAME_W, ANIM_GRIPS } from "../sprites/anim";
+import { ART_SCALE } from "../sprites/glitch-anim";
 import { type BehaviourName, Brain, type BrainContext, type Haul, isBehaviourName, type Plan, type Gait } from "./brain";
 import { ChaosDirector, chaosAnim, type ChaosHost, isAct, knockKeys } from "./chaos";
 import { reactToMove } from "./ledge";
@@ -192,6 +194,8 @@ interface Hold {
   kickUntil: number;
   /** Where he was relative to the cursor when grabbed (eased out over ATTACH_MS). */
   attach: { x: number; y: number; angle: number; t0: number };
+  /** Clinging on to the cursor: body centre offset from the cursor (physical px). */
+  grip?: Vec;
 }
 
 interface Platform {
@@ -414,6 +418,7 @@ export class Creature {
   private reactAfterLanding: "annoyed" | "grumpy" | null = null;
   private annoyTimer: unknown = null;
   private clingTimer: unknown = null;
+  private clingDone = false;
 
   /** How annoyed he is right now (0 = calm; MEDIUM / HIGH thresholds below). */
   get annoyance(): number {
@@ -441,9 +446,11 @@ export class Creature {
     if (left === this.facingLeft) return [];
     const frame = this.animator.pose?.frame ?? "idle0";
     this.facingLeft = left;
-    if (this.mode !== "stand" || this.asleep) return [];
+    if (this.asleep) return [];
     const fam = familyOf(frame);
-    if (fam === "wall" && !isStanding(this.surface)) return turnKeys("wall", left, frame);
+    // Crawling on a wall (also mid-corner or letting go): swing round, never a mirror flip.
+    if (fam === "wall") return turnKeys("wall", left, frame);
+    if (this.mode !== "stand") return [];
     if (!isStanding(this.surface)) return [];
     return fam === "side" || fam === "front" ? turnKeys(fam, left, frame) : [];
   }
@@ -825,7 +832,10 @@ export class Creature {
   private kTarget(): number {
     if (this.mode !== "stand" && this.mode !== "corner") return 0;
     // On his own platform the feet sit higher so the slab under them fits in the window.
-    return this.surface.kind === "platform" ? 0.55 : 1;
+    if (this.surface.kind === "platform") return 0.55;
+    // Sitting on an edge with his legs over it: the feet line higher, so the legs fit in the window.
+    if (this.animator && (this.animator.animation === "sitEdge" || this.animator.animation === "sit_edge_swing")) return 0.2;
+    return 1;
   }
 
   private needsMotion(): boolean {
@@ -1240,6 +1250,7 @@ export class Creature {
       this.flight = null;
       this.motion = CALM;
       this.settle({ kind: c.side as "left" | "right" | "ceiling" });
+      // Grabbing on: the cling pose turned the way he faces (the frame before was a flight pose, never mirrored).
       this.facingLeft = this.rand() < 0.5;
       this.animator.play("cling");
       this.animator.glitchBurst(220);
@@ -1439,6 +1450,8 @@ export class Creature {
   }
 
   private animationChanged(name: AnimationName): void {
+    // Sitting on an edge raises the feet in the window (kTarget): ease there.
+    if (this.mode === "stand" && Math.abs(this.k - this.kTarget()) > 1e-3) this.ensureMotion();
     if (name === "sleep") return this.enterSleep();
     const w = this.waiting;
     if (w && name !== w.name) {
@@ -1528,6 +1541,14 @@ export class Creature {
         return this.nextStep();
       }
       case "jump": {
+        // Asleep or sitting: get up first (the drawn get-up / stand-up), then jump.
+        const fam = familyOf(this.animator.pose?.frame ?? "idle0");
+        if (this.mode === "stand" && (fam === "curled" || fam === "sit")) {
+          this.asleep = false;
+          this.animator.play("idle");
+          this.stepIndex--;
+          return this.wait(1200, () => this.nextStep());
+        }
         const spin = step.spin ?? 0;
         const kicking = this.mode === "air" && !!this.flight?.frozen;
         const jp = planJump(this.body, step.to, w, step.height ?? (spin ? 150 : undefined));
@@ -1603,7 +1624,7 @@ export class Creature {
         if (step.float) {
           // Let go and float down: upright, no tumbling.
           this.body.spin = 0;
-          this.facingLeft = (step.drift ?? 0) < 0;
+          this.turnNow((step.drift ?? 0) < 0);
           const anim = chaosAnim(step.float === "copter" ? "tail_copter" : "glide");
           this.launch({ x: push.x * 0.5, y: -40 * u }, { planned: true, panic: false, drag: false, extra: { anim, float: { drift: step.drift ?? 0 } } });
           return;
@@ -1854,12 +1875,11 @@ export class Creature {
       if (this.mode === "held") return false;
       // On a wall or the ceiling he is turned with the surface: a front-facing
       // emote would look like waving lying down. Only wall/air poses there.
-      if (!isStanding(this.surface) && this.mode === "stand") {
-        const keys = ANIMATIONS[name].keys;
-        const first = (typeof keys === "function" ? keys(() => 0.5, {}) : keys)[0]?.frame ?? "";
-        const fam = familyOf(first);
-        if (fam !== "wall" && fam !== "any") return false;
-      }
+      const keys = ANIMATIONS[name].keys;
+      const fam = familyOf((typeof keys === "function" ? keys(() => 0.5, {}) : keys)[0]?.frame ?? "");
+      if (!isStanding(this.surface) && this.mode === "stand" && fam !== "wall" && fam !== "any") return false;
+      // And the wall poses (crawling, holding on) only on a wall, never standing on the floor.
+      if (isStanding(this.surface) && fam === "wall") return false;
       this.interaction();
       this.interrupt();
       if (this.actionTimer !== null) this.clock.clearTimeout(this.actionTimer);
@@ -2021,6 +2041,12 @@ export class Creature {
     let x = h.cursor.x + h.L * Math.sin(phi);
     let y = h.cursor.y + h.L * Math.cos(phi);
     let angle = -(phi * 180) / Math.PI;
+    // Clinging on to the cursor (drawn holding it): the frame's grip point at the cursor tip, no sway.
+    if (h.grip) {
+      x = h.cursor.x + h.grip.x;
+      y = h.cursor.y + h.grip.y;
+      angle = 0;
+    }
     // Easing in from where he was when you grabbed him.
     const e = Math.min(1, (now - h.attach.t0) / ATTACH_MS);
     if (e < 1) {
@@ -2051,13 +2077,23 @@ export class Creature {
     const speed = Math.hypot(v.x, v.y) / u;
     // Let go gently while he's annoyed: he holds on to the cursor a moment
     // longer (still following it), then drops. Not when thrown.
-    if (this.clingTimer === null && this.annoyance >= ANNOY_MEDIUM && speed < 400) {
+    if (this.clingTimer === null && !this.clingDone && this.annoyance >= ANNOY_MEDIUM && speed < 400) {
       this.annoy(0.5);
       this.animator.play("clingCursor");
+      // Hold on by the grip drawn in the frame (art/frames/cling_cursor-grips.json), easing there from the scruff.
+      const g = ANIM_GRIPS.cling_cursor0;
+      if (g) {
+        const ux = this.u * ART_SCALE;
+        h.grip = { x: -(g[0] - ANIM_FRAME_W / 2) * ux, y: -(g[1] - ANIM_FRAME_H) * ux - HALF * this.u };
+        h.attach = { x: this.body.x - h.cursor.x, y: this.body.y - h.cursor.y, angle: this.body.angle, t0: this.now };
+      }
       this.event("cling-cursor");
       this.clingTimer = this.clock.setTimeout(() => {
         this.clingTimer = null;
+        // Now he lets go (this release must not start another cling).
+        this.clingDone = true;
         if (this.hold === h) this.release();
+        this.clingDone = false;
       }, 1400);
       return;
     }
