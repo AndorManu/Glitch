@@ -18,6 +18,7 @@ import {
   type VoiceEvent,
   type VoiceStatus,
 } from "../shared/ipc";
+import { browserStore, pickGreeting } from "../shared/greeting";
 import { canSend, dismissSpeech, initialState, transition, type BubbleEvent, type Request } from "./state";
 import { BubbleView } from "./view";
 import {
@@ -34,7 +35,7 @@ import {
 } from "./voice";
 
 const root = document.getElementById("root")!;
-let state = initialState();
+let state = initialState(pickGreeting(browserStore()));
 
 const view = new BubbleView(root, {
   send: (text) => dispatch({ type: "send", text }),

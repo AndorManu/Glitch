@@ -57,8 +57,9 @@ export interface Transition {
 /** Reopening the bubble after this long shows just the pill again. */
 export const COLLAPSE_AFTER_MS = 90_000;
 
-export function initialState(): BubbleState {
-  return { busy: false, speech: { kind: "reply", text: WELCOME, actions: [] }, rev: 1, seen: false };
+/** `greeting` null = open on just the input pill (nothing said). */
+export function initialState(greeting: string | null = WELCOME): BubbleState {
+  return { busy: false, speech: greeting ? { kind: "reply", text: greeting, actions: [] } : null, rev: 1, seen: false };
 }
 
 export function pendingConfirm(s: BubbleState): Extract<Speech, { kind: "confirm" }> | null {

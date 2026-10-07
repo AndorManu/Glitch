@@ -48,6 +48,9 @@ pub struct Geometry {
 pub struct Hitbox {
     /// `None` = the whole window catches the mouse (e.g. while dragging).
     pub body: Mutex<Option<LocalRect>>,
+    /// The last real body box, kept while `body` is `None` (walking, held,
+    /// flying): the chat bubble still points at his head, not the window top.
+    pub last_body: Mutex<Option<LocalRect>>,
     pub geometry: Mutex<Option<Geometry>>,
 }
 
@@ -153,7 +156,7 @@ pub fn start(app: AppHandle) {
 /// Body rect in physical screen px, for placing the chat bubble.
 pub fn body_rect(app: &AppHandle) -> Option<crate::layout::Rect> {
     let state = app.state::<Hitbox>();
-    let body = (*state.body.lock().unwrap())?;
+    let body = (*state.body.lock().unwrap()).or(*state.last_body.lock().unwrap())?;
     let g = (*state.geometry.lock().unwrap())?;
     Some(crate::layout::Rect {
         x: (g.x + body.x * g.scale) as i32,

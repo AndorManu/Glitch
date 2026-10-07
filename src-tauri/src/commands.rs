@@ -526,6 +526,9 @@ pub async fn world_snapshot(app: AppHandle) -> Result<WorldSnapshot, UiError> {
 /// Which part of the mascot window is Glitch's body (CSS px); `None` = all.
 #[tauri::command]
 pub fn set_hitbox(app: AppHandle, hitbox: State<'_, crate::hover::Hitbox>, rect: Option<crate::hover::LocalRect>) {
+    if rect.is_some() {
+        *hitbox.last_body.lock().unwrap() = rect;
+    }
     *hitbox.body.lock().unwrap() = rect;
     if rect.is_none() {
         // Dragging starts now: catch the mouse immediately, don't wait for the poller.
