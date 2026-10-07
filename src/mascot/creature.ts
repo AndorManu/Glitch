@@ -288,11 +288,20 @@ export class Creature {
     if (this.mood !== "idle" && this.mood !== "happy" && this.mood !== "talking") return;
     const after = this.mood === "talking" ? "idle" : this.mood;
     if (this.talkTimer !== null) this.clock.clearTimeout(this.talkTimer);
-    this.setMood("talking");
-    this.talkTimer = this.clock.setTimeout(() => {
+    const stop = () => {
       this.talkTimer = null;
       if (this.mood === "talking") this.setMood(after === "happy" ? "idle" : after);
-    }, ms);
+    };
+    if (this.animator.animation === "point") {
+      // Let him finish pointing at what he opened, then talk.
+      this.talkTimer = this.clock.setTimeout(() => {
+        this.setMood("talking");
+        this.talkTimer = this.clock.setTimeout(stop, ms);
+      }, 1100);
+      return;
+    }
+    this.setMood("talking");
+    this.talkTimer = this.clock.setTimeout(stop, ms);
   }
 
   private settle(surface: Surface): void {

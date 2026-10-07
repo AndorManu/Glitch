@@ -337,7 +337,8 @@ SHEETS = {
 #: Sheets without a plain standing reference frame: sampled at the typical
 #: cell size of the standing sheets above (~3.8 source px per art px).
 for _name in ["think", "sleep", "wake", "dangle", "climb", "laugh", "sad", "angry", "surprised", "scared",
-              "peek", "push", "spin", "teleport", "listen", "celebrate", "dance", "eat", "grab_tab"]:
+              "peek", "push", "spin", "teleport", "listen", "celebrate", "dance", "eat", "grab_tab",
+              "dizzy", "sneeze", "typing", "point", "land", "sit"]:
     SHEETS[_name] = {"cell": 3.8}
 
 

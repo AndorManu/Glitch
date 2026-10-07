@@ -32,7 +32,7 @@ export interface ViewHandlers {
   /** The current speech has been fully revealed on screen. */
   seen(): void;
   /** Glitch starts "saying" a reply or question of `chars` characters (he moves his mouth). */
-  talk?(chars: number): void;
+  talk?(chars: number, opened: boolean): void;
   /** Mic button pressed / released (pointer or keyboard). */
   micDown(): void;
   micUp(): void;
@@ -314,7 +314,11 @@ export class BubbleView {
     const scroll = shown.balloon.querySelector<HTMLElement>(".scroll");
     if (scroll) this.markOverflow(scroll);
     if (this.live) queueMicrotask(() => typer.start());
-    if (this.live && (speech.kind === "reply" || speech.kind === "confirm") && text.trim()) this.on.talk?.(text.length);
+    if (this.live && (speech.kind === "reply" || speech.kind === "confirm") && text.trim()) {
+      // He opened a site or an app for you: he points at it first, then says it.
+      const opened = speech.kind === "reply" && speech.actions.some((a) => a.startsWith("Opened"));
+      this.on.talk?.(text.length, opened);
+    }
   }
 
   private buildCloud(): HTMLElement {

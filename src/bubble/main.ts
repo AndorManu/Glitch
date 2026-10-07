@@ -44,7 +44,10 @@ const view = new BubbleView(root, {
   openSetup: () => void api.showPanel("setup").catch(() => {}),
   seen: () => dispatch({ type: "seen" }),
   // The mascot window moves his mouth while the reply appears (see MASCOT_TALK_EVENT).
-  talk: (chars) => void emit(MASCOT_TALK_EVENT, chars).catch(() => {}),
+  talk: (chars, opened) => {
+    if (opened) void emit("mascot-action", "point").catch(() => {});
+    void emit(MASCOT_TALK_EVENT, chars).catch(() => {});
+  },
   micDown: () => micDispatch({ type: "press", at: performance.now() }),
   micUp: () => micDispatch({ type: "release", at: performance.now() }),
   voiceDownload: () => void voiceApi.downloadModel(setupModel()).catch(() => {}),

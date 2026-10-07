@@ -1,6 +1,7 @@
 // The little raccoon portrait in the panel header.
 
 import { GLITCH } from "../sprites/glitch";
+import { GLITCH_ANIM } from "../sprites/glitch-anim";
 import { loadSprites } from "../sprites/load";
 import { RACCOON } from "../sprites/raccoon";
 
@@ -24,14 +25,20 @@ export function squareCrop(w: number, h: number, focusX = 0.5, zoom = 1): Rect {
 
 /** Draw Glitch's portrait into a square canvas of `size` CSS px. */
 export async function drawAvatar(c: HTMLCanvasElement, size: number): Promise<void> {
-  const sprites = await loadSprites(RACCOON).catch(() => loadSprites(GLITCH)); // portrait: the smooth 2x sheet
+  const sprites = await loadSprites(GLITCH_ANIM).catch(() => loadSprites(RACCOON).catch(() => loadSprites(GLITCH)));
   const img = sprites.frame("idle0");
   const dpr = window.devicePixelRatio || 1;
   c.width = c.height = Math.round(size * dpr);
   const ctx = c.getContext("2d")!;
   ctx.imageSmoothingEnabled = !sprites.pixelated;
   ctx.imageSmoothingQuality = "high";
-  // The sheet frames are wide (the tail sits on the left); the face is a bit right of centre.
-  const src = img.width > img.height ? squareCrop(img.width, img.height, 0.62, 1.15) : squareCrop(img.width, img.height);
+  // The pixel sheet's idle0 (100x90 art px): the head and shoulders, x 25-79, y 29-83.
+  // The old 2x sheet frames are wide (the tail on the left); the face a bit right of centre.
+  const src =
+    sprites.pixelated && img.width === 100 && img.height === 90
+      ? { x: 25, y: 29, w: 54, h: 54 }
+      : img.width > img.height
+        ? squareCrop(img.width, img.height, 0.62, 1.15)
+        : squareCrop(img.width, img.height);
   ctx.drawImage(img, src.x, src.y, src.w, src.h, 0, 0, c.width, c.height);
 }
