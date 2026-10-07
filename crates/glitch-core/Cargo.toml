@@ -1,0 +1,24 @@
+[package]
+name = "glitch-core"
+description = "Glitch's brain: AI provider, tools, safety rules. No UI/Tauri dependency so it can be tested headlessly."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait = "0.1"
+dirs = "6"
+open = "5"
+# Ollama runs on localhost over plain HTTP, so no TLS stack is needed.
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+thiserror = "2"
+url = "2"
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+wiremock = "0.6"

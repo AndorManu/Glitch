@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["crates/glitch-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+# Small, fast binary. The app is mostly idle, so size matters more than peak speed.
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
