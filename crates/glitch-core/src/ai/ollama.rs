@@ -252,7 +252,14 @@ impl AiProvider for OllamaClient {
     async fn chat(&self, req: ChatRequest<'_>) -> Result<Message, AiError> {
         // Only send `think` to models that support it. If /api/show fails we
         // just leave it out rather than failing the whole chat.
-        let thinking = self.capabilities(req.model).await.map(|c| c.iter().any(|c| c == "thinking")).unwrap_or(false);
+        // If /api/show fails we just assume no thinking and tool support,
+        // rather than failing the whole chat.
+        let caps = self.capabilities(req.model).await.ok();
+        let has = |c: &str| caps.as_ref().map(|caps| caps.iter().any(|x| x == c));
+        let thinking = has("thinking").unwrap_or(false);
+        // Ollama rejects `tools` for models without tool support. Such a model
+        // can still chat; it just can't open things.
+        let req = if has("tools") == Some(false) { ChatRequest { tools: &[], ..req } } else { req };
         let body = self.chat_body(&req, thinking);
         let resp = self
             .http

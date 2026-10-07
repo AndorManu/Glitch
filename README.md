@@ -257,7 +257,7 @@ The animations use these frame names:
 
 **Automated (runs in CI on every push):**
 
-* `cargo test --workspace`: 82 Rust tests
+* `cargo test --workspace`: 83 Rust tests
   * Ollama client against a mock HTTP server using the documented API
     responses: request body (`stream:false`, `keep_alive`, `num_ctx`,
     `tools`, `think:false` only for thinking models), tool-call parsing,

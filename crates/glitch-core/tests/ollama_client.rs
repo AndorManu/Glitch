@@ -299,3 +299,20 @@ async fn unload_sends_keep_alive_zero_with_empty_messages() {
         .await;
     OllamaClient::new(&server.uri(), "2m").unload("m").await.unwrap();
 }
+
+#[tokio::test]
+async fn tools_are_left_out_for_models_without_tool_support() {
+    let server = MockServer::start().await;
+    mock_show(&server, json!(["completion"])).await;
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .respond_with(chat_reply(json!({"role": "assistant", "content": "hi"})))
+        .mount(&server)
+        .await;
+    let client = OllamaClient::new(&server.uri(), "2m");
+    client.chat(ChatRequest { model: "m", messages: &[Message::user("hi")], tools: &[tool()] }).await.unwrap();
+    let reqs = server.received_requests().await.unwrap();
+    let chat = reqs.iter().find(|r| r.url.path() == "/api/chat").unwrap();
+    let body: Value = serde_json::from_slice(&chat.body).unwrap();
+    assert!(body.get("tools").is_none(), "body: {body}");
+}
