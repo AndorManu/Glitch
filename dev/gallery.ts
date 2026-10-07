@@ -8,6 +8,7 @@ import { Renderer } from "../src/mascot/render";
 import { loadSprites } from "../src/sprites/load";
 import { RACCOON } from "../src/sprites/raccoon";
 import { GLITCH } from "../src/sprites/glitch";
+import { loadGlitchSprites } from "../src/sprites/glitch-sprites";
 
 const q = new URLSearchParams(location.search);
 if (q.get("bg")) document.body.style.background = q.get("bg")!;
@@ -28,7 +29,7 @@ function section(title: string, cls: string): HTMLElement {
 }
 
 async function main(): Promise<void> {
-  const sprites = await loadSprites(q.get("fallback") === "1" ? GLITCH : RACCOON);
+  const sprites = q.get("old") === "1" ? await loadSprites(RACCOON) : q.get("fallback") === "1" ? await loadSprites(GLITCH) : await loadGlitchSprites();
 
   if (q.get("live") !== "0") {
     const grid = section("Live (once-animations replay)", "live");
