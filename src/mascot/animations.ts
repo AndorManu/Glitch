@@ -211,32 +211,50 @@ function waveKeys(rand: () => number): Keyframe[] {
   return keys;
 }
 
+/** Frames `name`0..n-1 (or the listed indices) at `ms` each. */
+const cycle = (name: string, idx: number[], ms: number, o: Omit<Keyframe, "frame" | "ms"> = {}): Keyframe[] => idx.map((i) => k(`${name}${i}`, ms, o));
+
 function thinkKeys(rand: () => number): Keyframe[] {
-  // A thoughtful bob with the "?" floating; the eye flickers now and then.
-  const bob = [k("think0", 450), k("think0", 250, { dy: -1 }), k("think0", 450, { dy: -2, sy: 1.01 }), k("think0", 250, { dy: -1 })];
-  const keys = [...bob, ...bob];
-  if (rand() < 0.6) keys.push(k("think0", 50, { glitch: 0.5, fx: "eye" }), k("think0", 50, { glitch: 0.25, dx: 1, fx: "eye" }));
+  // Paw comes up to the chin (think0-3), then the "?" bobs and the tail tip taps (think4-7, held longer).
+  const keys = [...cycle("think", [0, 1, 2, 3], 130)];
+  for (let i = 0; i < 3; i++) keys.push(...cycle("think", [4, 5, 6, 7], 320 + rand() * 80));
+  if (rand() < 0.6) keys.push(k("think7", 50, { glitch: 0.5, fx: "eye" }), k("think7", 50, { glitch: 0.25, dx: 1, fx: "eye" }));
+  keys.push(...cycle("think", [3, 2, 1], 140)); // paw down again before the next loop
   return keys;
 }
 
 function askKeys(rand: () => number): Keyframe[] {
-  // Waiting for the user: calmer, a curious head tilt.
-  const keys = [k("think0", 1600 + rand() * 800), k("think0", 900, { rot: -4, pivot: 0.2 }), k("think0", 1400)];
-  if (rand() < 0.4) keys.push(k("think0", 50, { glitch: 0.4, fx: "eye" }), k("think0", 100, { fx: "eye" }));
+  // Waiting for the user: calmer, the "?" frames held long.
+  const keys = [k("think4", 1600 + rand() * 800), k("think5", 900), k("think6", 1400), k("think7", 900)];
+  if (rand() < 0.4) keys.push(k("think7", 50, { glitch: 0.4, fx: "eye" }), k("think7", 100, { fx: "eye" }));
   return keys;
 }
 
 function happyKeys(rand: () => number): Keyframe[] {
-  if (rand() < 0.35) return laughKeys(rand);
+  const r = rand();
+  if (r < 0.3) return laughKeys(rand);
+  if (r < 0.6) return celebrateKeys(rand);
   return [...hop("idle0", 8), ...waveKeys(rand)];
 }
 
 function laughKeys(rand: () => number): Keyframe[] {
-  const keys: Keyframe[] = [k("laugh", 80, { sx: 1.05, sy: 0.95 })];
-  for (let i = 0; i < 12; i++) {
-    keys.push(k("laugh", 100, { dx: i % 2 ? 1.5 : -1.5, dy: i % 4 < 2 ? -1 : 0, fx: i % 3 === 0 ? "sparkle" : undefined }));
-  }
-  return [...keys, ...burst(rand, { frame: "laugh" }, 200), k("laugh", 300)];
+  // Drawn laugh: shoulders shaking, eyes squeezed (laugh0-7), twice, then settle.
+  const keys = [...cycle("laugh", [0, 1, 2, 3, 4, 5, 6, 7], 100, {}), ...cycle("laugh", [2, 3, 4, 5, 6, 7], 100)];
+  keys[3] = { ...keys[3], fx: "sparkle" };
+  return [...keys, ...burst(rand, { frame: "laugh7" }, 200), k("laugh0", 260)];
+}
+
+function celebrateKeys(rand: () => number): Keyframe[] {
+  const keys = [...cycle("celebrate", [0, 1, 2, 3, 4, 5, 6, 7], 95, { fx: "sparkle" })];
+  return rand() < 0.5 ? [...keys, ...cycle("celebrate", [3, 4, 5, 6, 7], 95, { fx: "sparkle" })] : keys;
+}
+
+/** A one-shot of a drawn 8-frame sheet: anticipation frames a bit slower, the end held. */
+function sheetOnce(name: string, ms = 100, hold = 400): Keyframe[] {
+  const keys = cycle(name, [0, 1, 2, 3, 4, 5, 6, 7], ms);
+  keys[0] = { ...keys[0], ms: ms * 1.4 };
+  keys[7] = { ...keys[7], ms: hold };
+  return keys;
 }
 
 // ----------------------------------------------------------------- actions
@@ -340,23 +358,21 @@ function peekKeys(rand: () => number): Keyframe[] {
 }
 
 function dangleKeys(rand: () => number): Keyframe[] {
-  // Held by the scruff: swing like a pendulum around the top of the head.
-  const swing = [-11, -6, 3, 10, 6, -3];
-  const keys = swing.map((rot, i) =>
-    k("glitch", 250, { rot, pivot: 1, dy: -8, sx: i % 2 ? 0.97 : 0.95, sy: i % 2 ? 1.04 : 1.07, fx: i % 3 === 0 ? "eye" : undefined }),
-  );
+  // Held by the scruff: the drawn dangle (legs kicking, tail swinging) with a gentle pendulum.
+  const swing = [-5, -3, 0, 3, 5, 3, 0, -3];
+  const keys = swing.map((rot, i) => k(`dangle${i}`, 120, { rot, pivot: 1, dy: -6, fx: i % 4 === 0 ? "eye" : undefined }));
   if (rand() < 0.4) keys[3] = { ...keys[3], glitch: 0.35 };
   return keys;
 }
 
 function glitchOutKeys(): Keyframe[] {
-  // Teleport out: glitch ramps up, slices scatter, then dissolve into a line.
+  // Teleport out: the drawn teleport frames, glitch ramping up, then dissolve into a line.
   const keys: Keyframe[] = [];
   const n = 12;
   for (let i = 0; i < n; i++) {
     const t = i / (n - 1);
     keys.push(
-      k(i === 4 ? "chaos" : "idle0", MIN_KEY_MS, {
+      k(`teleport${Math.min(7, Math.floor(i * 0.75))}`, MIN_KEY_MS, {
         glitch: 0.3 + 0.7 * t,
         dissolve: Math.max(0, (t - 0.3) / 0.7),
         sx: 1 + 0.35 * t * t,
@@ -377,24 +393,17 @@ function glitchInKeys(): Keyframe[] {
 
 function chaosSpinKeys(rand: () => number): Keyframe[] {
   const keys: Keyframe[] = [];
-  for (let i = 0; i < 24; i++) {
-    keys.push(k("chaos", MIN_KEY_MS, { rot: i * 30, pivot: 0.45, sx: 0.78, sy: 0.78, dy: -6, glitch: 0.5 + 0.4 * rand(), fx: "eye" }));
-  }
+  // The drawn spin, three turns, crackling.
+  for (let i = 0; i < 24; i++) keys.push(k(`spin${i % 8}`, MIN_KEY_MS, { dy: -4, glitch: i % 3 === 0 ? 0.4 + 0.4 * rand() : 0, fx: "eye" }));
   // Dizzy: the "?" pose wobbling to a stop with stars round the head.
-  for (const rot of [10, -8, 6, -4, 2, 0]) keys.push(k("think0", 180, { rot, pivot: 0.1, fx: "dizzy" }));
-  keys.push(k("think0", 600, { fx: "dizzy" }));
+  for (const rot of [6, -5, 4, -3, 2, 0]) keys.push(k("pose_think", 180, { rot, pivot: 0.1, fx: "dizzy" }));
+  keys.push(k("pose_think", 600, { fx: "dizzy" }));
   return keys;
 }
 
 function startledKeys(): Keyframe[] {
-  return [
-    k("idle0", 50, { sx: 1.06, sy: 0.93 }),
-    k("idle0", 60, { dy: -7, sx: 0.94, sy: 1.08, glitch: 0.55, fx: "eye" }),
-    k("idle0", 70, { dy: -9, glitch: 0.3, fx: "eye" }),
-    k("idle0", 60, { dy: -4, sy: 1.03 }),
-    k("idle0", 70, { sx: 1.06, sy: 0.94 }),
-    k("idle0", 120, { fx: "eye" }),
-  ];
+  // The drawn surprise: flinch, jump, eyes wide, settle.
+  return [...cycle("surprised", [0, 1], 60), k("surprised2", 70, { glitch: 0.5, fx: "eye" }), ...cycle("surprised", [3, 4, 5, 6], 80), k("surprised7", 220, { fx: "eye" })];
 }
 
 
@@ -487,8 +496,8 @@ function splatKeys(rand: () => number): Keyframe[] {
 /** Seeing stars. */
 function dizzyKeys(): Keyframe[] {
   const keys: Keyframe[] = [];
-  for (const rot of [12, -10, 8, -7, 5, -4, 3, -2, 1, 0]) keys.push(k("think0", 160, { rot, pivot: 0.05, fx: "dizzy" }));
-  return [...keys, k("think0", 500, { fx: "dizzy" }), k("idle0", 60, { glitch: 0.3, fx: "eye" }), k("idle0", 100)];
+  for (const rot of [8, -7, 6, -5, 4, -3, 2, -1, 1, 0]) keys.push(k("pose_think", 160, { rot, pivot: 0.05, fx: "dizzy" }));
+  return [...keys, k("pose_think", 500, { fx: "dizzy" }), k("idle0", 60, { glitch: 0.3, fx: "eye" }), k("idle0", 100)];
 }
 
 /** A landing squash proportional to impact speed (CSS px/s), for `interject`. */
@@ -585,14 +594,28 @@ export function stutter(rand: () => number, base: Omit<Keyframe, "ms"> = { frame
 
 /** Getting sleepy: a big stretch, sit down, curl up (then `sleep`). */
 const YAWN: Keyframe[] = [
-  k("idle0", 300, { sy: 1.03 }),
-  k("idle0", 500, { sx: 0.95, sy: 1.08, dy: -1 }),
-  k("idle0", 800, { sx: 0.94, sy: 1.09, dy: -1 }),
-  k("idle0", 250, { sx: 1.04, sy: 0.96 }),
-  k("sit", 1800),
-  k("sit", 1200, { sy: 0.97, dy: 1 }),
-  k("sit", 60, { sy: 0.97, dy: 1, glitch: 0.2, fx: "eye" }),
-  k("sleep0", 1500, { sx: 1.01 }),
+  // The drawn wake-up, backwards: stand, big yawn and stretch, then curl up.
+  k("wake7", 300),
+  k("wake6", 250),
+  k("wake3", 500),
+  k("wake4", 900),
+  k("wake3", 300),
+  k("wake2", 400),
+  k("wake1", 700),
+  k("wake0", 60, { glitch: 0.2, fx: "eye" }),
+  k("sleep0", 1500),
+];
+
+/** Woken up: the drawn wake-up (stretch, yawn, blink awake). */
+const WAKE: Keyframe[] = [
+  k("wake0", 400),
+  k("wake1", 250),
+  k("wake2", 200),
+  k("wake3", 350),
+  k("wake4", 600),
+  k("wake5", 250),
+  k("wake6", 200),
+  k("wake7", 300, { fx: "eye" }),
 ];
 
 /**
@@ -600,11 +623,8 @@ const YAWN: Keyframe[] = [
  * bob in time, a purple pixel equalizer by his head. 100 ms keys: 10 repaints/s.
  */
 function listenKeys(rand: () => number): Keyframe[] {
-  const keys: Keyframe[] = [];
-  for (let i = 0; i < 16; i++) {
-    const beat = i % 4;
-    keys.push(k("idle0", 100, { dy: beat === 1 ? -2 : beat === 2 ? -1 : 0, sx: beat === 0 ? 1.02 : 0.99, sy: beat === 0 ? 0.98 : 1.03, rot: -3, pivot: 0.1, fx: "eq" }));
-  }
+  // The drawn listening loop (ears up, leaning in), the equalizer by his head.
+  const keys = [...cycle("listen", [0, 1, 2, 3, 4, 5, 6, 7], 130, { fx: "eq" }), ...cycle("listen", [4, 5, 6, 7], 130, { fx: "eq" })];
   if (rand() < 0.3) keys[9] = { ...keys[9], glitch: 0.3 };
   return keys;
 }
@@ -624,12 +644,8 @@ function heldKeys(rand: () => number): Keyframe[] {
 
 /** Carried around fast: legs running in the air. */
 function heldKickKeys(rand: () => number): Keyframe[] {
-  const keys = [
-    k("walk0", 60, { sy: 1.06, rot: -4, pivot: 0.9 }),
-    k("walk1", 60, { sy: 1.08, rot: 3, pivot: 0.9 }),
-    k("walk0", 60, { sy: 1.06, rot: -2, pivot: 0.9, flip: true }),
-    k("walk1", 60, { sy: 1.08, rot: 4, pivot: 0.9 }),
-  ];
+  // Carried fast: the dangle frames played quickly (legs pedalling).
+  const keys = cycle("dangle", [0, 1, 2, 3, 4, 5, 6, 7], 70, { pivot: 0.9 });
   if (rand() < 0.3) keys[1] = { ...keys[1], glitch: 0.4, fx: "eye" };
   return keys;
 }
@@ -677,7 +693,14 @@ export type AnimationName =
   | "heldKick"
   | "listen"
   | "talk"
-  | "wave";
+  | "wave"
+  | "wake"
+  | "sad"
+  | "angry"
+  | "scared"
+  | "dance"
+  | "eat"
+  | "celebrate";
 
 export const ANIMATIONS: Record<AnimationName, Animation> = {
   // moods
@@ -687,7 +710,15 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   ask: { keys: askKeys },
   happy: { keys: happyKeys, once: true },
   // 2.4 s per key: under 0.5 repaints per second while asleep.
-  sleep: { keys: [k("sleep0", 2400, { sx: 1.012, sy: 0.975, fx: "zzz" }), k("sleep0", 2400, { fx: "zzz" })] },
+  // The drawn curled-up breathing (sleep0-7), one frame per 2.4 s.
+  sleep: { keys: cycle("sleep", [0, 1, 2, 3, 4, 5, 6, 7], 2400, { fx: "zzz" }) },
+  wake: { keys: WAKE, once: true },
+  sad: { keys: () => [...sheetOnce("sad", 140, 900)], once: true },
+  angry: { keys: () => [...sheetOnce("angry", 90, 500), ...cycle("angry", [5, 6, 7], 90)], once: true },
+  scared: { keys: () => sheetOnce("scared", 80, 500), once: true },
+  dance: { keys: () => [...cycle("dance", [0, 1, 2, 3, 4, 5, 6, 7], 120, { fx: "sparkle" })] },
+  eat: { keys: () => [...sheetOnce("eat", 140, 500)], once: true },
+  celebrate: { keys: celebrateKeys, once: true },
   // actions
   startled: { keys: startledKeys, once: true },
   laugh: { keys: laughKeys, once: true },

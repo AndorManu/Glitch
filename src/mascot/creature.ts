@@ -995,7 +995,9 @@ export class Creature {
     this.interaction();
     if (!this.asleep) return;
     this.asleep = false;
-    this.animator.play(this.restAnim());
+    // Stretch and yawn awake (standing only: on a wall he just snaps back to life).
+    if (this.mode === "stand" && isStanding(this.surface) && !this.busy()) this.animator.play("wake", this.restAnim());
+    else this.animator.play(this.restAnim());
     this.animator.glitchBurst(350);
     this.armLedgeWatch();
     this.scheduleBrain(3000 + this.rand() * 3000);

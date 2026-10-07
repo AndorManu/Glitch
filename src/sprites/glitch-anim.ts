@@ -4,7 +4,9 @@
 // its own pixel size, drawn crisp at 1.5 CSS px per art px (the same size
 // the old 2x sheet had on screen).
 //
-// Cycles: idle0-7, talk0-7, wave0-7, walk0-7, run0-5, jump0-7.
+// Cycles (8 frames unless noted): idle, talk, wave, walk, run (6), jump,
+// think, sleep, wake, dangle, climb, laugh, sad, angry, surprised, scared,
+// peek, push, spin, teleport, listen, celebrate, dance, eat, grab_tab.
 // The old sheet's names (blink, side, sit, sleep0, think0...) are aliases
 // of the closest frame, so everything that used raccoon.ts keeps working.
 
@@ -42,6 +44,8 @@ export const ALIASES: Record<string, string> = {
 const frames: Record<string, number> = { ...ANIM_INDEX };
 const eyes: Record<string, [number, number]> = { ...ANIM_EYES };
 for (const [alias, target] of Object.entries(ALIASES)) {
+  // A drawn cycle frame of the same name (e.g. sleep0, think1) wins over the alias.
+  if (alias in ANIM_INDEX || !(target in ANIM_INDEX)) continue;
   frames[alias] = ANIM_INDEX[target];
   eyes[alias] = ANIM_EYES[target];
 }

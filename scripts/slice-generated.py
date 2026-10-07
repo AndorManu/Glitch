@@ -40,7 +40,7 @@ GEN = ROOT / "art" / "generated"
 OUT = ROOT / "art" / "frames"
 DEV = ROOT / "dev" / "out"
 
-CANVAS_W, CANVAS_H = 100, 76
+CANVAS_W, CANVAS_H = 100, 90
 #: Height of the standing front pose of the original art in art px (pose 0
 #: of the sheet, recovered at half-block resolution by recover-grid.py).
 TARGET_STAND_H = 56
@@ -263,16 +263,20 @@ def process(name: str, cfg: dict, report: dict) -> list[np.ndarray]:
     natural_h = ref.shape[0] / cell
     target_h = cfg.get("target", TARGET_STAND_H)
     scale_cell = ref.shape[0] / target_h
-    use = cell if abs(natural_h / target_h - 1) < cfg.get("tolerance", 0.04) else scale_cell
+    use = cfg["cell"] if "cell" in cfg else cell if abs(natural_h / target_h - 1) < cfg.get("tolerance", 0.04) else scale_cell
     frames = []
+    votes = 0
     for i, c in enumerate(crops):
         _, ox, oy = best_pitch(c, use * 2 - 0.01, use * 2 + 0.01)
         art = trim(dehalo(sample(c, use, ox % use, oy % use)))
         ex = glitch_eye_x(art)
-        facing = "right" if ex is None or ex > art.shape[1] / 2 else "left"
-        if cfg.get("side") and facing == "left":
-            art = art[:, ::-1].copy()
+        if ex is not None:
+            votes += 1 if ex > art.shape[1] / 2 else -1
         frames.append(art)
+    # The glitch eye is on his right eye: in our convention it shows on the
+    # right of the picture. Mirror the whole sheet if most frames have it left.
+    if votes < 0:
+        frames = [f[:, ::-1].copy() for f in frames]
     # Body centred; `shift` moves a whole sheet (e.g. the long run tail must fit the canvas).
     anchors = [body_x(f, "left") - cfg.get("shift", 0) for f in frames]
     placed = [place(f, ax) for f, ax in zip(frames, anchors)]
@@ -304,6 +308,11 @@ SHEETS = {
     "run": {"side": True, "ref": 0, "target": 44, "n": 6, "shift": 7},
     "jump": {"side": True, "ref": 0, "target": 55},
 }
+#: Sheets without a plain standing reference frame: sampled at the typical
+#: cell size of the standing sheets above (~3.8 source px per art px).
+for _name in ["think", "sleep", "wake", "dangle", "climb", "laugh", "sad", "angry", "surprised", "scared",
+              "peek", "push", "spin", "teleport", "listen", "celebrate", "dance", "eat", "grab_tab"]:
+    SHEETS[_name] = {"cell": 3.8}
 
 
 def main():

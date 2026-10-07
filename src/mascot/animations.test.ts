@@ -120,10 +120,11 @@ describe("animations", () => {
     const once: AnimationName[] = [
       ...["happy", "startled", "laugh", "grabCursor", "peek", "fall", "land", "glitchOut", "gone", "glitchIn", "chaosSpin"],
       ...["crouch", "splat", "dizzy", "peekEdge", "lookAround", "build", "malfunction", "wave"],
+      ...["wake", "sad", "angry", "scared", "eat", "celebrate"],
     ] as AnimationName[];
     const loops: AnimationName[] = [
       ...["idle", "walk", "think", "ask", "sleep", "carryCursor", "dragWindow", "pushWindow", "dangle", "napRock"],
-      ...["cling", "climb", "run", "airUp", "airDown", "tumble", "flail", "sitEdge", "held", "heldKick", "listen", "talk"],
+      ...["cling", "climb", "run", "airUp", "airDown", "tumble", "flail", "sitEdge", "held", "heldKick", "listen", "talk", "dance"],
     ] as AnimationName[];
     // These hand over to a loop that isn't idle.
     const special: Partial<Record<AnimationName, AnimationName>> = { lookBack: "cling", yawn: "sleep" };
