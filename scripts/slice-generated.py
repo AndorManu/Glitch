@@ -374,10 +374,14 @@ def _dilate(m: np.ndarray, r: int) -> np.ndarray:
     return out
 
 
+def _erode(m: np.ndarray, r: int) -> np.ndarray:
+    return ~_dilate(~m, r)
+
+
 OUTLINE_RGB = np.array([12, 10, 24], np.uint8)
 
 
-def clean_cursor(frames: list[np.ndarray]) -> tuple[list[np.ndarray], list[list[int]]]:
+def clean_cursor(frames: list[np.ndarray], mode: str = "grip") -> tuple[list[np.ndarray], list[list[int]]]:
     """cling_cursor is drawn holding a big white cursor arrow (tip up, shaft
     down to his paws). The app shows the real cursor instead, so the drawn
     arrow goes: its white body is the largest near-white component; it and
@@ -398,10 +402,19 @@ def clean_cursor(frames: list[np.ndarray]) -> tuple[list[np.ndarray], list[list[
             out.append(a)
             grips.append([a.shape[1] // 2, 30])
             continue
-        arrow = comps[0]
+        arrow = comps[0].copy()
+        # The arrow can come out in pieces where his paws cover it (not the eye highlights: those are tiny).
+        for c in comps[1:]:
+            if c.sum() >= 8 and (_dilate(c, 6) & comps[0]).any():
+                arrow |= c
         ys, xs = np.where(arrow)
-        gy = int(ys.max())
-        gx = int(round(xs[ys == gy].mean()))
+        if mode == "bite":
+            # The arrow points up-left into his mouth: its tip is the anchor.
+            k = int(np.argmin(xs + ys))
+            gx, gy = int(xs[k]), int(ys[k])
+        else:
+            gy = int(ys.max())
+            gx = int(round(xs[ys == gy].mean()))
         R = _dilate(arrow, 2) & op
         body = _components(op & ~R)
         B = body[0] if body else np.zeros_like(op)
@@ -412,11 +425,15 @@ def clean_cursor(frames: list[np.ndarray]) -> tuple[list[np.ndarray], list[list[
             right = B[y, x + 1 : min(w, x + 5)].any()
             below = B[y + 1 : min(h, y + 4), x].any()
             inside[y, x] = left and right and below
+        if mode == "bite":
+            # The arrow lies across his chest and paws: whatever the body closes round
+            # (a closing of his silhouette, ~16 px gaps) is him, not background.
+            inside |= R & _erode(_dilate(B, 8), 8)
         a[R & ~inside] = 0
         # Repaint the inside from neighbouring non-arrow pixels, fur first.
         todo = inside.copy()
         known = (a[:, :, 3] > 0) & ~inside
-        for _ in range(12):
+        for _ in range(24):
             if not todo.any():
                 break
             nxt = a.copy()
@@ -448,6 +465,10 @@ def clean_cursor(frames: list[np.ndarray]) -> tuple[list[np.ndarray], list[list[
                 a[c] = 0
         out.append(a)
         grips.append([gx, gy])
+    if mode == "bite":
+        # Biting: frames stay as drawn (he lunges); the mouth point per frame is the anchor.
+        _review(frames, out, grips, "bite-clean.png")
+        return out, grips
     # Same grip point in every frame: he hangs steadily from the cursor tip.
     tx = int(round(np.median([g[0] for g in grips])))
     ty = min(g[1] for g in grips)  # shift up only: nothing is cut off at the bottom
@@ -466,18 +487,22 @@ def clean_cursor(frames: list[np.ndarray]) -> tuple[list[np.ndarray], list[list[
             b[dy:] = 0
         steady.append(b)
         g[0], g[1] = tx, ty
-    # Before / after, for review.
+    _review(frames, steady, grips, "cling-clean.png")
+    return steady, grips
+
+
+def _review(before, after, points, file):
+    """Before / after strip with the anchor point marked (red square)."""
     z = 3
-    H, W = frames[0].shape[:2]
-    sheet = Image.new("RGBA", (W * z * len(frames), H * z * 2), (46, 107, 88, 255))
-    for i, (bf, af) in enumerate(zip(frames, steady)):
+    H, W = before[0].shape[:2]
+    sheet = Image.new("RGBA", (W * z * len(before), H * z * 2), (46, 107, 88, 255))
+    d = ImageDraw.Draw(sheet)
+    for i, (bf, af, (px_, py_)) in enumerate(zip(before, after, points)):
         for row, im in enumerate((bf, af)):
             sheet.alpha_composite(Image.fromarray(im, "RGBA").resize((W * z, H * z), Image.NEAREST), (i * W * z, row * H * z))
-        d = ImageDraw.Draw(sheet)
-        d.rectangle([i * W * z + tx * z, H * z + ty * z, i * W * z + tx * z + z - 1, H * z + ty * z + z - 1], outline=(255, 60, 60, 255))
+        d.rectangle([i * W * z + px_ * z - 1, H * z + py_ * z - 1, i * W * z + px_ * z + z, H * z + py_ * z + z], outline=(255, 40, 40, 255))
     DEV.mkdir(parents=True, exist_ok=True)
-    sheet.save(DEV / "cling-clean.png")
-    return steady, grips
+    sheet.save(DEV / file)
 
 
 def place(a: np.ndarray, anchor_x: float) -> np.ndarray:
@@ -558,7 +583,7 @@ def process(name: str, cfg: dict, report: dict) -> list[np.ndarray]:
         anchors = [anchors[0] + (hx - heads[0]) for hx in heads]
     placed = [place(f, ax) for f, ax in zip(frames, anchors)]
     if cfg.get("cursor_clean"):
-        placed, grips = clean_cursor(placed)
+        placed, grips = clean_cursor(placed, cfg["cursor_clean"] if isinstance(cfg["cursor_clean"], str) else "grip")
         OUT.mkdir(parents=True, exist_ok=True)
         (OUT / f"{name}-grips.json").write_text(json.dumps(grips))
     clipped = [i for i, (f, p) in enumerate(zip(frames, placed)) if (p[:, :, 3] > 0).sum() < (f[:, :, 3] > 0).sum()]
@@ -628,6 +653,8 @@ SHEETS["climb"] = {"cell": 4.9, "rotate": -1, "shift": 6}
 
 # The drawn cursor arrow comes out of cling_cursor (the real cursor is there); grip points saved.
 SHEETS["cling_cursor"]["cursor_clean"] = True
+# And out of bite_cursor (he bites the real cursor): the mouth point per frame saved.
+SHEETS["bite_cursor"]["cursor_clean"] = "bite"
 # Arms crossed, standing: as tall as idle0.
 SHEETS["annoyed"] = {"n": None, "ref": 0, "target": 55, "tolerance": 0}
 # The fishing line hangs far below him: cut it at his feet (it goes on over the edge).

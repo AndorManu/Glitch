@@ -14,7 +14,7 @@
 
 import { ANIMATIONS, type AnimationName, Animator, type Clock, isAnimationName, type Keyframe, landKeys, type Pose } from "./animations";
 import { familyOf, turnKeys } from "./transitions";
-import { ANIM_FRAME_H, ANIM_FRAME_W, ANIM_GRIPS } from "../sprites/anim";
+import { ANIM_BITES, ANIM_FRAME_H, ANIM_FRAME_W, ANIM_GRIPS } from "../sprites/anim";
 import { ART_SCALE } from "../sprites/glitch-anim";
 import { type BehaviourName, Brain, type BrainContext, type Haul, isBehaviourName, type Plan, type Gait } from "./brain";
 import { ChaosDirector, chaosAnim, type ChaosHost, isAct, knockKeys } from "./chaos";
@@ -101,6 +101,14 @@ const SWAY_MAX = 9;
 const ATTACH_MS = 80;
 /** Thrown faster than this (CSS px/s): he spins; slower, he falls upright. */
 const HARD_THROW = 900;
+/** Biting: he runs over first when the cursor is further than this (CSS px) sideways. */
+const BITE_REACH = 220;
+/** Biting: the lunge (ease from where he stands to the cursor), ms. */
+const BITE_LUNGE_MS = 240;
+/** Biting: when the shake frames start, the step between wiggles, when he lets go (ms, see the biteCursor animation). */
+const BITE_SHAKE_AT = 590;
+const BITE_SHAKE_STEP = 95;
+const BITE_MS = 1330;
 export const ANNOY_HIGH = 4.5;
 /** Never ask the OS about windows more often than this. */
 export const WORLD_MIN_MS = 1500;
@@ -196,6 +204,10 @@ interface Hold {
   attach: { x: number; y: number; angle: number; t0: number };
   /** Clinging on to the cursor: body centre offset from the cursor (physical px). */
   grip?: Vec;
+  /** Biting the cursor: the mouth anchor of each drawn frame (ANIM_BITES) is put on the cursor tip. */
+  bite?: boolean;
+  /** Easing time of the attach (ms): a quick grab, or the bite's lunge. */
+  attachMs?: number;
 }
 
 interface Platform {
@@ -396,7 +408,8 @@ export class Creature {
   /** Stop every timer (tests, page unload). */
   dispose(): void {
     this.animator.stop();
-    for (const t of [this.annoyTimer, this.clingTimer]) if (t !== null) this.clock.clearTimeout(t);
+    for (const t of [this.annoyTimer, this.clingTimer, ...this.biteTimers]) if (t !== null) this.clock.clearTimeout(t);
+    this.biteTimers = [];
     this.annoyTimer = this.clingTimer = null;
     for (const t of [this.motionTimer, this.brainTimer, this.pollTimer, this.actionTimer, this.talkTimer, this.watchTimer]) if (t !== null) this.clock.clearTimeout(t);
     this.motionTimer = this.brainTimer = this.pollTimer = this.actionTimer = this.talkTimer = this.watchTimer = null;
@@ -429,6 +442,120 @@ export class Creature {
     this.annoyRaw = this.annoyance + amount;
     this.annoyAt = this.now;
   }
+
+  /**
+   * Body centre offset from the cursor (physical px) that puts art point
+   * `g` (px in a frame) on the cursor tip: frames are drawn with the feet
+   * on their bottom edge, centred, ART_SCALE CSS px per art px; the body
+   * centre is HALF CSS px above the feet.
+   */
+  private anchorOffset(g: readonly [number, number]): Vec {
+    const k = this.u * ART_SCALE;
+    return { x: -(g[0] - ANIM_FRAME_W / 2) * k, y: -(g[1] - ANIM_FRAME_H) * k - HALF * this.u };
+  }
+
+  private biteTimers: unknown[] = [];
+
+  /**
+   * Bite the REAL cursor: lunge at it so the drawn mouth closes exactly on
+   * the cursor tip (he hangs from it by his teeth if it's up in the air),
+   * shake it like a dog toy (chaos mode only: the real cursor wiggles a few
+   * px through the chaos cursor path, which gives up at once if you move the
+   * mouse), let go with a smug face and back off a step. Far away: he runs
+   * to it first. Returns false if he can't (held, in the air, no world).
+   */
+  biteCursor(): boolean {
+    if (!this.world || this.mode !== "stand" || this.hold || !isStanding(this.surface)) return false;
+    this.interrupt();
+    this.asleep = false;
+    void Promise.resolve(this.host.cursor()).then((p) => {
+      if (this.mode !== "stand" || this.hold || !this.world) return;
+      const u = this.u;
+      const dx = p.x - this.body.x;
+      if (Math.abs(dx) > BITE_REACH * u && this.movement) {
+        // Run over first (not right under it: the lunge covers the rest).
+        const to = clampTo(this.surface, p.x - Math.sign(dx) * 60 * u, this.world);
+        const left = facesLeftFor(this.surface.kind, Math.sign(dx));
+        this.facingLeft = left;
+        this.loco = { to, gait: "run", v: 0, dir: Math.sign(to - this.s) || 1, freezeUntil: 0, skip: 0, nextGlitchAt: Infinity };
+        this.animator.play("run");
+        this.ensureMotion();
+        this.afterLoco = () => this.biteNow();
+        return;
+      }
+      this.biteNow();
+    });
+    return true;
+  }
+
+  /** Called when a run started by biteCursor arrives. */
+  private afterLoco: (() => void) | null = null;
+
+  private biteNow(): void {
+    if (!this.world || this.mode !== "stand" || this.hold) return;
+    for (const t of this.biteTimers) this.clock.clearTimeout(t);
+    this.biteTimers = [];
+    const here = { x: this.body.x, y: this.body.y };
+    this.hold = {
+      cursor: here,
+      busy: false,
+      L: 0,
+      phi0: 0,
+      angle0: 0,
+      pivotY: -HALF,
+      pend: new Pendulum(0, 36 * this.u, PHYS.gravity * this.u),
+      tracker: new VelocityTracker(),
+      vs: { x: 0, y: 0 },
+      kickUntil: 0,
+      attach: { x: 0, y: 0, angle: this.body.angle, t0: this.now },
+      bite: true,
+      attachMs: BITE_LUNGE_MS,
+    };
+    const h = this.hold;
+    // The first cursor reading defines the lunge: from where he stands to it.
+    void Promise.resolve(this.host.cursor()).then((c) => {
+      if (this.hold !== h) return;
+      h.cursor = c;
+      h.attach = { x: here.x - c.x, y: here.y - c.y, angle: this.body.angle, t0: this.now };
+    });
+    this.mode = "held";
+    this.syncLedgeWatch();
+    this.animator.play("biteCursor");
+    this.event("bite");
+    this.ensureMotion();
+    // Shake it like a dog toy, on the shake frames (chaos mode, if Rust lets him).
+    const at = (ms: number, fn: () => void) => this.biteTimers.push(this.clock.setTimeout(fn, ms));
+    at(BITE_SHAKE_AT, () => {
+      const chaos = this.host.chaos;
+      if (this.hold !== h || !chaos || !this.chaosOn) return;
+      void chaos.grabCursor().then(
+        (p0) => {
+          if (!p0 || this.hold !== h) return;
+          const wiggle = [[5, -2], [-5, 2], [5, 1], [-5, -1], [3, 0], [0, 0]];
+          wiggle.forEach(([wx, wy], i) =>
+            at(i * BITE_SHAKE_STEP, () => {
+              if (this.hold !== h) return;
+              void chaos.dragCursor(p0.x + wx * this.u, p0.y + wy * this.u).then((ok) => {
+                if (!ok) chaos.releaseCursor(); // you moved the mouse: you win
+              });
+            }),
+          );
+          at(wiggle.length * BITE_SHAKE_STEP, () => chaos.releaseCursor());
+        },
+        () => {},
+      );
+    });
+    // Let go: drop (and land), then the smug face and a step back.
+    at(BITE_MS, () => {
+      if (this.hold !== h) return;
+      this.hold = null;
+      this.biteBackOff = true;
+      this.launch({ x: 0, y: 0 }, { planned: false, panic: false, canSplat: false, drag: false });
+    });
+  }
+
+  /** After a bite, once he's back on his feet: smug, then a step back. */
+  private biteBackOff = false;
 
   /** Sulking: back turned, clicks don't get a reaction. */
   get sulking(): boolean {
@@ -779,7 +906,9 @@ export class Creature {
     // While moving, at most one paint per 60 Hz frame: a second paint in the
     // same frame (a launch places him and the new air animation draws) is
     // left to the motion tick that follows.
-    if (this.motionTimer !== null && this.lastFlushAt >= 0 && this.now - this.lastFlushAt < 1000 / 60) return;
+    // Not while biting the cursor: the window just moved to put this frame's
+    // mouth on the cursor, so the frame has to be on screen with it.
+    if (this.motionTimer !== null && this.lastFlushAt >= 0 && this.now - this.lastFlushAt < 1000 / 60 && !this.hold?.bite) return;
     this.dirty = false;
     if (!this.pose) return;
     this.lastFlushAt = this.now;
@@ -922,6 +1051,13 @@ export class Creature {
 
   private stepLoco(dt: number, now: number): void {
     const L = this.loco!;
+    if (this.afterLoco && Math.abs(L.to - this.s) < 2 * this.u) {
+      const go = this.afterLoco;
+      this.afterLoco = null;
+      this.loco = null;
+      this.animator.play(this.restAnim());
+      return go();
+    }
     const w = this.world!;
     const u = w.scale;
     if (L.haul) return this.stepHaul(dt);
@@ -1277,6 +1413,12 @@ export class Creature {
     }
     // Thrown, dropped, or the window under him vanished.
     this.plan = null;
+    if (this.biteBackOff && isStanding(c.surface)) {
+      this.biteBackOff = false;
+      const back = clampTo(c.surface, this.s - (this.facingLeft ? -1 : 1) * 22 * this.u, this.world!);
+      this.startPlan({ name: "stroll", steps: [{ do: "anim", name: "smugBite" }, { do: "walk", to: back, gait: "walk", backwards: true }] });
+      return;
+    }
     if (f.canSplat && c.speed > PHYS.splat) {
       this.animator.play("splat"); // -> dizzy -> idle
       this.excitedUntil = this.now + 60_000;
@@ -1345,12 +1487,15 @@ export class Creature {
       const r = this.reactAfterLanding;
       this.reactAfterLanding = null;
       if (r === "grumpy") {
+        // Bite the real cursor first (the sulk follows the bite and the step back).
+        this.biteTimers.push(this.clock.setTimeout(() => this.biteCursor() || this.animator.play("grumpy", "sulk"), 250));
         this.sulkUntil = this.now + 7000;
         if (this.annoyTimer !== null) this.clock.clearTimeout(this.annoyTimer);
         this.annoyTimer = this.clock.setTimeout(() => {
           this.annoyTimer = null;
           if (this.mode === "stand" && ["grumpy", "annoyed", "sulk"].includes(this.animator.animation)) this.animator.play("calmDown", "idle");
         }, 7000);
+        return "annoyed";
       }
       return r;
     }
@@ -1875,6 +2020,7 @@ export class Creature {
     }
     // Behaviours first ("climb" is also the climbing animation); the animation if it can't be planned here.
     if (isBehaviourName(name) && this.force(name)) return true;
+    if (name === "biteCursor") return this.biteCursor();
     if (isAnimationName(name)) {
       if (this.mode === "held") return false;
       // On a wall or the ceiling he is turned with the surface: a front-facing
@@ -1943,6 +2089,7 @@ export class Creature {
   }
 
   pointerUp(): void {
+    if (this.hold?.bite) return;
     if (this.hold) return this.release();
     if (!this.press) return;
     this.press = null;
@@ -2045,6 +2192,11 @@ export class Creature {
     let x = h.cursor.x + h.L * Math.sin(phi);
     let y = h.cursor.y + h.L * Math.cos(phi);
     let angle = -(phi * 180) / Math.PI;
+    // Biting: the current frame's mouth point exactly at the cursor tip.
+    if (h.bite) {
+      const g = ANIM_BITES[this.animator.pose?.frame ?? ""] ?? ANIM_BITES.bite_cursor2;
+      if (g) h.grip = this.anchorOffset(g);
+    }
     // Clinging on to the cursor (drawn holding it): the frame's grip point at the cursor tip, no sway.
     if (h.grip) {
       x = h.cursor.x + h.grip.x;
@@ -2052,18 +2204,25 @@ export class Creature {
       angle = 0;
     }
     // Easing in from where he was when you grabbed him.
-    const e = Math.min(1, (now - h.attach.t0) / ATTACH_MS);
+    const e = Math.min(1, (now - h.attach.t0) / (h.attachMs ?? ATTACH_MS));
     if (e < 1) {
       const k = e * e * (3 - 2 * e);
       x = h.cursor.x + h.attach.x + (x - h.cursor.x - h.attach.x) * k;
       y = h.cursor.y + h.attach.y + (y - h.cursor.y - h.attach.y) * k;
       angle = h.attach.angle + (angle - h.attach.angle) * k;
     }
+    if (h.bite && this.world) {
+      // Never off the work area (the window would be clamped and the mouth miss the cursor).
+      const a = this.world.area;
+      x = Math.max(a.x + HALF * u, Math.min(a.x + a.w - HALF * u, x));
+      y = Math.max(a.y + HALF * u, Math.min(a.y + a.h - HALF * u, y));
+    }
     this.body.x = x;
     this.body.y = y;
     this.body.angle = angle;
     // Upright drawn frames, no stretching or shearing of the sprite.
     this.motion = CALM;
+    if (h.bite) return;
     const speed = Math.hypot(h.vs.x, h.vs.y) / u;
     if (speed > 900) h.kickUntil = now + 350;
     if (this.clingTimer !== null) return; // hanging on to the cursor after you let go
@@ -2087,8 +2246,7 @@ export class Creature {
       // Hold on by the grip drawn in the frame (art/frames/cling_cursor-grips.json), easing there from the scruff.
       const g = ANIM_GRIPS.cling_cursor0;
       if (g) {
-        const ux = this.u * ART_SCALE;
-        h.grip = { x: -(g[0] - ANIM_FRAME_W / 2) * ux, y: -(g[1] - ANIM_FRAME_H) * ux - HALF * this.u };
+        h.grip = this.anchorOffset(g);
         h.attach = { x: this.body.x - h.cursor.x, y: this.body.y - h.cursor.y, angle: this.body.angle, t0: this.now };
       }
       this.event("cling-cursor");

@@ -860,6 +860,8 @@ export type AnimationName =
   | "grumpy"
   | "sulk"
   | "calmDown"
+  | "biteCursor"
+  | "smugBite"
   | "point"
   | "typing"
   | "sit";
@@ -924,6 +926,25 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
     // Back turned; now and then a look back over his shoulder (the turn's 3/4 frame).
     keys: (r) => (has("turn_to_back") ? [k("turn_to_back5", 1400 + r() * 900), k("turn_to_back4", 140), k("turn_to_back3", 700), k("turn_to_back4", 140)] : [k("idle0", 1500)]),
   },
+  // Biting the real cursor (creature.ts biteCursor; timings match BITE_*):
+  // lunge 240, mouth open 150, chomp 200, shake 3 x (95 + 95), let go 400.
+  biteCursor: {
+    keys: [
+      k("bite_cursor0", 240),
+      k("bite_cursor1", 150),
+      k("bite_cursor2", 200, { fx: "eye" }),
+      k("bite_cursor3", 95),
+      k("bite_cursor4", 95),
+      k("bite_cursor3", 95),
+      k("bite_cursor4", 95),
+      k("bite_cursor3", 95),
+      k("bite_cursor4", 95),
+      k("bite_cursor5", 400),
+    ],
+    bridge: false,
+  },
+  // After the bite: pleased with himself (the smug let-go frame), then a glance away.
+  smugBite: { keys: [k("bite_cursor5", 700), k("idle0", 200)], once: true },
   calmDown: {
     keys: () => [...(has("turn_to_back") ? clip("turn_to_back", 100, { ease: 1, reverse: true }) : []), ...(has("hop_idle") ? clip("hop_idle", 85, { ease: 1 }) : []), k("idle0", 200)],
     once: true,

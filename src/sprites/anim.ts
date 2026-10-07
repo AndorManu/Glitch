@@ -1026,3 +1026,12 @@ export const ANIM_GRIPS: Record<string, [number, number]> = {
   cling_cursor6: [49, 36],
   cling_cursor7: [49, 36],
 };
+// Where his mouth bites the cursor tip (art px in the frame), per bite_cursor frame.
+export const ANIM_BITES: Record<string, [number, number]> = {
+  bite_cursor0: [66, 61],
+  bite_cursor1: [61, 61],
+  bite_cursor2: [47, 64],
+  bite_cursor3: [46, 64],
+  bite_cursor4: [45, 64],
+  bite_cursor5: [71, 61],
+};
