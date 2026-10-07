@@ -570,7 +570,8 @@ pub fn prepare(call: &ToolCall, platform: &dyn Platform) -> Result<Action, ToolE
             let when_words = str_arg(args, "when").or_else(|_| str_arg(args, "time"))?;
             let now = chrono::Local::now();
             let at = crate::update_me::when::parse_when(when_words, now.naive_local()).map_err(ToolError)?;
-            let due = crate::update_me::when::to_unix(at).ok_or_else(|| ToolError("that time doesn't exist here".into()))?;
+            let due =
+                crate::update_me::when::to_unix(at).ok_or_else(|| ToolError("that time doesn't exist here".into()))?;
             let when = crate::update_me::when::label(at, now.naive_local());
             Ok(Action::SetReminder { text, due, when })
         }
@@ -878,7 +879,9 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), s.len(), "unique names");
         assert_eq!(specs(Offer { memory: false, screen: true, reminders: true }).len(), s.len() - 2);
-        assert!(!specs(Offer { memory: true, screen: false, reminders: true }).iter().any(|t| t.name == LOOK_AT_SCREEN));
+        assert!(!specs(Offer { memory: true, screen: false, reminders: true })
+            .iter()
+            .any(|t| t.name == LOOK_AT_SCREEN));
         assert!(!specs(Offer { memory: true, screen: true, reminders: false }).iter().any(|t| t.name == SET_REMINDER));
         for t in &s {
             assert_eq!(t.parameters["type"], "object");

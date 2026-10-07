@@ -128,7 +128,12 @@ fn at(date: NaiveDate, h: u32, m: u32) -> NaiveDateTime {
 pub fn parse_when(input: &str, now: NaiveDateTime) -> Result<NaiveDateTime, String> {
     let lower = input.trim().to_lowercase().replace(',', " ");
     let mut s = lower.split_whitespace().collect::<Vec<_>>().join(" ");
-    let bad = || format!("I couldn't understand the time \"{}\"; try \"17:00\", \"tomorrow 9am\" or \"in 20 minutes\"", input.trim());
+    let bad = || {
+        format!(
+            "I couldn't understand the time \"{}\"; try \"17:00\", \"tomorrow 9am\" or \"in 20 minutes\"",
+            input.trim()
+        )
+    };
     if s.is_empty() {
         return Err(bad());
     }
@@ -165,7 +170,8 @@ pub fn parse_when(input: &str, now: NaiveDateTime) -> Result<NaiveDateTime, Stri
             "tomorrow" | "tmrw" | "tomorow" => day = Some(today + Duration::days(1)),
             w => match weekday(w) {
                 Some(wd) => {
-                    let ahead = (7 + wd.num_days_from_monday() as i64 - today.weekday().num_days_from_monday() as i64) % 7;
+                    let ahead =
+                        (7 + wd.num_days_from_monday() as i64 - today.weekday().num_days_from_monday() as i64) % 7;
                     day = Some(today + Duration::days(if ahead == 0 { 7 } else { ahead }));
                 }
                 None => return false,

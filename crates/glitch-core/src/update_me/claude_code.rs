@@ -413,7 +413,12 @@ mod tests {
         assert!(matches!(merge_connect(Some("[1,2]"), CMD), Err(MergeError::Shape(_))));
         assert!(matches!(merge_connect(Some(r#"{"hooks": 5}"#), CMD), Err(MergeError::Shape(_))));
         // Other tools' hooks, even ones with a similar flag, are never ours.
-        for cmd in ["other --claude-hook", "x --glitch-claude-hook-v2", "glitch --glitch-claude-hook && rm -rf ~", "glitch.exe"] {
+        for cmd in [
+            "other --claude-hook",
+            "x --glitch-claude-hook-v2",
+            "glitch --glitch-claude-hook && rm -rf ~",
+            "glitch.exe",
+        ] {
             let other = json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": cmd}]}]}});
             assert_eq!(merge_disconnect(Some(&other.to_string())).unwrap(), None, "{cmd}");
         }
@@ -425,7 +430,9 @@ mod tests {
             hook_command(Path::new(r"C:\Program Files\Glitch\glitch.exe")).unwrap(),
             "\"C:/Program Files/Glitch/glitch.exe\" --glitch-claude-hook"
         );
-        for bad in [r#"C:\a"b\glitch.exe"#, "/tmp/$HOME/glitch", "C:\\100%\\glitch.exe", "/x/`id`/glitch", "/it's/glitch", ""] {
+        for bad in
+            [r#"C:\a"b\glitch.exe"#, "/tmp/$HOME/glitch", "C:\\100%\\glitch.exe", "/x/`id`/glitch", "/it's/glitch", ""]
+        {
             assert!(hook_command(Path::new(bad)).is_err(), "{bad}");
         }
     }

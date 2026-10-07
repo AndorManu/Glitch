@@ -224,7 +224,10 @@ mod tests {
         });
         let w = parse_forecast(&f).unwrap();
         assert_eq!(w.code, 61);
-        assert_eq!(weather_line(&w, "Berlin"), "Berlin: 12°C and rainy, 8 to 14°C today. Take an umbrella, I'm not drying you off.");
+        assert_eq!(
+            weather_line(&w, "Berlin"),
+            "Berlin: 12°C and rainy, 8 to 14°C today. Take an umbrella, I'm not drying you off."
+        );
         assert_eq!(parse_forecast(&json!({"error": true})), None);
     }
 
@@ -238,7 +241,8 @@ mod tests {
     fn composed_text() {
         let now = NaiveDate::from_ymd_opt(2026, 10, 8).unwrap().and_hms_opt(8, 5, 0).unwrap();
         let five = now.date().and_hms_opt(17, 0, 0).unwrap();
-        let b = compose(now, Some("Berlin: 12°C and rainy.".into()), &[(five, "call mum".into())], vec!["buy milk".into()]);
+        let b =
+            compose(now, Some("Berlin: 12°C and rainy.".into()), &[(five, "call mum".into())], vec!["buy milk".into()]);
         assert_eq!(
             b.text(),
             "Morning! It's 08:05 on Thursday 8 October. Berlin: 12°C and rainy. Today I'll remind you: 17:00 call mum. Open to-dos: buy milk."

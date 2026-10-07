@@ -105,6 +105,10 @@ impl Desktop for NativeDesktop {
         glitch_core::desktop::default_notes_file()
     }
 
+    fn add_reminder(&self, due: i64, text: &str) -> DesktopResult<()> {
+        crate::update_me::add_reminder(&self.app, due, text)
+    }
+
     fn set_timer(&self, after: Duration, message: &str) -> DesktopResult<()> {
         if self.timers.fetch_add(1, Ordering::SeqCst) >= MAX_TIMERS {
             self.timers.fetch_sub(1, Ordering::SeqCst);

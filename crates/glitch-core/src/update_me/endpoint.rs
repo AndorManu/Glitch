@@ -175,9 +175,8 @@ pub fn handle(req: &Request, token: &str, port: u16) -> (Response, Option<Update
     if req.header("origin").is_some() {
         return (Response::err(403, "browsers can't use this endpoint"), None);
     }
-    let host_ok = req
-        .header("host")
-        .is_some_and(|h| h == format!("127.0.0.1:{port}") || h == format!("localhost:{port}"));
+    let host_ok =
+        req.header("host").is_some_and(|h| h == format!("127.0.0.1:{port}") || h == format!("localhost:{port}"));
     if !host_ok {
         return (Response::err(403, "wrong Host"), None);
     }
@@ -325,7 +324,8 @@ pub enum ClientError {
 pub fn notify(info: &EndpointInfo, event: &Value) -> Result<(), ClientError> {
     let port = info.port.ok_or(ClientError::NotListening)?;
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    let mut s = TcpStream::connect_timeout(&addr, Duration::from_millis(1500)).map_err(|_| ClientError::NotListening)?;
+    let mut s =
+        TcpStream::connect_timeout(&addr, Duration::from_millis(1500)).map_err(|_| ClientError::NotListening)?;
     s.set_read_timeout(Some(Duration::from_secs(3)))?;
     s.set_write_timeout(Some(Duration::from_secs(3)))?;
     let body = event.to_string();
@@ -384,7 +384,8 @@ mod tests {
 
     #[test]
     fn refuses_bad_tokens_browsers_and_rebinding() {
-        let ok_headers = format!("Host: 127.0.0.1:5000\r\nAuthorization: Bearer {T}\r\nContent-Type: application/json\r\n");
+        let ok_headers =
+            format!("Host: 127.0.0.1:5000\r\nAuthorization: Bearer {T}\r\nContent-Type: application/json\r\n");
         let body = r#"{"title":"x"}"#;
         let cases = [
             (post("Host: 127.0.0.1:5000\r\nContent-Type: application/json\r\n", body), 401),

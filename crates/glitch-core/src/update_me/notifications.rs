@@ -79,10 +79,38 @@ impl NotificationSource for FakeSource {
 
 /// App names (lowercase) never read. Short ones match whole words only.
 pub const BUILTIN_BLOCKLIST: &[&str] = &[
-    "authenticator", "authy", "1password", "bitwarden", "lastpass", "keepass", "dashlane", "okta", "duo",
-    "bank", "banking", "paypal", "revolut", "n26", "wise", "monzo", "bunq", "ing", "rabobank", "abn amro",
-    "sparkasse", "volksbank", "commerzbank", "barclays", "hsbc", "santander", "chase", "klarna", "wallet",
-    "credit", "windows security", "security center",
+    "authenticator",
+    "authy",
+    "1password",
+    "bitwarden",
+    "lastpass",
+    "keepass",
+    "dashlane",
+    "okta",
+    "duo",
+    "bank",
+    "banking",
+    "paypal",
+    "revolut",
+    "n26",
+    "wise",
+    "monzo",
+    "bunq",
+    "ing",
+    "rabobank",
+    "abn amro",
+    "sparkasse",
+    "volksbank",
+    "commerzbank",
+    "barclays",
+    "hsbc",
+    "santander",
+    "chase",
+    "klarna",
+    "wallet",
+    "credit",
+    "windows security",
+    "security center",
 ];
 
 fn words(s: &str) -> Vec<String> {
@@ -105,8 +133,20 @@ pub fn blocked(app: &str, extra: &[String]) -> bool {
 }
 
 const CODE_WORDS: &[&str] = &[
-    "code", "otp", "verification", "verify", "passcode", "pin", "2fa", "one-time", "one time", "login", "sign-in",
-    "security", "tan", "password",
+    "code",
+    "otp",
+    "verification",
+    "verify",
+    "passcode",
+    "pin",
+    "2fa",
+    "one-time",
+    "one time",
+    "login",
+    "sign-in",
+    "security",
+    "tan",
+    "password",
 ];
 
 /// Hide one-time codes (4-8 digits, "123 456" too) when the text talks about
@@ -269,7 +309,11 @@ pub fn fallback_summaries(pending: &[Toast]) -> Vec<Summary> {
                     who.push(w);
                 }
             }
-            let line = if who.is_empty() { format!("{} new", g.count) } else { format!("{} new: {}", g.count, who.join(", ")) };
+            let line = if who.is_empty() {
+                format!("{} new", g.count)
+            } else {
+                format!("{} new: {}", g.count, who.join(", "))
+            };
             Summary { app: g.app, count: g.count, line }
         })
         .collect()
