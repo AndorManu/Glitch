@@ -260,6 +260,38 @@ export interface VoiceSettings {
   /** "auto" or a language code. */
   language: string;
   speak_replies: boolean;
+  /** Listen for "Hey Glitch" (the mic stays open while armed). Off by default. */
+  wake_word: boolean;
+  /** Read-aloud voice: the system's, or Glitch's own (downloaded on request). */
+  read_aloud_voice: "system" | "glitch";
+}
+
+/** The wake word: the setting, and whether the mic is open for it right now. */
+export interface WakeStatus {
+  enabled: boolean;
+  armed: boolean;
+  /** Why it isn't armed although enabled. */
+  problem: "needs_model" | "voice_off" | "unavailable" | "mic_denied" | "mic_missing" | "mic_busy" | "mic_failed" | null;
+  message: string | null;
+}
+
+/** Glitch's own read-aloud voice (Piper). */
+export interface TtsStatus {
+  /** There is a build for this system (Windows x64). */
+  supported: boolean;
+  installed: boolean;
+  size_mb: number;
+  /** [done, total] bytes while downloading. */
+  download: [number, number] | null;
+  playing: boolean;
+}
+
+export interface TtsDownloadEvent {
+  state: "running" | "done" | "failed" | "cancelled";
+  done: number;
+  total: number;
+  error: string | null;
+  code: string | null;
 }
 
 export interface SpeechModel {
@@ -291,13 +323,16 @@ export interface VoiceStatus {
   download: { model: string; done: number; total: number } | null;
   /** The bubble should offer the model download (the hotkey opened it). */
   offer_pending: boolean;
+  wake: WakeStatus;
+  read_aloud_voice: "system" | "glitch";
+  tts: TtsStatus;
 }
 
 export type VoiceEvent =
   | { phase: "listening"; level: number; hands_free: boolean }
   | { phase: "transcribing" }
   | { phase: "heard"; text: string }
-  | { phase: "idle"; reason: "cancelled" | "nothing_heard" }
+  | { phase: "idle"; reason: "cancelled" | "nothing_heard" | "wake_only" }
   | { phase: "error"; code: string; message: string }
   | { phase: "needs_model"; model: Omit<SpeechModel, "size_mb" | "downloaded"> };
 
@@ -315,6 +350,8 @@ export interface VoicePatch {
   model?: string;
   language?: string;
   speak_replies?: boolean;
+  wake_word?: boolean;
+  read_aloud_voice?: "system" | "glitch";
 }
 
 export const voiceApi = {
@@ -332,6 +369,17 @@ export const voiceApi = {
   cancelDownload: () => invoke<void>("voice_cancel_download"),
   deleteModel: (model: string) => invoke<void>("voice_delete_model", { model }),
   openMicSettings: () => invoke<void>("voice_open_mic_settings"),
+  /** The system voice started/stopped reading aloud (the wake word ignores the mic meanwhile). */
+  speaking: (on: boolean) => invoke<void>("voice_speaking", { on }),
+  /** A message was sent: get Glitch's voice ready (no-op if it isn't used). */
+  ttsPrepare: () => invoke<void>("voice_tts_prepare"),
+  /** Read aloud with Glitch's voice; rejects if it can't (use the system voice then). */
+  ttsSpeak: (text: string) => invoke<void>("voice_tts_speak", { text }),
+  ttsStop: () => invoke<void>("voice_tts_stop"),
+  /** Resolves when finished; progress as "tts-download" events. */
+  ttsDownload: () => invoke<void>("voice_tts_download"),
+  ttsCancelDownload: () => invoke<void>("voice_tts_cancel_download"),
+  ttsDelete: () => invoke<void>("voice_tts_delete"),
 };
 
 // ------------------------------------------------------------------ chaos

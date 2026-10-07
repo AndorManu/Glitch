@@ -529,3 +529,28 @@ button.danger-text.armed:hover:not(:disabled) { background: var(--danger); }
 .voice-model-line.stack { flex-direction: column; align-items: flex-start; gap: 6px; }
 .voice-error { color: var(--danger); }
 .voice-gap { height: 12px; border-bottom: 2px dashed var(--line-soft); margin-bottom: 12px; }
+
+/* ---------------------------------------------------- settings: features */
+
+.section-title {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fur-dark);
+  margin: 18px 2px 8px;
+}
+/* "Listening for Hey Glitch": a live dot, so the open mic is never subtle. */
+.wake-status { margin: 8px 0 0; }
+.wake-armed { color: var(--ok); font-weight: 600; padding-left: 16px; position: relative; }
+.wake-armed::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0.45em;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--ok-soft);
+}

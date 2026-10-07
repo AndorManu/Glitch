@@ -19,6 +19,7 @@ import {
   type VoiceDownloadEvent,
   type VoiceEvent,
   type VoiceStatus,
+  type WakeStatus,
 } from "../shared/ipc";
 import { browserStore, pickGreeting } from "../shared/greeting";
 import { canSend, dismissSpeech, initialState, transition, type BubbleEvent, type Request } from "./state";
@@ -31,6 +32,7 @@ import {
   micTransition,
   readyText,
   speakable,
+  useGlitchVoice,
   type MicEvent,
   type Os,
   type VoiceSay,
@@ -76,6 +78,8 @@ function dispatch(e: BubbleEvent): void {
   if (t.request) {
     if (t.request.kind === "send") view.clearInput();
     stopSpeaking();
+    // His own voice loads while the model thinks (~0.5 s saved).
+    if (speakReplies && useGlitchVoice(readAloudVoice, ttsInstalled)) void voiceApi.ttsPrepare().catch(() => {});
     void perform(t.request);
   }
 }
@@ -140,6 +144,8 @@ let mic = initialMic();
 let os: Os = "windows";
 let hotkey: string | null = null;
 let speakReplies = false;
+let readAloudVoice: "system" | "glitch" = "system";
+let ttsInstalled = false;
 /** A voice start that Rust never confirmed (e.g. voice got disabled). */
 let startTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -214,6 +220,9 @@ function applyStatus(st: VoiceStatus | null): void {
   os = st.os;
   hotkey = st.hotkey.registered ? st.hotkey.label : null;
   speakReplies = st.speak_replies;
+  readAloudVoice = st.read_aloud_voice ?? "system";
+  ttsInstalled = !!st.tts?.installed;
+  view.setArmed(!!st.wake?.armed);
   micDispatch({ type: "config", usable: st.available && st.enabled });
   if (st.phase === "listening" && !micActive(mic)) micDispatch({ type: "voice", event: { phase: "listening", level: 0, hands_free: false } });
   if (st.offer_pending) {
@@ -226,21 +235,37 @@ function refreshVoice(): void {
   voiceApi.status().then(applyStatus, () => micDispatch({ type: "config", usable: false }));
 }
 
-// Reading replies aloud (optional, off by default): the system's own voice
-// via the webview, short replies only, silenced by any new input.
+// Reading replies aloud (optional, off by default), short replies only,
+// silenced by any new input: Glitch's own voice if it's chosen and
+// downloaded (played by Rust, mouth moving), else the system's voice via
+// the webview.
 function speakReply(text: string): void {
-  const synth = "speechSynthesis" in window ? window.speechSynthesis : null;
   const words = speakable(text);
-  if (!speakReplies || !synth || !words || !visible) return;
+  if (!speakReplies || !words || !visible) return;
+  if (useGlitchVoice(readAloudVoice, ttsInstalled)) {
+    voiceApi.ttsSpeak(words).catch(() => systemSpeak(words));
+    return;
+  }
+  systemSpeak(words);
+}
+
+function systemSpeak(words: string): void {
+  const synth = "speechSynthesis" in window ? window.speechSynthesis : null;
+  if (!synth) return;
   try {
     synth.cancel();
-    synth.speak(new SpeechSynthesisUtterance(words));
+    const u = new SpeechSynthesisUtterance(words);
+    // The wake word plugs its ears while he talks (he'd hear himself).
+    u.onstart = () => void voiceApi.speaking(true).catch(() => {});
+    u.onend = u.onerror = () => void voiceApi.speaking(false).catch(() => {});
+    synth.speak(u);
   } catch {
     // No voices installed: stay quiet.
   }
 }
 
 function stopSpeaking(): void {
+  if (useGlitchVoice(readAloudVoice, ttsInstalled)) void voiceApi.ttsStop().catch(() => {});
   try {
     if ("speechSynthesis" in window && (speechSynthesis.speaking || speechSynthesis.pending)) speechSynthesis.cancel();
   } catch {
@@ -251,6 +276,9 @@ function stopSpeaking(): void {
 void listen<VoiceEvent>("voice", (e) => micDispatch({ type: "voice", event: e.payload }));
 void listen<VoiceDownloadEvent>("voice-download", (e) => onDownload(e.payload));
 void listen<Settings>("settings-changed", () => refreshVoice());
+// "Hey Glitch" armed / disarmed: the bubble shows it while the mic is open.
+void listen<WakeStatus>("wake", (e) => view.setArmed(e.payload.armed));
+void listen("tts-download", () => refreshVoice());
 
 // ------------------------------------------------------- show / hide
 

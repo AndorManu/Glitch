@@ -603,6 +603,16 @@ mod output {
 }
 
 #[cfg(test)]
+pub fn spawn_piper_for_test(ts: &TtsState) -> std::io::Result<Child> {
+    spawn_piper(ts)
+}
+
+#[cfg(test)]
+pub fn open_output_for_test() -> Result<u32, String> {
+    output::open(Queue::default()).map(|o| o.rate)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

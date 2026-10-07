@@ -250,6 +250,22 @@ button:focus:not(:focus-visible) { outline: none; }
 }
 .pill.listening .mic-ring { opacity: 0.85; transform: scale(calc(1.06 + var(--level, 0) * 0.24)); }
 .pill.transcribing .mic svg { animation: mic-think 0.9s steps(2, end) infinite; }
+/* "Hey Glitch" armed: a small live dot on the mic, so an open mic is never hidden. */
+.pill.armed .mic::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-bright);
+  box-shadow: 0 0 0 2px var(--paper);
+  z-index: 2;
+  animation: wake-dot 2.4s ease-in-out infinite;
+}
+@keyframes wake-dot { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .pill.armed .mic::after { animation: none; } }
 @keyframes mic-think { 50% { transform: translateY(-2px); } }
 
 /* While listening the outline goes purple like when typing. */
