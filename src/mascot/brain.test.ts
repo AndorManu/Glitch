@@ -101,7 +101,7 @@ describe("brain", () => {
     const b = new Brain(mulberry32(8));
     const names = new Set<string>();
     for (let i = 0; i < 50; i++) names.add(b.next(ctx({ now: i * 10_000, surface: LEFT })).name);
-    expect([...names].every((n) => ["climbOn", "climbDown", "drop", "lookBack", "malfunction"].includes(n))).toBe(true);
+    expect([...names].every((n) => ["climbOn", "climbDown", "drop", "lookBack", "malfunction", "copter"].includes(n))).toBe(true);
     expect(b.restMs(ctx({ surface: LEFT }))).toBeLessThan(4000);
     expect(b.restMs(ctx())).toBeGreaterThanOrEqual(5000);
   });

@@ -5,8 +5,8 @@ doubles as a small, private AI assistant. Click Glitch to chat. Glitch runs a
 small AI model **on your own computer** with [Ollama](https://ollama.com), so
 your chats don't leave your machine.
 
-This is **milestone 1: the foundation** (plus voice commands). "Chaos mode"
-and Claude Code notifications are planned for later and are not in this build.
+This is **milestone 1: the foundation** (plus voice commands and chaos
+mode). Claude Code notifications are planned for later.
 
 What works in this milestone:
 
@@ -35,7 +35,9 @@ What works in this milestone:
 * **Voice commands**: hold the mic button in the chat (or Ctrl+Shift+Space /
   Cmd+Shift+Space anywhere), talk, let go. Speech-to-text runs on your
   computer too (see [Voice commands](#voice-commands)).
-* Settings: choose the model, walking on/off, voice, memory, clear chat, quit.
+* **Chaos mode** (on by default, gentle; tray "Chaos mode" or Settings): see
+  [Chaos mode](#chaos-mode).
+* Settings: choose the model, walking on/off, chaos mode, voice, memory, clear chat, quit.
 
 ---
 
@@ -53,7 +55,15 @@ You need these once (all free):
 5. **Git**: <https://git-scm.com/download/win>.
 6. **CMake and LLVM** (to build the speech-to-text engine, whisper.cpp): in
    PowerShell run `winget install Kitware.CMake LLVM.LLVM`, then open a new
-   PowerShell window.
+   PowerShell window. (CMake builds whisper.cpp; LLVM provides `libclang`,
+   which whisper-rs uses to read whisper.cpp's C header. If LLVM lives
+   somewhere other than `C:\Program Files\LLVM`, set `LIBCLANG_PATH` to the
+   folder containing `libclang.dll`.)
+7. **Keep the folder path short**, e.g. `C:\dev\Glitch`. whisper.cpp's CMake
+   build creates deeply nested folders under `target\`, and MSBuild fails
+   with `error MSB6003` once a path passes 260 characters (it happened from a
+   folder like `C:\Users\<you>\CodingProjects\Glitch\.claude\worktrees\<id>`).
+   Alternatively set a short build folder: `$env:CARGO_TARGET_DIR="C:\gt"`.
 
 Then, in a new **PowerShell** window:
 
@@ -140,7 +150,7 @@ Intel). These builds are **not code-signed**, so:
   **let go**. Glitch writes down what you said and answers as if you typed it
   (Allow / Nope questions work the same).
 * **Tap** the button instead to talk hands-free: Glitch stops listening by
-  himself about a second after you stop talking (tap again to stop early).
+  himself under a second after you stop talking (tap again to stop early).
 * From anywhere: **hold Ctrl+Shift+Space** (Windows) / **Cmd+Shift+Space**
   (macOS). The bubble opens and Glitch listens until you let go. A quick tap
   works hands-free here too. Esc cancels.
@@ -178,12 +188,70 @@ after the last use.
   explains this and opens the page).
 * If another app already uses the shortcut, Settings → Voice says so; the
   mic button still works.
+* While voice is on, Glitch owns Ctrl+Shift+Space everywhere on Windows, so
+  apps that use it themselves (Visual Studio's Parameter Info, Excel's
+  "select all objects") won't see it. Turning voice off in Settings gives it
+  back.
 
 **Limits**: voice isn't available on Linux builds, and on x86 PCs without
 AVX2 (roughly older than 2013, and some budget Celeron/Pentium chips) voice
 is switched off instead of risking a crash. A future signed/notarized macOS
 build with the hardened runtime will also need the
 `com.apple.security.device.audio-input` entitlement.
+
+## Chaos mode
+
+Every 45 to 120 seconds at most, Glitch may get up to some mischief:
+
+| Act | What he does |
+|---|---|
+| Window drag | glitch-teleports onto another app's window, grabs its top edge and walks backwards: the window slides a few hundred px (Windows) |
+| Push | on the taskbar, pushes a window that reaches down to it from the side (Windows) |
+| Cursor | runs after the mouse cursor or sneaks up behind it; now and then catches it and drags it a little (Windows) |
+| Sticky note | drags a pixel note with a silly line in from the screen edge (× or Esc closes it; one at a time) |
+| Paw prints | steps in glitch and leaves magenta paw prints that fade after ~20 s (click-through overlay) |
+| Peek / knock | peeks in from a screen edge, knocks on the inside of the screen glass |
+
+**Limits, enforced in Rust** (`crates/glitch-core/src/chaos.rs`,
+`src-tauri/src/chaos.rs`): other apps' windows are only ever *moved*
+(`SetWindowPos` with no-size / no-z-order / no-activate): never resized,
+closed, minimised, focused or typed into, and always kept fully on the work
+area. At most one window grab every 4 minutes (max 420 px, 9 s) and one
+cursor grab every 2 minutes (max 260 px, 1.5 s). Nothing starts unless the
+keyboard and mouse have been idle for 4 s, and any input ends a grab at once;
+moving the mouse against him makes him let go of the cursor. Skipped:
+fullscreen apps / games / presentations (`SHQueryUserNotificationState`),
+maximised, elevated (admin), cloaked, tool and system windows, the window you
+work in, Glitch's own windows. Everything stops the moment chaos or walking is
+switched off or the chat opens. No files are ever touched. macOS: only the
+harmless acts (notes, paw prints, peeking, chasing); moving other apps'
+windows there would need the Accessibility permission.
+
+**Playful moves** (part of his normal roaming, each with a 1.5 to 2.5 minute
+cooldown): `copter` (climbs a screen edge to the top, lets go and floats down
+with his tail spinning, or glides like a flying squirrel), `hangOn` (hangs off
+the end of a window top by his paws, pulls himself up), `slideDown` (slides
+down a window's side to the taskbar), `trampoline` (bounces on the taskbar,
+higher each time, ending in a flip), `fish` (fishes from a window top),
+`wallJump` (zig-zags up between two windows' sides onto the lower top), and
+the window tops he sits on get `sit_edge_swing`. New art names are used when
+they exist, with fallbacks in `src/mascot/chaos.ts` (`ANIM_FALLBACKS`).
+
+**Standing on windows**: he watches only the window he stands on
+(`SetWinEventHook` on Windows, a 30 Hz poll elsewhere, nothing otherwise). He
+rides along slow moves, the window slides under him on a fast yank if it's
+still under his feet, and he falls for real (flailing, splat or landing) when
+it jumps away, drops away, is dragged far by hand, minimised, closed or
+covered. Only window tops at least 140 px long count, his feet sit exactly on
+the edge, with a 2 px contact shadow.
+
+**Trying it out** (debug builds): `GLITCH_CHAOS_DEBUG=window` (or `push`,
+`chase`, `note`, `paws`, `peek`, `knock`, `perch:<window handle>`, or any
+behaviour such as `copter`, `hangOn`, `slideDown`, `trampoline`, `fish`,
+`wallJump`; comma-separated for a sequence 6 s apart) makes Glitch do that 8 s
+after start and every 25 s; `GLITCH_CHAOS_FAST=1` shortens the rate limits to
+5 s. In `npm run tauri dev` the console also has `__glitch.chaos("note")` and
+`__glitch.play("copter")`.
 
 ---
 
@@ -407,6 +475,15 @@ to a tiny code-drawn creature (`src/sprites/glitch.ts`), so the app still works.
   The voice states of the bubble (mic button, listening meter, transcribing,
   model download offer, errors) and Settings → Voice were checked the same
   way, with screenshots.
+* `node dev/voice-check.mjs [tiny|base|small]` (Windows/macOS, not in CI:
+  needs the network, a microphone and ~220 MB of models): speaks four
+  commands with the system's speech synthesizer (SAPI / `say`) in different
+  voices, sample rates and channel counts, then runs the `#[ignore]`d tests
+  in `src-tauri/src/voice/live_check.rs`: real model download with a forced
+  cut-off and resume + SHA-1 check, 2 s of real microphone capture (devices,
+  open time, level), and every phrase through the real voice session with
+  real whisper in hold and hands-free mode, checking the words and printing
+  the latency.
 * CI also **builds the real app on Windows and macOS runners**, which proves
   the OS-specific code compiles and the unit tests pass on both OSes.
 
@@ -455,11 +532,18 @@ the Windows build.
   with a real Ollama model (the smoke test used a mock)
 * macOS file-permission prompts, Gatekeeper/SmartScreen flows
 * actual idle CPU and RAM on Windows/macOS
-* voice with a real microphone and a real speech model on Windows/macOS:
-  recording, the permission prompts, the global shortcut, the real model
-  download from Hugging Face (only tested against a local mock server), and
-  transcription quality/speed (whisper.cpp was only run here with its tiny
-  test model)
+* voice on macOS (everything), and on Windows: talking into a real
+  microphone in the running app, the privacy prompt, and holding the global
+  shortcut in the running app. Verified on Windows 11 (i9-14900HX) with
+  `node dev/voice-check.mjs`: microphone capture (WASAPI, 48 kHz stereo),
+  the real download of tiny + base from Hugging Face cut off at 15 MB and
+  resumed (SHA-1 ok), and SAPI-spoken commands through the real session
+  code (real-time fake mic, VAD, resampling, whisper, language "auto"):
+  all transcribed right with base; text arrives 0.35-0.45 s after you let
+  go (hold) or 1.05-1.3 s after the last word (hands-free, includes the
+  0.8 s silence wait).
+  Opening an idle laptop microphone took ~0.8 s the first time (the device
+  waking up), ~0.15 s after that.
 
 ## Manual test checklist
 

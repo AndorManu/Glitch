@@ -137,6 +137,14 @@ export class Renderer {
   placement: Placement = { x: VIEW_W / 2, y: FEET_Y, angle: 0 };
   motion: Motion = CALM;
   platform: PlatformFx | null = null;
+  /**
+   * Standing on something: the art's feet are pulled down onto the surface
+   * line (the sheet has a few transparent pixels under the feet), so there
+   * is no gap. `shadow`: also a 1-2 px contact shadow under them (floor,
+   * window tops), so he visibly stands on the edge even when it's dark.
+   */
+  contact = false;
+  shadow = false;
   /** Drawn body's bounding box (window CSS px) at the last render, for the click hitbox. */
   bodyRect: BodyRect | null = null;
   private readonly opaque = new WeakMap<object, [number, number, number, number]>();
@@ -193,6 +201,7 @@ export class Renderer {
     this.bodyRect = this.boundsOf(css, img, w, h);
 
     if (this.platform) this.drawPlatform(this.platform, mul(scale(dpr, dpr), base), rand, dpr);
+    if (this.contact && this.shadow && pose.dissolve < 1) this.drawContactShadow(dpr, pose);
     // Props held by a front-facing frame stay where that frame's paws are.
     const propFace = this.sprites.mirrorable?.(pose.frame) === false ? 1 : face;
     this.drawProps(pose.props, true, dpr, propFace);
@@ -214,7 +223,42 @@ export class Renderer {
     const p = this.placement;
     const mo = this.motion;
     const shear: M = [1, 0, mo.shear, 1, 0, 0];
-    return [translate(p.x, p.y), rotate(p.angle), translate(0, mo.pivotY), shear, scale(mo.sx, mo.sy), translate(0, -mo.pivotY)].reduce(mul);
+    const pad = this.contact ? this.feetPad() : 0;
+    return [translate(p.x, p.y), rotate(p.angle), translate(0, pad), translate(0, mo.pivotY), shear, scale(mo.sx, mo.sy), translate(0, -mo.pivotY)].reduce(mul);
+  }
+
+  /** Transparent CSS px under the feet in the standing frame (same baseline for the whole sheet). */
+  private feetPad(): number {
+    if (this.pad !== null) return this.pad;
+    try {
+      const img = this.sprites.frame("idle0");
+      const { h } = this.artSize(img, this.pixelRatio());
+      const bottom = this.opaqueBox(img)[3];
+      // Never more than a few px: a wrong guess must not sink him into the surface.
+      this.pad = Math.max(0, Math.min(6, (1 - bottom) * h));
+    } catch {
+      this.pad = 0;
+    }
+    return this.pad;
+  }
+  private pad: number | null = null;
+
+  /** A soft 2 px shadow where the feet touch (in the body frame: y = 0 is the surface). */
+  private drawContactShadow(dpr: number, pose: Pose): void {
+    const ctx = this.ctx;
+    const p = this.placement;
+    // Lifted off the surface (hops in a pose): fainter, smaller.
+    const lift = Math.max(0, -pose.dy);
+    const k = Math.max(0, 1 - lift / 30);
+    if (k <= 0) return;
+    ctx.setTransform(...mul(scale(dpr, dpr), [translate(p.x, p.y), rotate(p.angle)].reduce(mul)));
+    const half = 17 * k;
+    ctx.fillStyle = `rgba(20, 8, 32, ${(0.38 * k).toFixed(3)})`;
+    ctx.fillRect(-half, -1, half * 2, 2);
+    ctx.fillStyle = `rgba(20, 8, 32, ${(0.2 * k).toFixed(3)})`;
+    ctx.fillRect(-half - 4, -1, 4, 1);
+    ctx.fillRect(half, -1, 4, 1);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
   }
 
   /** A point in the body's frame (feet origin, +x forward) -> canvas px. */

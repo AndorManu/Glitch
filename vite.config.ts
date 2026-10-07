@@ -16,6 +16,8 @@ export default defineConfig({
         mascot: resolve(import.meta.dirname, "mascot.html"),
         panel: resolve(import.meta.dirname, "panel.html"),
         bubble: resolve(import.meta.dirname, "bubble.html"),
+        note: resolve(import.meta.dirname, "note.html"),
+        pawprints: resolve(import.meta.dirname, "pawprints.html"),
       },
     },
   },

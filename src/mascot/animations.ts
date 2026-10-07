@@ -555,7 +555,7 @@ function runKeys(rand: () => number): Keyframe[] {
 }
 
 /** Anticipation before a jump: the drawn crouch, held, a spark in the eye. */
-const CROUCH: Keyframe[] = [k("jump0", 70), k("jump1", 110), k("jump1", 90, { glitch: 0.2, fx: "eye" })];
+const CROUCH: Keyframe[] = [k("jump0", 70), k("jump1", 110), k("jump1", 90, { glitch: 0.2, fx: "eye" }), k("jump2", 60)];
 
 /** Thrown and spinning: the drawn spin, crackling. */
 function tumbleKeys(rand: () => number): Keyframe[] {
@@ -847,6 +847,7 @@ export type AnimationName =
   | "fish"
   | "bounce"
   | "wall_jump"
+  | "sneeze"
   | "point"
   | "typing"
   | "sit";
@@ -888,6 +889,8 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   fish: { keys: (r) => [k("fish1", 300), k("fish2", 1500 + r() * 1500), k("fish3", 1800 + r() * 2000), k("fish4", 260), k("fish5", 260), k("fish6", 500), k("fish7", 900), k("fish6", 400)] },
   bounce: { keys: () => clip("bounce", 85, { ease: 1, hold: 150 }), once: true, bridge: false },
   wall_jump: { keys: () => clip("wall_jump", 80, { ease: 0 }), once: true, bridge: false },
+  // A sneeze on cue (chaos mode): the same drawn sneeze as the idle fidget.
+  sneeze: { keys: (r, mem) => FIDGETS.find((f) => f.id === "sneeze")!.make(r, mem) ?? [k("idle0", 300)], once: true },
   // "There you go!" when he opened a website or an app.
   point: { keys: () => [...cycle("point", [0, 1, 2], 90), k("point3", 140), k("point4", 500, { fx: "sparkle" }), k("point5", 300), k("point6", 200), k("point7", 250)], once: true },
   typing: { keys: () => cycle("typing", [0, 1, 2, 3, 4, 5, 6, 7], 220) },
@@ -926,10 +929,10 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   climb: { keys: climbKeys },
   run: { keys: runKeys },
   crouch: { keys: CROUCH, once: true },
-  // Single still keys: the window flight repaints them (with spin, stretch, trail).
-  // Launch stretch then the tuck, held while the window flies (it repaints them with spin, stretch, trail).
-  airUp: { keys: [k("jump2", 120), k("jump3", 1000)] },
-  airDown: { keys: [k("jump4", 120), k("jump5", 1000)] },
+  // One still key each (the flight repaints them with spin, stretch, trail; a second key would add repaints in the air):
+  // the launch stretch is the end of the crouch, then the tuck rising and arms up falling.
+  airUp: { keys: [k("jump3", 1000)] },
+  airDown: { keys: [k("jump5", 1000)] },
   talk: { keys: talkKeys },
   wave: { keys: waveKeys, once: true },
   tumble: { keys: tumbleKeys },
