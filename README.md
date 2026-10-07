@@ -141,7 +141,7 @@ Intel). These builds are **not code-signed**, so:
   **let go**. Glitch writes down what you said and answers as if you typed it
   (Allow / Nope questions work the same).
 * **Tap** the button instead to talk hands-free: Glitch stops listening by
-  himself about a second after you stop talking (tap again to stop early).
+  himself under a second after you stop talking (tap again to stop early).
 * From anywhere: **hold Ctrl+Shift+Space** (Windows) / **Cmd+Shift+Space**
   (macOS). The bubble opens and Glitch listens until you let go. A quick tap
   works hands-free here too. Esc cancels.
@@ -461,9 +461,10 @@ calls the right tools (see [dev/ollama-check](dev/ollama-check/check.mjs)).
   `node dev/voice-check.mjs`: microphone capture (WASAPI, 48 kHz stereo),
   the real download of tiny + base from Hugging Face cut off at 15 MB and
   resumed (SHA-1 ok), and SAPI-spoken commands through the real session
-  code (real-time fake mic, VAD, resampling, whisper): all transcribed
-  right with base; text arrives 0.2-0.4 s after you let go (hold) or
-  0.6-0.75 s after you stop talking (hands-free, includes the silence wait).
+  code (real-time fake mic, VAD, resampling, whisper, language "auto"):
+  all transcribed right with base; text arrives 0.35-0.45 s after you let
+  go (hold) or 1.05-1.3 s after the last word (hands-free, includes the
+  0.8 s silence wait).
   Opening an idle laptop microphone took ~0.8 s the first time (the device
   waking up), ~0.15 s after that.
 

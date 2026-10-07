@@ -141,7 +141,10 @@ fn wav_mic(
                 (0..n).map(|i| if (i + k).is_multiple_of(2) { 0.0008 } else { -0.0008 }).collect()
             };
             let mut script = noise(rate as usize * 3 / 10, 0);
-            script.extend_from_slice(&audio);
+            // Cut the synthesizer's trailing silence so "speech ended" is
+            // when the last word actually ends (room noise follows).
+            let end = audio.iter().rposition(|x| x.abs() > 0.01).map_or(audio.len(), |i| i + 1);
+            script.extend_from_slice(&audio[..end]);
             let speech_until = script.len();
             let mut sent = 0usize;
             let mut k = 0;
@@ -328,6 +331,14 @@ fn live_mic() {
                 s.len() as f32 / rate as f32,
                 errors.lock().unwrap()
             );
+            let per: Vec<String> =
+                s.chunks(rate as usize / 4).map(|c| format!("{:.4}", glitch_core::voice::audio::rms(c))).collect();
+            eprintln!("[mic] RMS per 250 ms: {}", per.join(" "));
+            if peak == 0.0 {
+                eprintln!(
+                    "[mic] only exact zeros: the input is muted (mute key/switch, or volume 0 in Sound settings)"
+                );
+            }
             assert!(!s.is_empty(), "the microphone delivered no audio");
         }
         Err(e) => eprintln!("[mic] couldn't open: {} ({})", e.code(), e.message()),
