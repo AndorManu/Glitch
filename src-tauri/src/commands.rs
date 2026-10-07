@@ -235,19 +235,39 @@ fn mood_after(result: &Result<Step, AgentError>) -> &'static str {
 pub async fn reset_chat(app: AppHandle, state: State<'_, AppState>) -> Result<(), UiError> {
     let model = state.settings().model;
     let mut agent = state.agent.lock().await;
+    // The chat is cleared either way; problems are reported so the UI can
+    // say what happened instead of failing silently.
+    let mut problem: Option<UiError> = None;
     if let (Some(model), true) = (model, agent.memory().is_some() && !agent.history().is_empty()) {
         // Only if the model is still in RAM: never load gigabytes just to
         // summarise. Otherwise the chat is kept as carry-over instead.
         if state.ollama.is_loaded(&model).await {
-            let _ = tokio::time::timeout(Duration::from_secs(60), agent.compact(&model, true)).await;
+            match tokio::time::timeout(Duration::from_secs(60), agent.compact(&model, true)).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => {
+                    problem = Some(UiError::new(
+                        "chat_not_summarised",
+                        format!("Chat cleared, but I couldn't fold it into my memory first: {e}"),
+                    ))
+                }
+                Err(_) => {
+                    problem = Some(UiError::new(
+                        "chat_not_summarised",
+                        "Chat cleared, but folding it into my memory took too long, so I skipped that.",
+                    ))
+                }
+            }
         } else {
             agent.persist();
         }
     }
     agent.reset();
     agent.persist();
+    if let Some(Err(e)) = agent.memory().map(|m| m.save()) {
+        problem = Some(UiError::new("save_failed", format!("Chat cleared, but I couldn't save my memory: {e}")));
+    }
     let _ = app.emit("memory-changed", ());
-    Ok(())
+    problem.map_or(Ok(()), Err)
 }
 
 #[derive(Serialize)]
@@ -387,7 +407,14 @@ pub async fn show_bubble(app: AppHandle) {
 
 #[tauri::command]
 pub fn hide_bubble(app: AppHandle) {
-    windows::hide_bubble(&app);
+    windows::hide_bubble_from_page(&app);
+}
+
+/// The bubble page started its close animation (it calls `hide_bubble` when
+/// done). Until then a click on Glitch reopens the bubble instead of closing it.
+#[tauri::command]
+pub fn bubble_closing() {
+    windows::bubble_closing();
 }
 
 /// The bubble page reports its content height (CSS px); returns where its

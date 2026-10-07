@@ -77,6 +77,20 @@ async function renderSettings(): Promise<void> {
     toolWarning.hidden = status.installed.find((m) => m.name === select.value)?.supports_tools !== false;
   };
   updateWarning();
+  // "Clear chat" always clears; if folding the old chat into memory or saving
+  // failed, say so here instead of failing silently.
+  const clearChatNote = h("p", { class: "callout warn", role: "status", hidden: true });
+  const clearChat = async (): Promise<void> => {
+    clearChatNote.hidden = true;
+    try {
+      await api.resetChat();
+    } catch (e) {
+      clearChatNote.textContent = asUiError(e).message;
+      clearChatNote.hidden = false;
+      return; // keep the panel open so the note can be read
+    }
+    await api.showBubble();
+  };
   select.addEventListener("change", async () => {
     updateWarning();
     await api.updateSettings({ model: select.value });
@@ -107,9 +121,10 @@ async function renderSettings(): Promise<void> {
         h(
           "div",
           { class: "row" },
-          h("button", { class: "secondary small", type: "button", onclick: async () => { await api.resetChat(); await api.showBubble(); } }, "Clear chat"),
+          h("button", { class: "secondary small", type: "button", onclick: () => void clearChat() }, "Clear chat"),
           h("button", { class: "secondary small", type: "button", onclick: () => showView("setup") }, "Run setup again"),
         ),
+        clearChatNote,
       ),
       card("Voice", voiceBody),
       card("Memory", memoryBody),

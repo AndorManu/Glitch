@@ -327,6 +327,21 @@ async function main() {
   });
   await alive("mascot_clicked");
 
+  // A click during the bubble's close animation reopens it, and the
+  // animation's late hide_bubble doesn't close it again.
+  await step("click during close animation reopens", async () => {
+    await bubble.invoke("bubble_closing");
+    await mascot.invoke("mascot_clicked");
+    const reopened = await visible("bubble");
+    await bubble.invoke("hide_bubble"); // the interrupted animation finishing
+    const still = await visible("bubble");
+    await bubble.invoke("bubble_closing");
+    await bubble.invoke("hide_bubble"); // a normal close still works
+    const closed = (await visible("bubble")) === false;
+    await mascot.invoke("mascot_clicked");
+    record("click during close animation reopens", reopened === true && still === true && closed, `reopened=${reopened} stays=${still} normal close=${closed}`);
+  });
+
   // --- chat
   const send = async (text) => {
     const pending = bubble.invoke("send_message", { text }, CHAT_TIMEOUT_MS);
