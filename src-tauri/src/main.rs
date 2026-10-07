@@ -16,6 +16,7 @@ use crate::state::AppState;
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let state = app.state::<AppState>();
     let chat = MenuItem::with_id(app, "chat", "Chat with Glitch", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let wander = CheckMenuItem::with_id(
         app,
         "wander",
@@ -26,13 +27,14 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     )?;
     let quit = MenuItem::with_id(app, "quit", "Quit Glitch", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&chat, &wander, &sep, &quit])?;
+    let menu = Menu::with_items(app, &[&chat, &wander, &settings, &sep, &quit])?;
     *state.wander_item.lock().unwrap() = Some(wander);
 
     let mut tray =
         TrayIconBuilder::with_id("glitch").tooltip("Glitch").menu(&menu).show_menu_on_left_click(true).on_menu_event(
             |app, event| match event.id().as_ref() {
-                "chat" => windows::show_panel(app),
+                "chat" => commands::open_chat(app, false),
+                "settings" => commands::show_panel_view(app, "settings"),
                 "wander" => {
                     let s = app.state::<AppState>().update_settings(|s| s.movement_enabled = !s.movement_enabled);
                     let _ = app.emit("settings-changed", &s);
@@ -54,7 +56,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 fn main() {
     tauri::Builder::default()
         // A second launch just opens the chat of the running Glitch.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| windows::show_panel(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| commands::open_chat(app, false)))
         .setup(|app| {
             let settings_path = app.path().app_config_dir()?.join("settings.json");
             app.manage(AppState::new(settings_path));
@@ -62,6 +64,7 @@ fn main() {
             build_tray(app.handle())?;
             // The mascot page shows itself once drawn, and opens the setup
             // wizard on first run (so the panel can be placed next to it).
+            // Dragging Glitch keeps the chat bubble attached (see place_mascot).
             windows::place_mascot(app.handle());
             Ok(())
         })
@@ -75,9 +78,14 @@ fn main() {
             commands::reset_chat,
             commands::get_settings,
             commands::update_settings,
-            commands::toggle_panel,
+            commands::mascot_clicked,
+            commands::show_bubble,
+            commands::hide_bubble,
+            commands::resize_bubble,
             commands::show_panel,
+            commands::panel_view,
             commands::hide_panel,
+            commands::finish_setup,
             commands::quit,
         ])
         .run(tauri::generate_context!())

@@ -17,6 +17,8 @@ pub struct AppState {
     pub platform: Arc<SystemPlatform>,
     /// Tray "Let Glitch wander" item, kept in sync with the settings.
     pub wander_item: Mutex<Option<CheckMenuItem<Wry>>>,
+    /// Last view the panel was asked to show ("setup" or "settings").
+    pub panel_view: Mutex<String>,
 }
 
 impl AppState {
@@ -32,6 +34,7 @@ impl AppState {
             agent: tokio::sync::Mutex::new(agent),
             platform,
             wander_item: Mutex::new(None),
+            panel_view: Mutex::new("setup".into()),
         }
     }
 

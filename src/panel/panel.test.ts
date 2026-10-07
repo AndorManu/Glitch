@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { SetupStatus } from "../shared/ipc";
 import { GLITCH } from "../sprites/glitch";
 import { checkGrid } from "../sprites/load";
-import { explainError } from "./chat";
 import { modelOptions, progressText, sameModel } from "./setup";
 
 function status(installed: SetupStatus["installed"], model: string | null = null): SetupStatus {
@@ -45,14 +44,6 @@ describe("setup wizard helpers", () => {
     expect(progressText({ status: "pulling abc", completed: 50, total: 200 })).toEqual({ label: "Downloading… 25%", percent: 25 });
     expect(progressText({ status: "success", completed: null, total: null }).label).toBe("Done!");
     expect(progressText({ status: "something new", completed: null, total: null }).label).toBe("something new");
-  });
-});
-
-describe("chat errors", () => {
-  it("offers setup for fixable problems", () => {
-    expect(explainError({ code: "ollama_unreachable", message: "" }).offerSetup).toBe(true);
-    expect(explainError({ code: "model_missing", message: "" }).offerSetup).toBe(true);
-    expect(explainError({ code: "ai_error", message: "boom" })).toEqual({ text: "Oops, something went wrong: boom", offerSetup: false });
   });
 });
 

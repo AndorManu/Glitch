@@ -54,6 +54,16 @@ export interface PullProgress {
 
 export type Mood = "thinking" | "happy" | "asking" | "idle";
 
+export type PanelView = "setup" | "settings";
+
+/** Also sent as the "bubble-layout" event whenever the bubble moves. */
+export interface BubbleLayout {
+  /** true: bubble is below Glitch, tail points up. */
+  tail_up: boolean;
+  /** Tail position from the bubble's left edge, CSS px. */
+  tail_x: number;
+}
+
 /** Errors from `invoke` are our UiError objects (or a plain string from Tauri itself). */
 export function asUiError(e: unknown): UiError {
   if (e && typeof e === "object" && "code" in e && "message" in e) return e as UiError;
@@ -75,8 +85,18 @@ export const api = {
   getSettings: () => invoke<Settings>("get_settings"),
   updateSettings: (patch: Partial<Pick<Settings, "model" | "movement_enabled" | "onboarding_done">>) =>
     invoke<Settings>("update_settings", { patch }),
-  togglePanel: () => invoke<void>("toggle_panel"),
-  showPanel: () => invoke<void>("show_panel"),
+  /** Click on Glitch: toggles the chat bubble (or opens setup on first run). */
+  mascotClicked: () => invoke<void>("mascot_clicked"),
+  showBubble: () => invoke<void>("show_bubble"),
+  hideBubble: () => invoke<void>("hide_bubble"),
+  /** Report the bubble's content height in CSS px; returns where the tail goes. */
+  resizeBubble: (height: number) => invoke<BubbleLayout | null>("resize_bubble", { height }),
+  /** Open the panel on "setup" or "settings" (default: by setup state). */
+  showPanel: (view?: PanelView) => invoke<void>("show_panel", { view }),
+  /** Which view the panel should show (asked by the panel page on load). */
+  panelView: () => invoke<PanelView>("panel_view"),
   hidePanel: () => invoke<void>("hide_panel"),
+  /** Setup done: hide the panel and open the chat bubble. */
+  finishSetup: () => invoke<void>("finish_setup"),
   quit: () => invoke<void>("quit"),
 };

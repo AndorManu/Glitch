@@ -1,39 +1,35 @@
-// The chat panel window: setup wizard, chat and settings.
+// The panel window: setup wizard and settings. (Chat lives in the bubble.)
 
 import { listen } from "@tauri-apps/api/event";
-import { api, asUiError, type Settings, type SetupStatus } from "../shared/ipc";
+import { api, asUiError, type PanelView, type Settings, type SetupStatus } from "../shared/ipc";
 import { GLITCH } from "../sprites/glitch";
 import { loadSprites } from "../sprites/load";
 import { RACCOON } from "../sprites/raccoon";
-import { ChatView } from "./chat";
 import { clear, h } from "./dom";
 import { SetupView, sameModel } from "./setup";
 
-type View = "setup" | "chat" | "settings";
+type View = PanelView;
 
 const views: Record<View, HTMLElement> = {
   setup: document.getElementById("setup")!,
-  chat: document.getElementById("chat")!,
   settings: document.getElementById("settings")!,
 };
 const settingsButton = document.getElementById("settings-button") as HTMLButtonElement;
-let current: View = "chat";
+let current: View = "setup";
 
 function showView(v: View): void {
   current = v;
   for (const [name, el] of Object.entries(views)) el.hidden = name !== v;
-  settingsButton.textContent = v === "settings" ? "Back" : "Settings";
+  settingsButton.hidden = v === "settings";
   if (v === "setup") void setup.refresh();
   if (v === "settings") void renderSettings();
-  if (v === "chat") chat.focus();
 }
 
 const setup = new SetupView(views.setup, {
-  done: () => showView("chat"),
+  done: () => void api.finishSetup(),
 });
-const chat = new ChatView(views.chat, () => showView("setup"));
 
-settingsButton.addEventListener("click", () => showView(current === "settings" ? "chat" : "settings"));
+settingsButton.addEventListener("click", () => showView("settings"));
 
 async function renderSettings(): Promise<void> {
   const root = views.settings;
@@ -86,7 +82,7 @@ async function renderSettings(): Promise<void> {
     h(
       "div",
       { class: "row" },
-      h("button", { onclick: async () => { await api.resetChat(); chat.reset(); showView("chat"); } }, "Clear chat"),
+      h("button", { onclick: async () => { await api.resetChat(); await api.showBubble(); } }, "Clear chat"),
       h("button", { onclick: () => showView("setup") }, "Run setup again"),
     ),
     h("div", { class: "row" }, h("button", { class: "danger", onclick: () => void api.quit() }, "Quit Glitch")),
@@ -113,9 +109,7 @@ async function main(): Promise<void> {
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") void api.hidePanel();
   });
-  await listen<boolean>("panel-visibility", (e) => {
-    if (e.payload && current === "chat") chat.focus();
-  });
+  await listen<PanelView>("panel-view", (e) => showView(e.payload));
   await listen<Settings>("settings-changed", () => {
     if (current === "settings") void renderSettings();
   });
@@ -123,13 +117,7 @@ async function main(): Promise<void> {
   window.addEventListener("focus", () => {
     if (current === "setup") setup.refreshIfWaiting();
   });
-  let settings: Settings | null = null;
-  try {
-    settings = await api.getSettings();
-  } catch (e) {
-    console.error(e);
-  }
-  showView(settings?.onboarding_done && settings.model ? "chat" : "setup");
+  showView(await api.panelView().catch((): View => "setup"));
 }
 
 void main();

@@ -248,19 +248,76 @@ pub async fn update_settings(
     Ok(new)
 }
 
-#[tauri::command]
-pub fn toggle_panel(app: AppHandle) {
-    windows::toggle_panel(&app);
+/// What a click on Glitch (or the tray's "Chat") does: the chat bubble, or
+/// the setup wizard if setup isn't finished yet.
+pub fn open_chat(app: &AppHandle, toggle: bool) {
+    if app.state::<AppState>().settings().onboarding_done {
+        if toggle {
+            windows::toggle_bubble(app)
+        } else {
+            windows::show_bubble(app)
+        }
+    } else {
+        show_panel_view(app, "setup");
+    }
+}
+
+pub fn show_panel_view(app: &AppHandle, view: &str) {
+    *app.state::<AppState>().panel_view.lock().unwrap() = view.to_string();
+    windows::show_panel(app, view);
 }
 
 #[tauri::command]
-pub fn show_panel(app: AppHandle) {
-    windows::show_panel(&app);
+pub fn mascot_clicked(app: AppHandle) {
+    open_chat(&app, true);
+}
+
+#[tauri::command]
+pub fn show_bubble(app: AppHandle) {
+    open_chat(&app, false);
+}
+
+#[tauri::command]
+pub fn hide_bubble(app: AppHandle) {
+    windows::hide_bubble(&app);
+}
+
+/// The bubble page reports its content height (CSS px); returns where its
+/// tail should point.
+#[tauri::command]
+pub fn resize_bubble(app: AppHandle, height: f64) -> Option<windows::BubbleLayout> {
+    windows::resize_bubble(&app, height)
+}
+
+/// Open the panel. `view`: "setup" or "settings"; default depends on whether
+/// setup is finished.
+#[tauri::command]
+pub fn show_panel(app: AppHandle, state: State<'_, AppState>, view: Option<String>) {
+    let view = match view.as_deref() {
+        Some("setup") => "setup",
+        Some("settings") => "settings",
+        _ if state.settings().onboarding_done => "settings",
+        _ => "setup",
+    };
+    show_panel_view(&app, view);
+}
+
+/// The panel page asks which view to show when it loads.
+#[tauri::command]
+pub fn panel_view(state: State<'_, AppState>) -> String {
+    state.panel_view.lock().unwrap().clone()
 }
 
 #[tauri::command]
 pub fn hide_panel(app: AppHandle) {
     windows::hide_panel(&app);
+}
+
+/// Setup wizard finished: close it and say hi from the bubble.
+#[tauri::command]
+pub fn finish_setup(app: AppHandle) {
+    windows::hide_panel(&app);
+    windows::show_bubble(&app);
 }
 
 #[tauri::command]

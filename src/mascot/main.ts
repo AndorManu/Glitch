@@ -187,7 +187,7 @@ window.addEventListener("mousemove", (e) => {
 });
 
 window.addEventListener("mouseup", () => {
-  if (pointerDown && !dragging) void api.togglePanel();
+  if (pointerDown && !dragging) void api.mascotClicked();
   pointerDown = null;
   dragging = false;
 });

@@ -28,6 +28,31 @@ pub fn panel_position(mascot: Rect, panel_w: i32, panel_h: i32, area: Rect, gap:
     (x, y)
 }
 
+/// Where the chat bubble goes: centred above Glitch with its tail pointing
+/// down at it; below Glitch (tail up) if there's no room above. `tail_x` is
+/// the tail's distance from the bubble's left edge, so it still points at
+/// Glitch when the bubble is pushed sideways by a screen edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BubblePlacement {
+    pub x: i32,
+    pub y: i32,
+    pub tail_up: bool,
+    pub tail_x: i32,
+}
+
+pub fn bubble_position(mascot: Rect, w: i32, h: i32, area: Rect, overlap: i32) -> BubblePlacement {
+    let center = mascot.x + mascot.w / 2;
+    let x = (center - w / 2).min(area.right() - w).max(area.x);
+    let above = mascot.y - h + overlap;
+    let (y, tail_up) = if above >= area.y {
+        (above, false)
+    } else {
+        ((mascot.bottom() - overlap).min(area.bottom() - h).max(area.y), true)
+    };
+    let tail_x = (center - x).clamp(16.min(w / 2), (w - 16).max(w / 2));
+    BubblePlacement { x, y, tail_up, tail_x }
+}
+
 /// Bottom-right corner of the work area, where Glitch appears on first start.
 pub fn mascot_home(area: Rect, w: i32, h: i32, margin: i32) -> (i32, i32) {
     (area.right() - w - margin, area.bottom() - h - margin)
@@ -71,7 +96,27 @@ mod tests {
     }
 
     #[test]
+    fn bubble_sits_above_glitch_pointing_down() {
+        let m = Rect { x: 1000, y: 900, w: 160, h: 110 };
+        let b = bubble_position(m, 300, 120, AREA, 10);
+        assert_eq!(b, BubblePlacement { x: 1080 - 150, y: 900 - 120 + 10, tail_up: false, tail_x: 150 });
+    }
+
+    #[test]
+    fn bubble_goes_below_near_the_top_and_tail_follows_glitch_at_edges() {
+        let m = Rect { x: 1800, y: 20, w: 110, h: 110 };
+        let b = bubble_position(m, 300, 120, AREA, 10);
+        assert!(b.tail_up);
+        assert_eq!(b.y, 130 - 10);
+        assert_eq!(b.x, 1920 - 300); // pushed left by the screen edge
+        assert_eq!(b.tail_x, 1855 - (1920 - 300)); // still points at Glitch
+        let left = bubble_position(Rect { x: 0, y: 900, w: 110, h: 110 }, 300, 120, AREA, 10);
+        assert_eq!(left.x, 0);
+        assert_eq!(left.tail_x, 55);
+    }
+
+    #[test]
     fn home_is_bottom_right() {
-        assert_eq!(mascot_home(AREA, 138, 90, 24), (1920 - 162, 1040 - 114));
+        assert_eq!(mascot_home(AREA, 160, 110, 24), (1920 - 184, 1040 - 134));
     }
 }
