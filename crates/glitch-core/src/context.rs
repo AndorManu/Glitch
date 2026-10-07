@@ -87,6 +87,13 @@ pub fn parse_hhmm(s: &str) -> Option<u32> {
     (h < 24 && m < 60).then_some(h * 60 + m)
 }
 
+/// Local time now: (minutes after midnight, a day number that changes at midnight).
+pub fn local_clock() -> (u32, i64) {
+    use chrono::{Datelike, Timelike};
+    let now = chrono::Local::now();
+    (now.hour() * 60 + now.minute(), i64::from(now.num_days_from_ce()))
+}
+
 /// Is `minute` (after midnight) inside [start, end)? Wraps past midnight.
 pub fn in_window(minute: u32, start: u32, end: u32) -> bool {
     if start == end {
@@ -449,6 +456,13 @@ pub struct Sensor {
 impl Sensor {
     pub fn quiet(&self) -> bool {
         self.quiet
+    }
+
+    /// Debug triggers: act as if a fullscreen app just started (the next
+    /// calm polls end it again).
+    pub fn force_quiet(&mut self) {
+        self.quiet = true;
+        self.calm_polls = 0;
     }
 
     /// Forget the quiet state (feature switched off): returns whether it was on.

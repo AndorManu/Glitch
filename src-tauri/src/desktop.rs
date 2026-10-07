@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use glitch_core::desktop::{Capture, CaptureTarget, ClipboardText, Desktop, DesktopResult, WindowInfo};
+use glitch_core::desktop::{Capture, CaptureTarget, ClipboardText, Desktop, DesktopResult, NowPlaying, WindowInfo};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
@@ -114,6 +114,8 @@ impl Desktop for NativeDesktop {
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(after).await;
             timers.fetch_sub(1, Ordering::SeqCst);
+            // Not in the middle of a game or a presentation.
+            crate::context::hold_while_quiet(&app).await;
             // Pop up the chat with the reminder (window creation must happen
             // off the main thread's event handler, which this is).
             crate::windows::show_bubble(&app);
@@ -121,6 +123,18 @@ impl Desktop for NativeDesktop {
             let _ = app.emit("mood", "happy");
         });
         Ok(())
+    }
+
+    fn now_playing(&self) -> DesktopResult<Option<NowPlaying>> {
+        use tauri::Manager;
+        if !self.app.state::<crate::state::AppState>().settings().context.enabled {
+            return Err("reacting to what the user does is switched off in Glitch's settings".into());
+        }
+        crate::context_native::now_playing()
+    }
+
+    fn focus(&self, minutes: Option<u32>) -> DesktopResult<u32> {
+        crate::context::focus_set(&self.app, minutes)
     }
 }
 
