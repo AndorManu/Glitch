@@ -12,7 +12,7 @@ export type Family = "front" | "side" | "sit" | "curled" | "back" | "wall" | "an
 const FAMILY_PREFIX: [string, Family][] = [
   // standing, facing you
   ...["idle", "talk", "wave", "think", "laugh", "celebrate", "sad", "angry", "scared", "eat", "dance", "typing", "point", "dizzy", "sneeze", "listen", "surprised"].map((p) => [p, "front"] as [string, Family]),
-  ...["scratch", "groom", "shake_off", "hop_idle", "tail_chase", "look_back"].map((p) => [p, "front"] as [string, Family]),
+  ...["scratch", "groom", "shake_off", "hop_idle", "tail_chase", "look_back", "annoyed", "bite_cursor"].map((p) => [p, "front"] as [string, Family]),
   ...["pose_front", "pose_happy", "pose_think", "pose_laugh", "pose_wave"].map((p) => [p, "front"] as [string, Family]),
   // side view (walking, running, jumping, pushing, stretching)
   ...["walk", "run", "jump", "push", "grab_tab", "stretch", "pose_side", "pose_walk", "pose_notify", "pose_push"].map((p) => [p, "side"] as [string, Family]),
@@ -46,7 +46,7 @@ const CLIPS: Record<string, [Family, Family, number]> = {
 };
 
 /** Frames that belong to no family (effects, being held): never bridged from or to. */
-const NEUTRAL = ["turn_around", "tail_copter", "glide", "fall_flail", "hang_ledge", "pull_up", "slide_down", "bounce", "wall_jump", "sit_edge_swing", "fish", "dangle", "spin", "teleport", "land", "peek", "pose_glitch", "pose_chaos"];
+const NEUTRAL = ["struggle", "cling_cursor", "turn_around", "tail_copter", "glide", "fall_flail", "hang_ledge", "pull_up", "slide_down", "bounce", "wall_jump", "sit_edge_swing", "fish", "dangle", "spin", "teleport", "land", "peek", "pose_glitch", "pose_chaos"];
 
 const cache = new Map<string, Family>();
 
@@ -98,6 +98,8 @@ const FRONTAL: Record<string, true | number[]> = {
   // (the turn's direction is chosen by playing it forwards or backwards).
   turn_around: true,
   tail_copter: true,
+  struggle: true,
+  cling_cursor: true,
   glide: true,
   fall_flail: true,
   hang_ledge: true,

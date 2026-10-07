@@ -89,6 +89,17 @@ const MOODS: readonly string[] = ["thinking", "happy", "asking", "idle", "listen
 type Mode = "stand" | "corner" | "air" | "held";
 
 export const SLEEP_AFTER_MS = 10 * 60_000;
+/** Annoyance levels (see Creature.annoyance): a pickup adds 1, a throw 1.5, a poke 0.4. */
+export const ANNOY_MEDIUM = 2.5;
+/** Held: body centre this far (CSS px) below the cursor tip = the scruff of his neck at the cursor. */
+const SCRUFF = 46;
+/** Held: the sway never goes past this many degrees. */
+const SWAY_MAX = 9;
+/** Held: easing from where he was to hanging from the scruff. */
+const ATTACH_MS = 80;
+/** Thrown faster than this (CSS px/s): he spins; slower, he falls upright. */
+const HARD_THROW = 900;
+export const ANNOY_HIGH = 4.5;
 /** Never ask the OS about windows more often than this. */
 export const WORLD_MIN_MS = 1500;
 /** While awake on a window top: check it is still there (ride along / fall). */
@@ -100,6 +111,14 @@ const DRAG_THRESHOLD = 4; // CSS px
 const ACTION_LOOP_MAX_MS = 8000;
 /** CSS px / s. */
 const SPEED: Record<Gait, number> = { walk: 70, run: 180, climb: 82 };
+/**
+ * The ground speed (CSS px/s) each drawn cycle shows at its keyed timing:
+ * stride measured on the frames (dev/feet.py: a planted foot travels ~21 art
+ * px per walk step, ~33 per run step; x1.5 CSS px, two steps per cycle) over
+ * the cycle time (walk 8 x 83 ms, run 6 x 70 ms). The animation runs at
+ * actual speed / this, so planted feet stay planted.
+ */
+const DRAWN_SPEED: Record<Gait, number> = { walk: 95, run: 236, climb: 82 };
 const ACCEL = 700; // CSS px / s^2
 const MAX_THROW = 3800;
 const CORNER_MS = 380;
@@ -171,6 +190,8 @@ interface Hold {
   tracker: VelocityTracker;
   vs: Vec;
   kickUntil: number;
+  /** Where he was relative to the cursor when grabbed (eased out over ATTACH_MS). */
+  attach: { x: number; y: number; angle: number; t0: number };
 }
 
 interface Platform {
@@ -371,11 +392,43 @@ export class Creature {
   /** Stop every timer (tests, page unload). */
   dispose(): void {
     this.animator.stop();
+    for (const t of [this.annoyTimer, this.clingTimer]) if (t !== null) this.clock.clearTimeout(t);
+    this.annoyTimer = this.clingTimer = null;
     for (const t of [this.motionTimer, this.brainTimer, this.pollTimer, this.actionTimer, this.talkTimer, this.watchTimer]) if (t !== null) this.clock.clearTimeout(t);
     this.motionTimer = this.brainTimer = this.pollTimer = this.actionTimer = this.talkTimer = this.watchTimer = null;
   }
 
   private talkTimer: unknown = null;
+
+  // ------------------------------------------------------------ annoyance
+  // Picking him up, throwing him and poking him annoys him. The meter rises
+  // with each, and decays on its own (60 s time constant, so ~2 min to calm
+  // down completely). Low: he just dangles. Medium: he struggles while held,
+  // clings on to the cursor for a moment when let go, and is annoyed after.
+  // High: he bites the cursor, turns his back on you and sulks for a few
+  // seconds (clicks get no reaction), then calms down with a little hop.
+
+  private annoyRaw = 0;
+  private annoyAt = 0;
+  private sulkUntil = 0;
+  private reactAfterLanding: "annoyed" | "grumpy" | null = null;
+  private annoyTimer: unknown = null;
+  private clingTimer: unknown = null;
+
+  /** How annoyed he is right now (0 = calm; MEDIUM / HIGH thresholds below). */
+  get annoyance(): number {
+    return this.annoyRaw * Math.exp(-(this.now - this.annoyAt) / 60_000);
+  }
+
+  private annoy(amount: number): void {
+    this.annoyRaw = this.annoyance + amount;
+    this.annoyAt = this.now;
+  }
+
+  /** Sulking: back turned, clicks don't get a reaction. */
+  get sulking(): boolean {
+    return this.now < this.sulkUntil;
+  }
 
   /**
    * Face left/right. Standing (side-on or facing you), he turns round with
@@ -873,8 +926,8 @@ export class Creature {
     const prevV = L.v;
     const accel = ACCEL * u;
     L.v = Math.min(SPEED[L.gait] * u, L.v + accel * dt, Math.sqrt(2 * accel * Math.abs(dist)) + 12 * u);
-    // The drawn cycle is keyed for the gait's full speed: play it at the speed he actually goes.
-    this.animator.rate = Math.min(1.5, Math.max(0.45, L.v / (SPEED[L.gait] * u)));
+    // Play the drawn cycle at the speed he actually goes (no sliding feet).
+    this.animator.rate = Math.min(1.5, Math.max(0.3, L.v / (DRAWN_SPEED[L.gait] * u)));
     const step = Math.sign(dist) * L.v * dt;
     let arrived = false;
     if (Math.abs(step) >= Math.abs(dist)) {
@@ -1171,6 +1224,8 @@ export class Creature {
     if (f.anim && !f.panic) want = f.anim;
     else if (f.panic) want = chaosAnim("fall_flail");
     else if (!f.planned && Math.abs(this.body.spin) > 260) want = "tumble";
+    // Thrown (not hard enough to spin): the drawn flailing fall, upright.
+    else if (!f.planned && f.drag) want = chaosAnim("fall_flail");
     else want = this.body.vy < -60 * this.u ? "airUp" : "airDown";
     if (this.animator.animation !== want) this.animator.play(want);
   }
@@ -1272,6 +1327,21 @@ export class Creature {
   /** What he does when he's doing nothing. */
   restAnim(): AnimationName {
     if (this.asleep) return "sleep";
+    // Just landed after being picked up once too often: the annoyed reaction (once), then the sulk.
+    if (this.reactAfterLanding && this.mode === "stand" && isStanding(this.surface)) {
+      const r = this.reactAfterLanding;
+      this.reactAfterLanding = null;
+      if (r === "grumpy") {
+        this.sulkUntil = this.now + 7000;
+        if (this.annoyTimer !== null) this.clock.clearTimeout(this.annoyTimer);
+        this.annoyTimer = this.clock.setTimeout(() => {
+          this.annoyTimer = null;
+          if (this.mode === "stand" && ["grumpy", "annoyed", "sulk"].includes(this.animator.animation)) this.animator.play("calmDown", "idle");
+        }, 7000);
+      }
+      return r;
+    }
+    if (this.sulking && this.mode === "stand" && isStanding(this.surface)) return "sulk";
     // On a wall or the ceiling the front-facing mood poses would lie sideways: hold on instead.
     if (this.mode === "stand" && !isStanding(this.surface)) return "cling";
     if (this.mood === "thinking") return "think";
@@ -1853,6 +1923,12 @@ export class Creature {
     if (!this.press) return;
     this.press = null;
     this.host.clicked();
+    this.annoy(0.4);
+    if (this.sulking) {
+      // Ignores you (a glance back over the shoulder at most).
+      this.updateHitbox();
+      return;
+    }
     if (this.mode === "stand") {
       this.interrupt();
       this.animator.play("startled", this.restAnim());
@@ -1881,23 +1957,23 @@ export class Creature {
     this.asleep = false;
     if (this.platform) this.platform.breaking = true;
     const grab = { x: this.win.x + local.x * u, y: this.win.y + local.y * u };
-    const off = { x: this.body.x - grab.x, y: this.body.y - grab.y };
-    const L = Math.hypot(off.x, off.y);
-    const phi0 = Math.atan2(off.x, off.y);
-    // The grab point in the body's own frame: the legs lag around it.
-    const a = (-this.body.angle * Math.PI) / 180;
-    const gy = -off.x * Math.sin(a) + -off.y * Math.cos(a);
+    // Picked up by the scruff of his neck, wherever you clicked: he hangs
+    // straight down from the cursor tip, his neck between his ears at it
+    // (the body centre SCRUFF px below), upright. The attach eases in from
+    // where he was (ATTACH_MS) so he doesn't snap.
+    const L = SCRUFF * u;
     this.hold = {
       cursor: grab,
       busy: false,
       L,
-      phi0,
-      angle0: this.body.angle,
-      pivotY: -HALF + gy / u,
-      pend: new Pendulum(phi0, Math.max(L, 36 * u), PHYS.gravity * u),
+      phi0: 0,
+      angle0: 0,
+      pivotY: -HALF - SCRUFF,
+      pend: new Pendulum(0, L, PHYS.gravity * u),
       tracker: new VelocityTracker(),
       vs: { x: 0, y: 0 },
       kickUntil: 0,
+      attach: { x: this.body.x - grab.x, y: this.body.y - grab.y, angle: this.body.angle, t0: this.now },
     };
     this.hold.tracker.add(this.now, grab);
     this.mode = "held";
@@ -1905,7 +1981,9 @@ export class Creature {
     if (this.pollTimer !== null) this.clock.clearTimeout(this.pollTimer);
     this.pollTimer = null;
     this.syncLedgeWatch();
-    this.animator.play("held");
+    this.annoy(1);
+    this.sulkUntil = 0;
+    this.animator.play(this.annoyance >= ANNOY_MEDIUM ? "struggle" : "held");
     this.animator.glitchBurst(280);
     this.event("grab");
     this.updateHitbox();
@@ -1937,29 +2015,62 @@ export class Creature {
     const lim = 40000 * u;
     const acc = dt > 0 ? { x: Math.max(-lim, Math.min(lim, (h.vs.x - prev.x) / dt)), y: Math.max(-lim, Math.min(lim, (h.vs.y - prev.y) / dt)) } : { x: 0, y: 0 };
     h.pend.step(dt, acc);
-    const phi = h.pend.phi;
-    this.body.x = h.cursor.x + h.L * Math.sin(phi);
-    this.body.y = h.cursor.y + h.L * Math.cos(phi);
-    this.body.angle = h.angle0 - ((phi - h.phi0) * 180) / Math.PI;
-    // Legs and tail lag behind the swing.
-    const shear = Math.max(-0.35, Math.min(0.35, h.pend.omega * 0.05));
-    this.motion = { sx: 0.97, sy: 1.04, shear, pivotY: h.pivotY, ghosts: [] };
+    // A small damped sway that lags the cursor (never more than SWAY_MAX).
+    const sway = (SWAY_MAX * Math.PI) / 180;
+    const phi = Math.max(-sway, Math.min(sway, h.pend.phi));
+    let x = h.cursor.x + h.L * Math.sin(phi);
+    let y = h.cursor.y + h.L * Math.cos(phi);
+    let angle = -(phi * 180) / Math.PI;
+    // Easing in from where he was when you grabbed him.
+    const e = Math.min(1, (now - h.attach.t0) / ATTACH_MS);
+    if (e < 1) {
+      const k = e * e * (3 - 2 * e);
+      x = h.cursor.x + h.attach.x + (x - h.cursor.x - h.attach.x) * k;
+      y = h.cursor.y + h.attach.y + (y - h.cursor.y - h.attach.y) * k;
+      angle = h.attach.angle + (angle - h.attach.angle) * k;
+    }
+    this.body.x = x;
+    this.body.y = y;
+    this.body.angle = angle;
+    // Upright drawn frames, no stretching or shearing of the sprite.
+    this.motion = CALM;
     const speed = Math.hypot(h.vs.x, h.vs.y) / u;
     if (speed > 900) h.kickUntil = now + 350;
-    const want: AnimationName = now < h.kickUntil ? "heldKick" : "held";
-    if (this.animator.animation !== want && (this.animator.animation === "held" || this.animator.animation === "heldKick")) this.animator.play(want);
+    if (this.clingTimer !== null) return; // hanging on to the cursor after you let go
+    const want: AnimationName = now < h.kickUntil ? "heldKick" : this.annoyance >= ANNOY_MEDIUM ? "struggle" : "held";
+    if (this.animator.animation !== want && ["held", "heldKick", "struggle"].includes(this.animator.animation)) this.animator.play(want);
   }
 
   private release(): void {
     const h = this.hold!;
     const w = this.world!;
     const u = w.scale;
-    this.hold = null;
     const vc = h.tracker.velocity(this.now);
     const tip = h.pend.tipVelocity(h.L);
     const v = capSpeed({ x: vc.x + tip.x, y: vc.y + tip.y }, MAX_THROW * u);
     const speed = Math.hypot(v.x, v.y) / u;
-    this.body.spin = Math.max(-1100, Math.min(1100, (-h.pend.omega * 180) / Math.PI + (v.x / u) * 0.3));
+    // Let go gently while he's annoyed: he holds on to the cursor a moment
+    // longer (still following it), then drops. Not when thrown.
+    if (this.clingTimer === null && this.annoyance >= ANNOY_MEDIUM && speed < 400) {
+      this.annoy(0.5);
+      this.animator.play("clingCursor");
+      this.event("cling-cursor");
+      this.clingTimer = this.clock.setTimeout(() => {
+        this.clingTimer = null;
+        if (this.hold === h) this.release();
+      }, 1400);
+      return;
+    }
+    if (this.clingTimer !== null) {
+      this.clock.clearTimeout(this.clingTimer);
+      this.clingTimer = null;
+    }
+    this.hold = null;
+    this.annoy(speed > 600 ? 1.5 : 0.5);
+    const a = this.annoyance;
+    this.reactAfterLanding = a >= ANNOY_HIGH ? "grumpy" : a >= ANNOY_MEDIUM ? "annoyed" : null;
+    // Only a hard throw sends him spinning (the drawn spin); otherwise he falls upright, flailing.
+    this.body.spin = speed > HARD_THROW ? Math.max(-1100, Math.min(1100, (-h.pend.omega * 180) / Math.PI + (v.x / u) * 0.3)) : 0;
     this.motion = CALM;
     this.event(`throw:${Math.round(speed)}`);
     this.launch(v, { planned: false, panic: speed < 250, canSplat: true, drag: true });

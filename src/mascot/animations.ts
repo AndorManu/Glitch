@@ -464,11 +464,9 @@ function peekKeys(): Keyframe[] {
 }
 
 function dangleKeys(rand: () => number): Keyframe[] {
-  // Held by the scruff: the drawn dangle (legs kicking, tail swinging) with a gentle pendulum.
-  const swing = [-5, -3, 0, 3, 5, 3, 0, -3];
-  const keys = swing.map((rot, i) => k(`dangle${i}`, 120, { rot, pivot: 1, dy: -6, fx: i % 4 === 0 ? "eye" : undefined }));
-  if (rand() < 0.4) keys[3] = { ...keys[3], glitch: 0.35 };
-  return keys;
+  // Held by the scruff: the drawn dangle (legs kicking, tail swinging), upright (the creature sways him a little).
+  void rand;
+  return cycle("dangle", [0, 1, 2, 3, 4, 5, 6, 7], 120);
 }
 
 function glitchOutKeys(): Keyframe[] {
@@ -848,6 +846,12 @@ export type AnimationName =
   | "bounce"
   | "wall_jump"
   | "sneeze"
+  | "struggle"
+  | "clingCursor"
+  | "annoyed"
+  | "grumpy"
+  | "sulk"
+  | "calmDown"
   | "point"
   | "typing"
   | "sit";
@@ -891,6 +895,31 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   wall_jump: { keys: () => clip("wall_jump", 80, { ease: 0 }), once: true, bridge: false },
   // A sneeze on cue (chaos mode): the same drawn sneeze as the idle fidget.
   sneeze: { keys: (r, mem) => FIDGETS.find((f) => f.id === "sneeze")!.make(r, mem) ?? [k("idle0", 300)], once: true },
+  // Annoyed (creature.ts annoyance): wriggling while held, clinging to the
+  // cursor, arms crossed and foot tapping, biting the cursor, sulking with his
+  // back turned, calming down with a little hop.
+  struggle: { keys: () => (has("struggle") ? clip("struggle", 85, { ease: 0 }) : cycle("dangle", [0, 1, 2, 3, 4, 5, 6, 7], 70)), bridge: false },
+  clingCursor: { keys: () => (has("cling_cursor") ? clip("cling_cursor", 110, { ease: 0 }) : cycle("dangle", [0, 1, 2, 3], 130)), bridge: false },
+  annoyed: {
+    keys: () => (has("annoyed") ? [...clip("annoyed", 120, { ease: 1 }), ...clip("annoyed", 120, { ease: 0, hold: 600 }), k("idle0", 200)] : [...sheetOnce("angry", 90, 600), k("idle0", 200)]),
+    once: true,
+  },
+  grumpy: {
+    keys: () => [
+      ...(has("bite_cursor") ? clip("bite_cursor", 90, { ease: 1, hold: 300 }) : sheetOnce("angry", 90, 400)),
+      ...(has("turn_to_back") ? clip("turn_to_back", 100, { ease: 1 }) : []),
+    ],
+    once: true,
+    next: "sulk",
+  },
+  sulk: {
+    // Back turned; now and then a look back over his shoulder (the turn's 3/4 frame).
+    keys: (r) => (has("turn_to_back") ? [k("turn_to_back5", 1400 + r() * 900), k("turn_to_back4", 140), k("turn_to_back3", 700), k("turn_to_back4", 140)] : [k("idle0", 1500)]),
+  },
+  calmDown: {
+    keys: () => [...(has("turn_to_back") ? clip("turn_to_back", 100, { ease: 1, reverse: true }) : []), ...(has("hop_idle") ? clip("hop_idle", 85, { ease: 1 }) : []), k("idle0", 200)],
+    once: true,
+  },
   // "There you go!" when he opened a website or an app.
   point: { keys: () => [...cycle("point", [0, 1, 2], 90), k("point3", 140), k("point4", 500, { fx: "sparkle" }), k("point5", 300), k("point6", 200), k("point7", 250)], once: true },
   typing: { keys: () => cycle("typing", [0, 1, 2, 3, 4, 5, 6, 7], 220) },

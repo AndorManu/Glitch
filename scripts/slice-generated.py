@@ -434,8 +434,11 @@ SHEETS["sit"] = {"ref": 0, "target": 47, "tolerance": 0}
 # at the typical cell size of the standing sheets; checked in the lineup.
 for _name in ["tail_copter", "glide", "fall_flail", "hang_ledge", "slide_down", "sit_edge_swing", "fish", "pull_up", "bounce", "wall_jump"]:
     SHEETS[_name] = {"cell": 3.8, "n": None}
+# Annoyance reactions (round 3).
+for _name in ["struggle", "cling_cursor", "annoyed", "bite_cursor"]:
+    SHEETS[_name] = {"cell": 3.8, "n": None}
 # These are drawn bigger: cell set so the head is as big as in idle0 (measured in the lineup).
-for _name, _cell in {"fall_flail": 5.7, "hang_ledge": 5.3, "glide": 4.9, "slide_down": 4.9, "sit_edge_swing": 4.75, "wall_jump": 4.9, "pull_up": 4.2}.items():
+for _name, _cell in {"struggle": 4.7, "bite_cursor": 4.6, "fall_flail": 5.7, "hang_ledge": 5.3, "glide": 4.9, "slide_down": 4.9, "sit_edge_swing": 4.75, "wall_jump": 4.9, "pull_up": 4.2}.items():
     SHEETS[_name]["cell"] = _cell
 # The stretch is 8 side-on frames, three pairs touching (auto-splitting can't tell).
 SHEETS["stretch"].update({"n": 8, "target": 54})
