@@ -19,6 +19,8 @@ import {
 } from "@tauri-apps/api/window";
 import { api, chaosApi, type LedgeEvent, MASCOT_TALK_EVENT, type Settings, type WorldSnapshot } from "../shared/ipc";
 import { loadGlitchSprites } from "../sprites/glitch-sprites";
+import { contextApi, type ContextStatus, type Reaction } from "../shared/context";
+import { type CountdownLabel, ContextReactor, debugReaction } from "./context";
 import type { AnimationName } from "./animations";
 import { Creature, type Host } from "./creature";
 import { WIN, type Vec } from "./physics";
@@ -84,6 +86,28 @@ const host: Host = {
 };
 
 let creature: Creature | null = null;
+let reactor: ContextReactor | null = null;
+
+/** The tiny focus countdown above his head (shown while hovering him). */
+function countdownLabel(): CountdownLabel {
+  const el = document.createElement("div");
+  el.setAttribute("role", "timer");
+  el.setAttribute("aria-label", "Focus time left");
+  el.style.cssText =
+    "position:fixed;left:50%;top:6px;transform:translateX(-50%);padding:1px 6px;border-radius:6px;" +
+    "font:600 11px/16px ui-monospace,Consolas,monospace;color:#fff;background:rgba(20,16,40,.82);" +
+    "pointer-events:none;white-space:nowrap;display:none";
+  document.body.append(el);
+  return {
+    show: (text) => {
+      el.textContent = text;
+      el.style.display = "block";
+    },
+    hide: () => {
+      el.style.display = "none";
+    },
+  };
+}
 
 // ----------------------------------------------------------- the mouse
 // Our own drag (not the OS one): pointer capture keeps the events coming
@@ -157,11 +181,21 @@ async function main(): Promise<void> {
   await listen<boolean>("panel-visibility", (e) => c.setPanelOpen(e.payload));
   // Unknown moods fall back to idle inside setMood.
   await listen<string>("mood", (e) => c.setMood(e.payload));
-  await listen<boolean>("mascot-hover", (e) => c.setHovered(e.payload));
+  await listen<boolean>("mascot-hover", (e) => {
+    c.setHovered(e.payload);
+    reactor?.setHovered(e.payload);
+  });
   // The window he stands on moved / closed / got covered (src-tauri/src/ledge_watch.rs).
   await listen<LedgeEvent>("ledge-event", (e) => c.ledgeEvent(e.payload));
   // For behaviours driven from Rust or other windows; unknown names are ignored.
   await listen<string>("mascot-action", (e) => void playAction(e.payload));
+  // He reacts to what the user is doing (src-tauri/src/context.rs).
+  const r = new ContextReactor(c, { now: () => performance.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (id) => clearTimeout(id as ReturnType<typeof setTimeout>) }, Math.random, countdownLabel());
+  reactor = r;
+  if (c.onEvent) r.onEvent = (what) => c.onEvent?.(`context:${what}`);
+  await listen<Reaction>("context", (e) => void r.handle(e.payload));
+  await listen<ContextStatus>("focus", (e) => r.status(e.payload));
+  void contextApi.status().then((s) => r.status(s), () => {});
   // The bubble shows a reply: he says it (mouth moving while it appears).
   await listen<number>(MASCOT_TALK_EVENT, (e) => c.talk(Number(e.payload) || 0));
   window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener("change", () => renderer.redraw());
@@ -178,6 +212,12 @@ if (import.meta.env.DEV || import.meta.env.TAURI_ENV_DEBUG === "true") {
     /** A chaos act now: "window", "push", "chase", "note", "peek", "knock", "paws". */
     chaos: (act: string) => creature?.forceChaos(act),
     mood: (m: string) => creature?.setMood(m),
+    /** A context reaction now: "dance", "glasses", "watch", "night", "morning", "battery", "cpu", "quiet", "unquiet", "suggest", "focus", "unfocus". */
+    react: (what: string) =>
+      contextApi.debug(what).catch(() => {
+        const r = debugReaction(what);
+        return r ? (reactor?.handle(r, true) ?? false) : false;
+      }),
     burst: (ms?: number) => creature?.animator.glitchBurst(ms),
     face: (left: boolean) => {
       if (!creature) return;
