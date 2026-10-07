@@ -6,6 +6,7 @@ import { drawAvatar } from "./avatar";
 import { h } from "./dom";
 import { renderMemory } from "./memory";
 import { formatGb, layout, ollamaSummary, prettyModelName, SetupView, sameModel } from "./setup";
+import { FEATURES } from "./features";
 import { busyButton, enterView, loading, settingsKey, toggleSwitch } from "./ui";
 import { onVoiceDownload, renderVoice } from "./voice";
 
@@ -167,6 +168,7 @@ async function renderSettings(): Promise<void> {
         ),
         clearChatNote,
       ),
+      card("Features", ...FEATURES.map((f) => f.render(s))),
       card("Voice", voiceBody),
       card("Memory", memoryBody),
       h("p", { class: `info ${ollama.state}` }, h("span", { class: "dot", "aria-hidden": "true" }), h("span", {}, ollama.text)),
