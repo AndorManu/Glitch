@@ -14,7 +14,8 @@
 
 import { ANIMATIONS, type AnimationName, Animator, type Clock, isAnimationName, landKeys, type Pose } from "./animations";
 import { type BehaviourName, Brain, type BrainContext, type Haul, isBehaviourName, type Plan, type Gait } from "./brain";
-import { ChaosDirector, type ChaosHost, isAct, knockKeys } from "./chaos";
+import { ChaosDirector, chaosAnim, type ChaosHost, isAct, knockKeys } from "./chaos";
+import { reactToMove } from "./ledge";
 import { capSpeed, Pendulum, VelocityTracker } from "./drag";
 import {
   alongX,
@@ -41,7 +42,7 @@ import {
   windowFor,
   type World,
 } from "./physics";
-import type { Ledge } from "../shared/ipc";
+import type { Ledge, LedgeEvent, LedgeWatchInfo, ScreenRect } from "../shared/ipc";
 import { type BodyRect, CALM, type Ghost, type Motion, type Placement, type PlatformFx } from "./render";
 
 export interface CreatureClock extends Clock {
@@ -59,6 +60,13 @@ export interface Host {
   clicked(): void;
   /** Chaos mode (other apps' windows, the cursor, paw prints, notes). Absent: no mischief. */
   chaos?: ChaosHost;
+  /**
+   * Watch the window he stands on (null: stop). With `events`, moves arrive
+   * through `Creature.ledgeEvent`; otherwise he polls `ledgeFrame` at 30 Hz
+   * while standing on it.
+   */
+  watchLedge?(id: number | null): Promise<LedgeWatchInfo | null>;
+  ledgeFrame?(id: number): Promise<ScreenRect | null>;
 }
 
 /** What creature.ts needs from the renderer (render.ts `Renderer` fits). */
@@ -209,6 +217,8 @@ export class Creature {
   private pollTimer: unknown = null;
   private actionTimer: unknown = null;
   private worldAt = -Infinity;
+  /** When the ledge under him was last compared (snapshot or event). */
+  private ledgeSampleAt = 0;
   private worldPending: Promise<World | null> | null = null;
   private stepIndex = 0;
   private planStarted = 0;
@@ -223,6 +233,15 @@ export class Creature {
   private lastInteraction = 0;
   private excitedUntil = -Infinity;
   private sentHitbox: BodyRect | null | undefined = undefined;
+  /** The window he stands on, as last reported (ledge watch). */
+  private watchedId: number | null = null;
+  private watchFrame: ScreenRect | null = null;
+  private watchAt = 0;
+  private watchTimer: unknown = null;
+  /** How far the user has dragged his window by hand since grabbing it (null: not grabbed). */
+  private handTravel: number | null = null;
+  /** Riding a moving window: the window trails the body by this much, easing to 0 (no jumps). */
+  private rideLag: Vec = { x: 0, y: 0 };
   /** Stepped in glitch: leave paw prints until then. */
   private pawsUntil = -Infinity;
   private pawLast: Vec | null = null;
@@ -324,8 +343,8 @@ export class Creature {
   /** Stop every timer (tests, page unload). */
   dispose(): void {
     this.animator.stop();
-    for (const t of [this.motionTimer, this.brainTimer, this.pollTimer, this.actionTimer]) if (t !== null) this.clock.clearTimeout(t);
-    this.motionTimer = this.brainTimer = this.pollTimer = this.actionTimer = null;
+    for (const t of [this.motionTimer, this.brainTimer, this.pollTimer, this.actionTimer, this.watchTimer]) if (t !== null) this.clock.clearTimeout(t);
+    this.motionTimer = this.brainTimer = this.pollTimer = this.actionTimer = this.watchTimer = null;
   }
 
   private settle(surface: Surface): void {
@@ -344,9 +363,9 @@ export class Creature {
   // =========================================================== the world
 
   /** A fresh world snapshot, at most every WORLD_MIN_MS (else the cached one). */
-  private pollWorld(): Promise<World | null> {
+  private pollWorld(force = false): Promise<World | null> {
     if (this.worldPending) return this.worldPending;
-    if (this.world && this.now - this.worldAt < WORLD_MIN_MS) return Promise.resolve(this.world);
+    if (!force && this.world && this.now - this.worldAt < WORLD_MIN_MS) return Promise.resolve(this.world);
     this.worldAt = this.now;
     this.stats.worldPolls++;
     this.worldPending = this.host.world().then(
@@ -380,39 +399,177 @@ export class Creature {
     }
     const old = s.ledge;
     const fresh = findLedge(w, old.id, this.body.x);
-    let dx = 0;
-    let ok = false;
-    if (fresh && Math.abs(fresh.y - old.y) <= 120 * u) {
-      if (this.body.x >= fresh.x && this.body.x <= fresh.x + fresh.w) ok = true;
-      // The same visible width somewhere else: the window was dragged sideways. Ride along.
-      if (fresh.w === old.w && Math.abs(fresh.x - old.x) < 600 * u) {
-        dx = fresh.x - old.x;
-        ok = true;
+    if (this.watchFrame) {
+      // Watched (events / 30 Hz polls) moves are handled in ledgeEvent. A
+      // snapshot only tells whether something now covers his spot, and only
+      // once the window has been still for a moment (else it may be stale).
+      if (this.now - this.watchAt < 300) return;
+      if (!fresh || !(this.body.x >= fresh.x && this.body.x <= fresh.x + fresh.w) || Math.abs(fresh.y - old.y) > 2 * u) {
+        return this.loseFooting({ x: 0, y: 0 }, "covered");
       }
-    }
-    if (!fresh || !ok) {
-      this.event("ledge-gone");
-      this.interrupt();
-      this.launch({ x: 0, y: 0 }, { planned: false, panic: true, canSplat: true });
+      this.surface = { kind: "ledge", ledge: fresh };
+      if (this.loco) this.s = clampTo(this.surface, this.s, w);
       return;
     }
-    const dy = fresh.y - old.y;
-    this.surface = { kind: "ledge", ledge: fresh };
-    if (dx !== 0 || dy !== 0) {
-      this.s = clampTo(this.surface, this.s + dx, w);
-      const c = restCenter(this.surface, this.s, w);
-      this.body.x = c.x;
-      this.body.y = c.y;
-      if (this.loco) this.loco.to += dx;
-      this.event("ride");
-      if (Math.abs(dx) + Math.abs(dy) > 6 * u) this.animator.glitchBurst(160);
-      this.place();
-    } else if (this.loco) {
-      this.s = clampTo(this.surface, this.s, w);
+    if (!fresh) return this.loseFooting({ x: 0, y: 0 }, "gone");
+    if (fresh.w !== old.w) {
+      // Something in front now covers part of it (or it was resized): he must still be over it.
+      if (this.body.x < fresh.x || this.body.x > fresh.x + fresh.w || Math.abs(fresh.y - old.y) > 2 * u) {
+        return this.loseFooting({ x: 0, y: 0 }, "covered");
+      }
+      this.surface = { kind: "ledge", ledge: fresh };
+      if (this.loco) this.s = clampTo(this.surface, this.s, w);
+      return;
+    }
+    // The same visible width somewhere else: the window moved. Ride along, or fall if it jumped away.
+    const r = reactToMove({ x: old.x, y: old.y, w: old.w, h: 0 }, { x: fresh.x, y: fresh.y, w: fresh.w, h: 0 }, this.now - this.ledgeSampleAt, w, this.body.x, this.handTravel);
+    this.ledgeSampleAt = this.now;
+    if (r.kind === "fall") {
+      const dx = fresh.x - old.x;
+      const dy = fresh.y - old.y;
+      if ((r.why === "slip" || r.why === "jump") && this.slipOn({ x: fresh.x, y: fresh.y, w: fresh.w, h: 0 }, dx, dy)) return;
+      return this.loseFooting(r.v, r.why, { dx, dy });
+    }
+    if (r.kind === "ride") this.rideBy(r.dx, r.dy);
+    else if (this.loco) this.s = clampTo(this.surface, this.s, w);
+  }
+
+  /** The window under him moved by (dx, dy): move with it, the picture eases after (no jump). */
+  private rideBy(dx: number, dy: number): void {
+    const w = this.world;
+    if (!w || !isTop(this.surface) || this.surface.kind !== "ledge") return;
+    const l = this.surface.ledge;
+    this.surface = { kind: "ledge", ledge: { ...l, x: l.x + dx, y: l.y + dy } };
+    this.s += dx;
+    if (this.loco) this.loco.to += dx;
+    this.body.x += dx;
+    this.body.y += dy;
+    // Small steps (30 Hz events) need no easing; bigger ones glide over ~0.1 s.
+    if (Math.abs(dx) + Math.abs(dy) > 12 * w.scale) {
+      this.rideLag = { x: this.rideLag.x - dx, y: this.rideLag.y - dy };
+    }
+    if (this.handTravel !== null) this.handTravel += Math.hypot(dx, dy);
+    this.event("ride");
+    this.place();
+    this.ensureMotion();
+  }
+
+  /** The window under him left, closed, or moved out from under him: fall for real. */
+  private loseFooting(v: Vec, why: string, moved?: { dx: number; dy: number }): void {
+    this.event(`ledge-gone:${why}`);
+    this.asleep = false;
+    const id = isTop(this.surface) ? this.surface.ledge.id : null;
+    // His snapshot of the world still has that window where it was: update it
+    // (or drop it) so he doesn't land straight back on a ghost.
+    if (this.world && id !== null) {
+      const ledges = moved
+        ? this.world.ledges.map((l) => (l.id === id ? { ...l, x: l.x + moved.dx, y: l.y + moved.dy } : l))
+        : this.world.ledges.filter((l) => l.id !== id);
+      this.world = { ...this.world, ledges };
+    }
+    this.interrupt();
+    this.rideLag = { x: 0, y: 0 };
+    this.launch(v, { planned: false, panic: true, canSplat: true });
+    void this.pollWorld(true);
+  }
+
+  /**
+   * The window moved too fast for him to ride along, but it is still under
+   * his feet: it slides under him (he stays where he is) and he stumbles.
+   */
+  private slipOn(next: ScreenRect, dx: number, dy: number): boolean {
+    const w = this.world;
+    if (!w || this.surface.kind !== "ledge" || Math.abs(dy) > 4 * w.scale) return false;
+    const m = 12 * w.scale;
+    if (this.body.x < next.x + m || this.body.x > next.x + next.w - m) return false;
+    const l = this.surface.ledge;
+    this.surface = { kind: "ledge", ledge: { ...l, x: l.x + dx, y: l.y + dy } };
+    this.s = this.body.x;
+    if (this.loco) this.loco.to = clampTo(this.surface, this.loco.to, w);
+    this.event("slip");
+    if (this.mode === "stand" && !this.loco && !this.plan) this.animator.play("startled", this.restAnim());
+    return true;
+  }
+
+  /** From Rust: the window he stands on moved / closed / got covered (see ledge_watch.rs). */
+  ledgeEvent(e: LedgeEvent): void {
+    if (e.id !== this.watchedId || !this.world) return;
+    if (this.mode !== "stand" || this.surface.kind !== "ledge" || this.surface.ledge.id !== e.id) return;
+    switch (e.kind) {
+      case "gone":
+        return this.loseFooting({ x: 0, y: 0 }, "gone");
+      case "front":
+        // Something came to the front: does it cover his spot now?
+        void this.pollWorld(true);
+        return;
+      case "grab":
+        this.handTravel = 0;
+        return;
+      case "move": {
+        const prev = this.watchFrame;
+        const next = e.frame;
+        const dt = this.now - this.watchAt;
+        this.watchFrame = next;
+        this.watchAt = this.now;
+        this.ledgeSampleAt = this.now;
+        if (!prev || !next) return;
+        // He's dragging it himself (chaos): stepHaul keeps him on it.
+        if (this.loco?.haul) return;
+        const r = reactToMove(prev, next, dt, this.world, this.body.x, this.handTravel);
+        if (r.kind === "fall") {
+          const dx = next.x - prev.x;
+          const dy = next.y - prev.y;
+          if ((r.why === "slip" || r.why === "jump") && this.slipOn(next, dx, dy)) return;
+          return this.loseFooting(r.v, r.why, { dx, dy });
+        }
+        if (r.kind === "ride") this.rideBy(r.dx, r.dy);
+        return;
+      }
     }
   }
 
+  /** Watch the window he stands on (only then; nothing at all otherwise). */
+  private syncLedgeWatch(): void {
+    const want = this.started && this.mode === "stand" && this.surface.kind === "ledge" ? this.surface.ledge.id : null;
+    if (want === this.watchedId) return;
+    this.watchedId = want;
+    this.watchFrame = null;
+    this.handTravel = null;
+    if (this.watchTimer !== null) this.clock.clearTimeout(this.watchTimer);
+    this.watchTimer = null;
+    const host = this.host;
+    if (!host.watchLedge) return;
+    void host.watchLedge(want).then(
+      (info) => {
+        if (want === null || this.watchedId !== want || !info) return;
+        if (!info.frame) return this.ledgeEvent({ id: want, kind: "gone", frame: null });
+        this.watchFrame = info.frame;
+        this.watchAt = this.now;
+        if (!info.events && host.ledgeFrame) this.pollLedge(want);
+      },
+      () => {},
+    );
+  }
+
+  /** No OS events (macOS, the dev stage): ask where his window is, 30 times a second, while on it and awake. */
+  private pollLedge(id: number): void {
+    this.watchTimer = this.clock.setTimeout(() => {
+      this.watchTimer = null;
+      if (this.watchedId !== id || !this.host.ledgeFrame) return;
+      if (this.asleep) return this.pollLedge(id);
+      void this.host.ledgeFrame(id).then(
+        (frame) => {
+          if (this.watchedId !== id) return;
+          this.ledgeEvent({ id, kind: frame ? "move" : "gone", frame });
+          if (this.watchedId === id && this.watchTimer === null) this.pollLedge(id);
+        },
+        () => this.watchedId === id && this.pollLedge(id),
+      );
+    }, WALK_FRAME_MS);
+  }
+
   private armLedgeWatch(): void {
+    this.syncLedgeWatch();
     if (this.pollTimer !== null) this.clock.clearTimeout(this.pollTimer);
     this.pollTimer = null;
     if (this.surface.kind !== "ledge" || this.asleep || this.mode !== "stand") return;
@@ -433,12 +590,14 @@ export class Creature {
       return;
     }
     const u = w.scale;
-    const win = windowFor(this.body, this.body.angle, this.k, u);
+    const lag = this.rideLag;
+    const shown = lag.x || lag.y ? { ...this.body, x: this.body.x + lag.x, y: this.body.y + lag.y } : this.body;
+    const win = windowFor(shown, this.body.angle, this.k, u);
     if (win.x !== this.win.x || win.y !== this.win.y) {
       this.win = win;
       this.sendMove(win);
     }
-    const feet = feetInWindow(this.body, win, this.body.angle, u);
+    const feet = feetInWindow(shown, win, this.body.angle, u);
     const platform = this.platformFx();
     const view = this.view;
     view.placement = { x: feet.x, y: feet.y, angle: this.body.angle };
@@ -525,6 +684,7 @@ export class Creature {
       this.mode !== "stand" ||
       this.loco !== null ||
       Math.abs(this.k - this.kTarget()) > 1e-3 ||
+      Math.abs(this.rideLag.x) + Math.abs(this.rideLag.y) > 0.5 ||
       (this.platform !== null && (this.platform.build < 1 || this.platform.breaking))
     );
   }
@@ -560,6 +720,7 @@ export class Creature {
         if (this.loco) this.stepLoco(dt, now);
     }
     this.stepK(dt);
+    this.stepRideLag(dt);
     this.stepPlatform(dt);
     this.place();
     if (this.motionTimer !== null) return; // something re-armed it already
@@ -570,6 +731,15 @@ export class Creature {
       this.updateHitbox();
     }
   };
+
+  private stepRideLag(dt: number): void {
+    const l = this.rideLag;
+    if (!l.x && !l.y) return;
+    const f = Math.exp(-dt / 0.045);
+    l.x *= f;
+    l.y *= f;
+    if (Math.abs(l.x) + Math.abs(l.y) < 0.5) this.rideLag = { x: 0, y: 0 };
+  }
 
   private stepK(dt: number): void {
     const target = this.kTarget();
@@ -800,6 +970,7 @@ export class Creature {
     };
     if (this.pollTimer !== null) this.clock.clearTimeout(this.pollTimer);
     this.pollTimer = null;
+    this.syncLedgeWatch();
     // Leaving his platform: it shatters behind him.
     if (this.platform && !this.platform.breaking && this.surface.kind === "platform") this.platform.breaking = true;
     this.updateAirAnim();
@@ -855,7 +1026,7 @@ export class Creature {
     const f = this.flight;
     if (!f || this.animator.animation === "crouch") return;
     let want: AnimationName;
-    if (f.panic) want = "flail";
+    if (f.panic) want = chaosAnim("fall_flail");
     else if (!f.planned && Math.abs(this.body.spin) > 260) want = "tumble";
     else want = this.body.vy < -60 * this.u ? "airUp" : "airDown";
     if (this.animator.animation !== want) this.animator.play(want);
@@ -1006,16 +1177,18 @@ export class Creature {
   }
 
   /** Do this chaos act now if it fits (debug trigger / dev tools). Rust's limits still apply. */
-  async forceChaos(act: string): Promise<boolean> {
+  async forceChaos(what: string): Promise<boolean> {
+    const [act, arg] = what.split(":");
     if (!this.director || !isAct(act) || !this.world || this.mode !== "stand" || this.hold) return false;
     this.interaction();
     if (this.asleep) this.wake();
     this.interrupt();
-    const plan = await this.director.plan(act, true).catch((e) => {
+    const plan = await this.director.plan(act, true, arg).catch((e) => {
       this.event(`chaos-error:${String(e)}`);
       return null;
     });
     this.event(`chaos:${act}:${plan ? "go" : "no"}`);
+    if (!plan && this.onEvent) this.event(`ledges:${(this.world?.ledges ?? []).map((l) => `${l.id}@${l.x},${l.y}+${l.w}`).join(" ")}`);
     if (!plan || this.mode !== "stand" || this.plan) {
       if (!this.plan) this.scheduleBrain(3000);
       return false;
@@ -1180,13 +1353,18 @@ export class Creature {
     const w = this.world;
     this.teleportTo = null;
     if (!t || !w) return;
+    // Glitching away from his own platform: it breaks up behind him.
+    if (this.platform && !this.platform.breaking) {
+      this.platform.breaking = true;
+      this.ensureMotion();
+    }
     this.surface = t.surface;
     this.s = clampTo(t.surface, t.s, w);
     const c = restCenter(t.surface, this.s, w);
     this.body = { x: c.x, y: c.y, vx: 0, vy: 0, angle: surfaceAngle(t.surface.kind), spin: 0 };
     this.k = 1;
     this.facingLeft = this.rand() < 0.5;
-    this.event(`teleport:${t.surface.kind}`);
+    this.event(isTop(t.surface) ? `teleport:${t.surface.kind}:${t.surface.ledge.id}@${t.surface.ledge.x},${t.surface.ledge.y}` : `teleport:${t.surface.kind}`);
     this.place();
     this.armLedgeWatch();
     // Teleporting is messy: sometimes he lands in a puddle of glitch.
@@ -1354,9 +1532,12 @@ export class Creature {
   playAction(name: unknown): boolean {
     // "chaos:window", "chaos:note"...: a chaos act (debug trigger).
     if (typeof name === "string" && name.startsWith("chaos:")) {
-      if (!this.director || !isAct(name.slice(6))) return false;
-      void this.forceChaos(name.slice(6));
-      return true;
+      if (this.director && isAct(name.slice(6).split(":")[0])) {
+        void this.forceChaos(name.slice(6));
+        return true;
+      }
+      // Not a chaos act: a behaviour or animation by that name (debug trigger).
+      return this.playAction(name.slice(6));
     }
     // Behaviours first ("climb" is also the climbing animation); the animation if it can't be planned here.
     if (isBehaviourName(name) && this.force(name)) return true;
@@ -1473,8 +1654,10 @@ export class Creature {
     };
     this.hold.tracker.add(this.now, grab);
     this.mode = "held";
+    this.rideLag = { x: 0, y: 0 };
     if (this.pollTimer !== null) this.clock.clearTimeout(this.pollTimer);
     this.pollTimer = null;
+    this.syncLedgeWatch();
     this.animator.play("held");
     this.animator.glitchBurst(280);
     this.event("grab");

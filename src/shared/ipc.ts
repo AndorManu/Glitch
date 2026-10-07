@@ -106,6 +106,31 @@ export interface WorldSnapshot {
   scale: number;
   /** Window tops to stand on (empty on Linux or if unavailable). */
   ledges: Ledge[];
+  /** Whole frames of the windows those ledges belong to (missing from older builds / fakes). */
+  frames?: WindowFrame[];
+}
+
+/** Another app's window frame, physical px (`id` matches its ledges). */
+export interface WindowFrame {
+  id: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Sent as "ledge-event" while Glitch stands on another app's window. */
+export interface LedgeEvent {
+  id: number;
+  /** move: it is now at `frame`; grab: the user took hold of it; gone: closed/hidden/minimised; front: another window came to the front. */
+  kind: "move" | "grab" | "gone" | "front";
+  frame: ScreenRect | null;
+}
+
+export interface LedgeWatchInfo {
+  /** true: "ledge-event" events arrive; false: poll ledgeFrame. */
+  events: boolean;
+  frame: ScreenRect | null;
 }
 
 /** Window-local CSS px. */
@@ -179,6 +204,10 @@ export const api = {
    * Rust emits "mascot-hover" (boolean) when the cursor enters/leaves it.
    */
   setHitbox: (rect: LocalRect | null) => invoke<void>("set_hitbox", { rect }),
+  /** Watch the window Glitch stands on (null: stop). Events arrive as "ledge-event". */
+  ledgeWatch: (id: number | null) => invoke<LedgeWatchInfo>("ledge_watch", { id }),
+  /** Where that window is now (null: gone). For platforms without events. */
+  ledgeFrame: (id: number) => invoke<ScreenRect | null>("ledge_frame", { id }),
 };
 
 // ------------------------------------------------------------------ voice

@@ -250,6 +250,16 @@ mod imp {
         unsafe { SetCursorPos(x, y) != 0 }
     }
 
+    /// A window's visible frame, or None if it's gone, hidden, minimised or cloaked.
+    pub fn visible_frame(id: u64) -> Option<ScreenRect> {
+        let hwnd = id as usize as HWND;
+        if unsafe { IsWindow(hwnd) } == 0 || unsafe { IsWindowVisible(hwnd) } == 0 || unsafe { IsIconic(hwnd) } != 0 || cloaked(hwnd) {
+            return None;
+        }
+        let f = frame_of(hwnd)?;
+        Some(ScreenRect { x: f.left, y: f.top, w: f.right - f.left, h: f.bottom - f.top })
+    }
+
     /// Show one of Glitch's own windows without activating it.
     pub fn show_no_activate(id: u64) -> bool {
         let hwnd = id as usize as HWND;

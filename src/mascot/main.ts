@@ -17,7 +17,7 @@ import {
   PhysicalPosition,
   primaryMonitor,
 } from "@tauri-apps/api/window";
-import { api, chaosApi, type Settings, type WorldSnapshot } from "../shared/ipc";
+import { api, chaosApi, type LedgeEvent, type Settings, type WorldSnapshot } from "../shared/ipc";
 import { GLITCH } from "../sprites/glitch";
 import { loadSprites } from "../sprites/load";
 import { RACCOON } from "../sprites/raccoon";
@@ -67,6 +67,8 @@ const host: Host = {
   ),
   setHitbox: (rect) => void api.setHitbox(rect).catch(() => {}),
   clicked: () => void api.mascotClicked(),
+  watchLedge: (id) => api.ledgeWatch(id).catch(() => null),
+  ledgeFrame: (id) => api.ledgeFrame(id),
   chaos: {
     status: () => chaosApi.status(),
     windows: () => chaosApi.windows().catch(() => []),
@@ -161,6 +163,8 @@ async function main(): Promise<void> {
   // Unknown moods fall back to idle inside setMood.
   await listen<string>("mood", (e) => c.setMood(e.payload));
   await listen<boolean>("mascot-hover", (e) => c.setHovered(e.payload));
+  // The window he stands on moved / closed / got covered (src-tauri/src/ledge_watch.rs).
+  await listen<LedgeEvent>("ledge-event", (e) => c.ledgeEvent(e.payload));
   // For behaviours driven from Rust or other windows; unknown names are ignored.
   await listen<string>("mascot-action", (e) => void playAction(e.payload));
   window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener("change", () => renderer.redraw());

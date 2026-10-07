@@ -459,6 +459,18 @@ pub struct WorldSnapshot {
     area: ScreenRect,
     scale: f64,
     ledges: Vec<Ledge>,
+    /// Whole frames of the windows that have ledges (for sliding down their
+    /// sides, wall jumps).
+    frames: Vec<WindowFrame>,
+}
+
+#[derive(Serialize)]
+pub struct WindowFrame {
+    id: u64,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
 }
 
 /// Screen edges + other apps' window tops (see glitch_core::world).
@@ -474,7 +486,13 @@ pub async fn world_snapshot(app: AppHandle) -> Result<WorldSnapshot, UiError> {
     let min_width = (90.0 * scale) as i32;
     let windows =
         tauri::async_runtime::spawn_blocking(move || crate::world_native::app_windows(scale)).await.unwrap_or_default();
-    Ok(WorldSnapshot { area, scale, ledges: world::ledges(&windows, area, headroom, min_width) })
+    let ledges = world::ledges(&windows, area, headroom, min_width);
+    let frames = windows
+        .iter()
+        .filter(|w| ledges.iter().any(|l| l.id == w.id))
+        .map(|w| WindowFrame { id: w.id, x: w.rect.x, y: w.rect.y, w: w.rect.w, h: w.rect.h })
+        .collect();
+    Ok(WorldSnapshot { area, scale, ledges, frames })
 }
 
 /// Which part of the mascot window is Glitch's body (CSS px); `None` = all.

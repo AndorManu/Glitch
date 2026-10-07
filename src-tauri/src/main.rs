@@ -6,6 +6,7 @@ mod chaos_native;
 mod commands;
 mod hover;
 mod layout;
+mod ledge_watch;
 mod os;
 mod state;
 mod voice;
@@ -147,6 +148,8 @@ fn main() {
             chaos::chaos_note_close,
             chaos::chaos_note_open_now,
             chaos::chaos_debug_log,
+            ledge_watch::ledge_watch,
+            ledge_watch::ledge_frame,
             voice::commands::voice_status,
             voice::commands::update_voice_settings,
             voice::commands::voice_start,

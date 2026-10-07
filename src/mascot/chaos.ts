@@ -43,6 +43,17 @@ export const ANIM_FALLBACKS: Record<string, readonly string[]> = {
   dance: ["happy"],
   sneeze: ["malfunction"],
   dizzy: ["malfunction"],
+  // Playful moves (brain.ts) and falling.
+  fall_flail: ["flail"],
+  tail_copter: ["airDown"],
+  glide: ["airDown"],
+  hang_ledge: ["dangle"],
+  pull_up: ["climb"],
+  slide_down: ["airDown"],
+  bounce: ["airUp"],
+  sit_edge_swing: ["sitEdge"],
+  fish: ["sitEdge"],
+  wall_jump: ["crouch"],
 };
 
 /** The animation to play for a chaos name: itself if it exists, else the first fallback that does, else "walk". */
@@ -107,8 +118,9 @@ export interface ChaosSubject {
   knock(): Promise<void>;
 }
 
-export type Act = "window" | "push" | "chase" | "note" | "peek" | "knock" | "paws";
-export const ACTS: readonly Act[] = ["window", "push", "chase", "note", "peek", "knock", "paws"];
+/** `perch` is for testing only (weight 0): teleport onto the window top nearest the cursor. */
+export type Act = "window" | "push" | "chase" | "note" | "peek" | "knock" | "paws" | "perch";
+export const ACTS: readonly Act[] = ["window", "push", "chase", "note", "peek", "knock", "paws", "perch"];
 
 export function isAct(name: unknown): name is Act {
   return typeof name === "string" && (ACTS as readonly string[]).includes(name);
@@ -123,6 +135,7 @@ export const ACT_TABLE: Record<Act, { weight: number; cooldown: number }> = {
   peek: { weight: 1.4, cooldown: 90 },
   knock: { weight: 1, cooldown: 150 },
   paws: { weight: 1.4, cooldown: 90 },
+  perch: { weight: 0, cooldown: 0 },
 };
 
 /** Between two acts (ms): gentle. */
@@ -253,7 +266,7 @@ export class ChaosDirector {
     const st = await this.host.status().catch(() => null);
     if (!st || !st.enabled || st.blocked || (st.available && st.idle_ms < USER_QUIET_MS)) return null;
     this.nextAt = now + CHAOS_GAP_MS[0] + this.rand() * (CHAOS_GAP_MS[1] - CHAOS_GAP_MS[0]);
-    const options = ACTS.filter((a) => this.ready(a, now))
+    const options = ACTS.filter((a) => ACT_TABLE[a].weight > 0 && this.ready(a, now))
       .filter((a) => st.available || (a !== "window" && a !== "push"))
       .filter((a) => a !== "window" || st.window_ready)
       .map((a) => ({ a, w: ACT_TABLE[a].weight }));
@@ -280,11 +293,10 @@ export class ChaosDirector {
    * apply). `forced` (debug trigger): skip the act's own dice, e.g. always
    * try to catch the cursor when in reach.
    */
-  async plan(act: Act, forced = false): Promise<Plan | null> {
+  async plan(act: Act, forced = false, arg?: string): Promise<Plan | null> {
     this.forced = forced;
     const w = this.me.world;
-    // Not from his own glitch platform (it has to break under him first).
-    if (!w || this.me.surface.kind === "platform") return null;
+    if (!w) return null;
     switch (act) {
       case "window":
         return this.planWindow(w);
@@ -298,6 +310,20 @@ export class ChaosDirector {
         return this.planPeek(w);
       case "knock":
         return mischief({ do: "call", run: () => this.me.knock().then(() => true) }, { do: "anim", name: this.rand() < 0.5 ? "laugh" : "lookAround" });
+      case "perch": {
+        const c = await this.me.cursor();
+        let best: { d: number; l: World["ledges"][number] } | null = null;
+        // "perch:<window id>": that window's top (tests); else the one nearest the cursor.
+        const only = arg ? Number(arg) : null;
+        for (const l of w.ledges) {
+          if (only !== null && l.id !== only) continue;
+          const d = Math.hypot(Math.max(l.x - c.x, 0, c.x - (l.x + l.w)), l.y - c.y);
+          if (!best || d < best.d) best = { d, l };
+        }
+        if (!best) return null;
+        const surface: Surface = { kind: "ledge", ledge: best.l };
+        return mischief({ do: "teleport", surface, s: clampTo(surface, c.x, w) });
+      }
       case "paws":
         return this.planPaws(w);
     }
