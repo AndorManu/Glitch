@@ -13,6 +13,10 @@ glitch-core = { path = "../crates/glitch-core" }
 # >= 2.12.1: transparent windows on macOS no longer need the `macos-private-api` flag.
 tauri = { version = "2.12.1", features = ["tray-icon", "image-png"] }
 tauri-plugin-single-instance = "2.5"
+# Glitch's belly (feeding): the folder picker and the "eat this?" question.
+tauri-plugin-dialog = "2.4"
+# Dates for the pet state (already in the tree via glitch-core).
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["sync", "time", "fs", "io-util"] }

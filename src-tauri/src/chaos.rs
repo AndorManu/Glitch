@@ -279,7 +279,7 @@ pub fn stop_all(app: &AppHandle) {
 
 /// Show one of Glitch's extra windows without taking the keyboard focus
 /// from whatever the user is doing.
-fn show_quietly(win: &tauri::WebviewWindow) {
+pub(crate) fn show_quietly(win: &tauri::WebviewWindow) {
     #[cfg(target_os = "windows")]
     if let Ok(h) = win.hwnd() {
         if native::show_no_activate(h.0 as usize as u64) {

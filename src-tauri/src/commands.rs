@@ -174,9 +174,17 @@ pub async fn send_message(app: AppHandle, state: State<'_, AppState>, text: Stri
     if text.chars().count() > MAX_INPUT_CHARS {
         return Err(UiError::new("too_long", "That's a lot of text! Could you make it shorter?"));
     }
+    // "let's play", "hide and seek": a game, no model needed (play.rs).
+    if let Some(step) = crate::play::chat_hook(&app, text) {
+        crate::play::record(&app, glitch_core::play::PetEvent::Chat);
+        return Ok(step);
+    }
     let model = state.settings().model.ok_or_else(|| UiError::new("no_model", "Pick a model in settings first"))?;
     let _ = app.emit("mood", "thinking");
     let result = state.agent.lock().await.send(&model, text).await;
+    if result.is_ok() {
+        crate::play::record(&app, glitch_core::play::PetEvent::Chat);
+    }
     let _ = app.emit("mood", mood_after(&result));
     after_turn(&app, &model, &result);
     result.map_err(UiError::from)

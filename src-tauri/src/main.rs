@@ -9,6 +9,7 @@ mod hover;
 mod layout;
 mod ledge_watch;
 mod os;
+mod play;
 mod state;
 mod voice;
 mod windows;
@@ -35,7 +36,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let chaos = CheckMenuItem::with_id(app, "chaos", "Chaos mode", true, state.settings().chaos_enabled, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Glitch", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&chat, &wander, &chaos, &settings, &sep, &quit])?;
+    let fetch = MenuItem::with_id(app, "play_fetch", "Play fetch", true, None::<&str>)?;
+    let hide = MenuItem::with_id(app, "play_hide", "Play hide and seek", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&chat, &fetch, &hide, &wander, &chaos, &settings, &sep, &quit])?;
     *state.wander_item.lock().unwrap() = Some(wander);
     *state.chaos_item.lock().unwrap() = Some(chaos);
 
@@ -65,6 +68,8 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                     }
                     let _ = app.emit("settings-changed", &s);
                 }
+                "play_fetch" => play::start_game(app, glitch_core::play::Game::Fetch),
+                "play_hide" => play::start_game(app, glitch_core::play::Game::HideSeek),
                 "quit" => {
                     let app = app.clone();
                     tauri::async_runtime::spawn(async move { commands::quit_app(&app).await });
@@ -88,7 +93,10 @@ fn main() {
         }))
         // Voice push-to-talk hotkey (registered by voice::setup, not here).
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // Glitch's belly: folder picker + "eat this?" (used from Rust only).
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            app.manage(play::PlayState::new(&app.path().app_config_dir()?));
             app.manage(AppState::new(app.handle(), app.path().app_config_dir()?));
             app.manage(hover::Hitbox::default());
             app.manage(chaos::ChaosState::default());
@@ -145,6 +153,17 @@ fn main() {
             chaos::chaos_note_close,
             chaos::chaos_note_open_now,
             chaos::chaos_debug_log,
+            play::pet_state,
+            play::pet_event,
+            play::update_play_settings,
+            play::ball_open,
+            play::ball_move,
+            play::ball_close,
+            play::growth_greeting,
+            play::belly_list,
+            play::belly_restore,
+            play::belly_choose_folder,
+            play::feed_files,
             ledge_watch::ledge_watch,
             ledge_watch::ledge_frame,
             voice::commands::voice_status,
