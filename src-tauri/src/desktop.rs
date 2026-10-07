@@ -408,7 +408,7 @@ mod imp {
                 let n = (w * h * 4) as usize;
                 let bgra = std::slice::from_raw_parts(bits as *const u8, n);
                 let mut rgba = Vec::with_capacity(n);
-                for px in bgra.chunks_exact(4) {
+                for px in bgra.as_chunks::<4>().0 {
                     rgba.extend_from_slice(&[px[2], px[1], px[0], 255]);
                 }
                 Ok((w as u32, h as u32, rgba))
