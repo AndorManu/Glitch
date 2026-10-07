@@ -53,7 +53,15 @@ You need these once (all free):
 5. **Git**: <https://git-scm.com/download/win>.
 6. **CMake and LLVM** (to build the speech-to-text engine, whisper.cpp): in
    PowerShell run `winget install Kitware.CMake LLVM.LLVM`, then open a new
-   PowerShell window.
+   PowerShell window. (CMake builds whisper.cpp; LLVM provides `libclang`,
+   which whisper-rs uses to read whisper.cpp's C header. If LLVM lives
+   somewhere other than `C:\Program Files\LLVM`, set `LIBCLANG_PATH` to the
+   folder containing `libclang.dll`.)
+7. **Keep the folder path short**, e.g. `C:\dev\Glitch`. whisper.cpp's CMake
+   build creates deeply nested folders under `target\`, and MSBuild fails
+   with `error MSB6003` once a path passes 260 characters (it happened from a
+   folder like `C:\Users\<you>\CodingProjects\Glitch\.claude\worktrees\<id>`).
+   Alternatively set a short build folder: `$env:CARGO_TARGET_DIR="C:\gt"`.
 
 Then, in a new **PowerShell** window:
 
@@ -171,6 +179,10 @@ after the last use.
   explains this and opens the page).
 * If another app already uses the shortcut, Settings → Voice says so; the
   mic button still works.
+* While voice is on, Glitch owns Ctrl+Shift+Space everywhere on Windows, so
+  apps that use it themselves (Visual Studio's Parameter Info, Excel's
+  "select all objects") won't see it. Turning voice off in Settings gives it
+  back.
 
 **Limits**: voice isn't available on Linux builds, and on x86 PCs without
 AVX2 (roughly older than 2013, and some budget Celeron/Pentium chips) voice
@@ -400,6 +412,15 @@ to a tiny code-drawn creature (`src/sprites/glitch.ts`), so the app still works.
   The voice states of the bubble (mic button, listening meter, transcribing,
   model download offer, errors) and Settings → Voice were checked the same
   way, with screenshots.
+* `node dev/voice-check.mjs [tiny|base|small]` (Windows/macOS, not in CI:
+  needs the network, a microphone and ~220 MB of models): speaks four
+  commands with the system's speech synthesizer (SAPI / `say`) in different
+  voices, sample rates and channel counts, then runs the `#[ignore]`d tests
+  in `src-tauri/src/voice/live_check.rs`: real model download with a forced
+  cut-off and resume + SHA-1 check, 2 s of real microphone capture (devices,
+  open time, level), and every phrase through the real voice session with
+  real whisper in hold and hands-free mode, checking the words and printing
+  the latency.
 * CI also **builds the real app on Windows and macOS runners**, which proves
   the OS-specific code compiles and the unit tests pass on both OSes.
 
@@ -434,11 +455,17 @@ calls the right tools (see [dev/ollama-check](dev/ollama-check/check.mjs)).
   with a real Ollama model (the smoke test used a mock)
 * macOS file-permission prompts, Gatekeeper/SmartScreen flows
 * actual idle CPU and RAM on Windows/macOS
-* voice with a real microphone and a real speech model on Windows/macOS:
-  recording, the permission prompts, the global shortcut, the real model
-  download from Hugging Face (only tested against a local mock server), and
-  transcription quality/speed (whisper.cpp was only run here with its tiny
-  test model)
+* voice on macOS (everything), and on Windows: talking into a real
+  microphone in the running app, the privacy prompt, and holding the global
+  shortcut in the running app. Verified on Windows 11 (i9-14900HX) with
+  `node dev/voice-check.mjs`: microphone capture (WASAPI, 48 kHz stereo),
+  the real download of tiny + base from Hugging Face cut off at 15 MB and
+  resumed (SHA-1 ok), and SAPI-spoken commands through the real session
+  code (real-time fake mic, VAD, resampling, whisper): all transcribed
+  right with base; text arrives 0.2-0.4 s after you let go (hold) or
+  0.6-0.75 s after you stop talking (hands-free, includes the silence wait).
+  Opening an idle laptop microphone took ~0.8 s the first time (the device
+  waking up), ~0.15 s after that.
 
 ## Manual test checklist
 

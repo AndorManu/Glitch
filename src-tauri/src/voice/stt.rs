@@ -127,13 +127,14 @@ pub fn load(path: &Path) -> Result<Model, String> {
 
 /// The encoder window (whisper's `audio_ctx`) for `samples` of 16 kHz audio:
 /// one position per 20 ms (320 samples) plus ~2.5 s of margin, rounded up to
-/// 64, and never below half the window (15 s): measured on SAPI speech, the
-/// tiny model mishears and loops ("Elon Musk's cage cage cage...") with
-/// windows of 384-512 but is right at 768, and 768 still halves the work.
-/// At most the full 30 s (1500).
-pub fn audio_ctx(samples: usize) -> i32 {
+/// 64, at most the full 30 s (1500). Measured on SAPI speech: base and
+/// bigger are right from 256 up, but the `tiny` model mishears and loops
+/// ("Elon Musk's cage cage cage...") below 768 (half the window), so it gets
+/// at least that; tiny is fast enough for it not to matter.
+pub fn audio_ctx(samples: usize, tiny: bool) -> i32 {
     let needed = samples.div_ceil(320) + 128;
-    (needed.div_ceil(64) * 64).clamp(768, 1500) as i32
+    let min = if tiny { 768 } else { 384 };
+    (needed.div_ceil(64) * 64).clamp(min, 1500) as i32
 }
 
 /// A cap on the tokens whisper may produce for `samples` of audio (people
@@ -162,7 +163,8 @@ pub fn transcribe(
     // whisper's encoder always works on a 30 s window; for a 2 s command
     // that's ~90 % wasted. Shrinking the window to the audio's length (plus
     // margin) makes a command ~5-10x faster on CPU at the same accuracy.
-    p.set_audio_ctx(audio_ctx(samples.len()));
+    // tiny has 4 encoder layers, base 6, small 12.
+    p.set_audio_ctx(audio_ctx(samples.len(), model.model_n_audio_layer() <= 4));
     p.set_single_segment(true);
     p.set_max_tokens(max_tokens(samples.len()));
     p.set_suppress_blank(true);
@@ -303,16 +305,22 @@ mod tests {
 
     #[test]
     fn encoder_window() {
-        // Short commands: half the window.
-        assert_eq!(audio_ctx(0), 768);
-        assert_eq!(audio_ctx(32_000), 768);
+        // Short commands: a small window; tiny at least half.
+        assert_eq!(audio_ctx(0, false), 384);
+        assert_eq!(audio_ctx(32_000, false), 384);
+        assert_eq!(audio_ctx(32_000, true), 768);
+        // 10 s: 500 positions + margin.
+        assert_eq!(audio_ctx(16_000 * 10, false), 640);
         // 20 s: 1000 positions + margin.
-        assert_eq!(audio_ctx(16_000 * 20), 1152);
-        assert!((1..28).all(|s| audio_ctx(s * 16_000) as usize >= s * 50 + 100));
-        // Long recordings get the full window, never more.
-        assert_eq!(audio_ctx(16_000 * 30), 1500);
-        assert_eq!(audio_ctx(16_000 * 60), 1500);
-        assert!((0..40).all(|s| audio_ctx(s * 16_000) % 64 == 0 || audio_ctx(s * 16_000) == 1500));
+        assert_eq!(audio_ctx(16_000 * 20, true), 1152);
+        for tiny in [false, true] {
+            let ctx = |s: usize| audio_ctx(s * 16_000, tiny);
+            assert!((1..28).all(|s| ctx(s) as usize >= s * 50 + 100));
+            // Long recordings get the full window, never more.
+            assert_eq!(ctx(30), 1500);
+            assert_eq!(ctx(60), 1500);
+            assert!((0..40).all(|s| ctx(s) % 64 == 0 || ctx(s) == 1500));
+        }
     }
 
     #[test]

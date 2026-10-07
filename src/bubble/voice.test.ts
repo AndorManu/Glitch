@@ -60,6 +60,9 @@ describe("mic button", () => {
     expect(steps.map((t) => t.command)).toEqual(["start", null, null, "stop", null, null]);
     expect(steps.map((t) => t.state.phase)).toEqual(["starting", "listening", "listening", "listening", "transcribing", "idle"]);
     expect(steps[2].state.level).toBe(0.7);
+    // Not "Listening" before the microphone actually delivers sound.
+    expect(micHint(steps[0].state)).toMatch(/warming up/);
+    expect(micHint(steps[1].state)).toMatch(/let go/);
     expect(micHint(steps[2].state)).toMatch(/let go/);
     expect(micHint(steps[4].state)).toMatch(/Writing/);
     expect(steps[5].heard).toBe("open youtube");
