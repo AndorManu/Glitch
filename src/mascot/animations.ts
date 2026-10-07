@@ -1140,7 +1140,7 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   // The hat catalogue, one hat at a time (a preview; the hats themselves are overlays, see ANIM_HEADS).
   hats: { keys: () => clip("hats", 1500, { ease: 0 }) },
   // Being petted: bliss, hearts, tail wag (loops while the hand keeps going).
-  petted: { keys: () => clip("petted", 110, { ease: 0 }) },
+  petted: { keys: () => clip("petted", 140, { ease: 0 }) },
   // Looking around in all eight directions (the gaze frames creature.ts holds to follow the cursor).
   look_dirs: { keys: () => [...clip("look_dirs", 300, { ease: 0 }), k("idle0", 200)], once: true },
   // A high five.
