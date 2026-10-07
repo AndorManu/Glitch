@@ -6,6 +6,7 @@
 pub mod agent;
 pub mod ai;
 pub mod confirm;
+pub mod memory;
 pub mod models;
 pub mod platform;
 pub mod settings;

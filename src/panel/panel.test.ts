@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { memorySummary } from "./memory";
 import type { SetupStatus } from "../shared/ipc";
 import { GLITCH } from "../sprites/glitch";
 import { checkGrid } from "../sprites/load";
@@ -17,7 +18,7 @@ function status(installed: SetupStatus["installed"], model: string | null = null
       note: null,
     },
     installed,
-    settings: { model, movement_enabled: true, onboarding_done: false, ollama_url: "", keep_alive: "2m" },
+    settings: { model, movement_enabled: true, onboarding_done: false, ollama_url: "", keep_alive: "2m", memory_enabled: true },
   };
 }
 
@@ -88,5 +89,16 @@ describe("sprite art", () => {
   it("checkGrid reports typos clearly", () => {
     expect(() => checkGrid({ kind: "grid", palette: {}, frames: { a: ["..", "."] } })).toThrow(/row 1 has 1 pixels/);
     expect(() => checkGrid({ kind: "grid", palette: {}, frames: { a: [".x"] } })).toThrow(/unknown colour "x"/);
+  });
+});
+
+describe("memory card", () => {
+  const base = { enabled: true, facts: [], summary: "", journal: [] };
+  it("summarises what Glitch remembers", () => {
+    expect(memorySummary(base)).toBe("Nothing remembered yet.");
+    expect(memorySummary({ ...base, enabled: false })).toMatch(/off/);
+    expect(
+      memorySummary({ ...base, facts: [{ id: 1, text: "Likes cats", added: "2026-10-07" }], journal: [{ date: "d", text: "t" }] }),
+    ).toBe("Remembers 1 thing · 1 earlier day");
   });
 });

@@ -20,6 +20,8 @@ pub struct Settings {
     pub ollama_url: String,
     /// Passed to Ollama as `keep_alive` (duration string like "2m").
     pub keep_alive: String,
+    /// Whether Glitch remembers things between chats (memory.json).
+    pub memory_enabled: bool,
 }
 
 impl Default for Settings {
@@ -30,6 +32,7 @@ impl Default for Settings {
             onboarding_done: false,
             ollama_url: ollama::DEFAULT_URL.to_string(),
             keep_alive: ollama::DEFAULT_KEEP_ALIVE.to_string(),
+            memory_enabled: true,
         }
     }
 }

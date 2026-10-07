@@ -6,6 +6,7 @@ use std::time::Duration;
 use glitch_core::agent::{AgentError, Step};
 use glitch_core::ai::ollama::PullProgress;
 use glitch_core::ai::AiError;
+use glitch_core::memory::{Fact, JournalEntry, MemoryStore};
 use glitch_core::models::{self, Recommendation};
 use glitch_core::platform::{self, Os, Platform};
 use glitch_core::settings::Settings;
@@ -170,7 +171,32 @@ pub async fn send_message(app: AppHandle, state: State<'_, AppState>, text: Stri
     let _ = app.emit("mood", "thinking");
     let result = state.agent.lock().await.send(&model, text).await;
     let _ = app.emit("mood", mood_after(&result));
+    after_turn(&app, &model, &result);
     result.map_err(UiError::from)
+}
+
+/// After a finished reply: fold old messages into memory if the chat got long
+/// (the model is still loaded right now, so this is cheap), and save the end
+/// of the chat so it survives a restart. Runs in the background.
+fn after_turn(app: &AppHandle, model: &str, result: &Result<Step, AgentError>) {
+    let Ok(Step::Reply { actions, .. }) = result else { return };
+    let memory_touched = actions.iter().any(|a| a.starts_with("Remembered") || a.starts_with("Forgot"));
+    let (app, model) = (app.clone(), model.to_string());
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let mut agent = state.agent.lock().await;
+        let mut changed = memory_touched;
+        if agent.needs_compaction() {
+            match agent.compact(&model, false).await {
+                Ok(_) => changed = true,
+                Err(e) => eprintln!("glitch: memory compaction failed: {e}"),
+            }
+        }
+        agent.persist();
+        if changed {
+            let _ = app.emit("memory-changed", ());
+        }
+    });
 }
 
 #[tauri::command]
@@ -184,6 +210,7 @@ pub async fn confirm_action(
     let _ = app.emit("mood", "thinking");
     let result = state.agent.lock().await.confirm(&model, &id, approved).await;
     let _ = app.emit("mood", mood_after(&result));
+    after_turn(&app, &model, &result);
     result.map_err(UiError::from)
 }
 
@@ -195,9 +222,58 @@ fn mood_after(result: &Result<Step, AgentError>) -> &'static str {
     }
 }
 
+/// New chat. With memory on, the old chat is first folded into memory (best
+/// effort: skipped if Ollama is unavailable or slow).
 #[tauri::command]
-pub async fn reset_chat(state: State<'_, AppState>) -> Result<(), UiError> {
-    state.agent.lock().await.reset();
+pub async fn reset_chat(app: AppHandle, state: State<'_, AppState>) -> Result<(), UiError> {
+    let model = state.settings().model;
+    let mut agent = state.agent.lock().await;
+    if let (Some(model), true) = (model, agent.memory().is_some() && !agent.history().is_empty()) {
+        let _ = tokio::time::timeout(Duration::from_secs(60), agent.compact(&model, true)).await;
+    }
+    agent.reset();
+    agent.persist();
+    let _ = app.emit("memory-changed", ());
+    Ok(())
+}
+
+#[derive(Serialize)]
+pub struct MemoryView {
+    enabled: bool,
+    facts: Vec<Fact>,
+    summary: String,
+    journal: Vec<JournalEntry>,
+}
+
+#[tauri::command]
+pub async fn get_memory(state: State<'_, AppState>) -> Result<MemoryView, UiError> {
+    let agent = state.agent.lock().await;
+    Ok(match agent.memory() {
+        Some(m) => MemoryView {
+            enabled: true,
+            facts: m.data.facts.clone(),
+            summary: m.data.summary.clone(),
+            journal: m.data.journal.clone(),
+        },
+        None => MemoryView { enabled: false, facts: vec![], summary: String::new(), journal: vec![] },
+    })
+}
+
+#[tauri::command]
+pub async fn forget_memory(app: AppHandle, state: State<'_, AppState>, id: u64) -> Result<bool, UiError> {
+    let gone = state.agent.lock().await.forget_fact(id);
+    let _ = app.emit("memory-changed", ());
+    Ok(gone)
+}
+
+/// Forget everything: facts, summaries, journal and the saved chat.
+#[tauri::command]
+pub async fn clear_memory(app: AppHandle, state: State<'_, AppState>) -> Result<(), UiError> {
+    let mut agent = state.agent.lock().await;
+    agent.clear_memory();
+    agent.reset();
+    agent.persist();
+    let _ = app.emit("memory-changed", ());
     Ok(())
 }
 
@@ -212,6 +288,7 @@ pub struct SettingsPatch {
     model: Option<String>,
     movement_enabled: Option<bool>,
     onboarding_done: Option<bool>,
+    memory_enabled: Option<bool>,
 }
 
 #[tauri::command]
@@ -236,7 +313,21 @@ pub async fn update_settings(
         if let Some(v) = patch.onboarding_done {
             s.onboarding_done = v;
         }
+        if let Some(v) = patch.memory_enabled {
+            s.memory_enabled = v;
+        }
     });
+    if let Some(on) = patch.memory_enabled {
+        let mut agent = state.agent.lock().await;
+        if on && agent.memory().is_none() {
+            agent.set_memory(Some(MemoryStore::load(&state.memory_path)));
+        } else if !on && agent.memory().is_some() {
+            // Keep the file (so turning it back on restores it), stop using it.
+            agent.persist();
+            agent.set_memory(None);
+        }
+        let _ = app.emit("memory-changed", ());
+    }
     // Switching models: free the old one's memory right away.
     if let Some(old) = old_model.filter(|o| Some(o) != new.model.as_ref()) {
         let ollama = state.ollama.clone();
@@ -329,6 +420,9 @@ pub async fn quit(app: AppHandle) {
 /// then exit.
 pub async fn quit_app(app: &AppHandle) {
     let state = app.state::<AppState>();
+    if let Ok(mut agent) = state.agent.try_lock() {
+        agent.persist();
+    }
     if let Some(model) = state.settings().model {
         let _ = tokio::time::timeout(Duration::from_millis(1500), state.ollama.unload(&model)).await;
     }

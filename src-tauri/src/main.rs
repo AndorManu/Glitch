@@ -58,8 +58,7 @@ fn main() {
         // A second launch just opens the chat of the running Glitch.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| commands::open_chat(app, false)))
         .setup(|app| {
-            let settings_path = app.path().app_config_dir()?.join("settings.json");
-            app.manage(AppState::new(settings_path));
+            app.manage(AppState::new(app.path().app_config_dir()?));
             os::configure(app);
             build_tray(app.handle())?;
             // The mascot page shows itself once drawn, and opens the setup
@@ -86,6 +85,9 @@ fn main() {
             commands::panel_view,
             commands::hide_panel,
             commands::finish_setup,
+            commands::get_memory,
+            commands::forget_memory,
+            commands::clear_memory,
             commands::quit,
         ])
         .run(tauri::generate_context!())

@@ -71,6 +71,17 @@ function mock(sc) {
         case "plugin:event|listen": return args.handler;
         case "plugin:event|unlisten": return null;
         case "panel_view": return sc.view;
+        case "get_memory":
+          return {
+            enabled: true,
+            facts: [
+              { id: 1, text: "The user's name is Andor", added: "2026-10-06" },
+              { id: 2, text: "Has a beagle called Rex", added: "2026-10-07" },
+              { id: 3, text: "Likes lofi music while working", added: "2026-10-07" },
+            ],
+            summary: "Asked Glitch to open YouTube and to find photos of Rex.",
+            journal: [{ date: "2026-10-06", text: "Set up Glitch and chatted about a Godot game project." }],
+          };
         case "setup_status":
           if (!sc.status) throw { code: "internal", message: "could not read settings.json (permission denied)" };
           return sc.status;
@@ -107,6 +118,15 @@ for (const [name, sc] of Object.entries(scenarios)) {
       await page.waitForTimeout(300);
     }
     await page.screenshot({ path: `${OUT}/${name}-${scheme}.png` });
+    if (sc.view === "settings") {
+      // Also the bottom of the settings (Memory card), with the history open.
+      await page.evaluate(() => {
+        document.querySelectorAll("details").forEach((d) => (d.open = true));
+        document.querySelectorAll(".scroll, section").forEach((el) => (el.scrollTop = el.scrollHeight));
+      });
+      await page.waitForTimeout(100);
+      await page.screenshot({ path: `${OUT}/${name}-${scheme}-bottom.png` });
+    }
     await page.close();
   }
 }

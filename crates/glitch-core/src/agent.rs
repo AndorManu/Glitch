@@ -9,6 +9,7 @@ use serde_json::json;
 
 use crate::ai::{AiError, AiProvider, ChatRequest, Message, Role, ToolCall};
 use crate::confirm::{approval_for, Approval, ConfirmError, ConfirmationGate};
+use crate::memory::{self, MemoryStore, Remembered};
 use crate::platform::{Os, Platform};
 use crate::tools::{self, Action};
 
@@ -16,6 +17,16 @@ use crate::tools::{self, Action};
 pub const MAX_MODEL_CALLS: usize = 5;
 /// Messages kept in memory; older ones are dropped (small context = less RAM).
 pub const MAX_HISTORY: usize = 24;
+/// With memory on, once the chat is this long the oldest part is compacted
+/// into the memory summary...
+pub const COMPACT_AT: usize = 14;
+/// ...keeping roughly this many recent messages word for word.
+pub const KEEP_RECENT: usize = 6;
+
+const MEMORY_PROMPT: &str = "You have a memory. Use the remember tool for lasting facts the user tells you \
+    (their name, pets, preferences, projects) or when they ask you to remember something, and the forget tool \
+    when they ask you to forget. Never remember passwords, codes or card numbers. Use what you remember \
+    naturally; don't recite it.";
 
 /// What the UI should show after a step.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -44,6 +55,8 @@ pub struct Agent {
     gate: ConfirmationGate,
     model_calls: usize,
     actions: Vec<String>,
+    /// `None` when the user turned memory off.
+    memory: Option<MemoryStore>,
 }
 
 pub fn system_prompt(os: Os) -> String {
@@ -76,7 +89,84 @@ impl Agent {
             gate: ConfirmationGate::default(),
             model_calls: 0,
             actions: Vec::new(),
+            memory: None,
         }
+    }
+
+    /// Turn memory on (with this store) or off (`None`). Turning it on also
+    /// restores the end of the previous conversation.
+    pub fn set_memory(&mut self, memory: Option<MemoryStore>) {
+        self.memory = memory;
+        if let Some(m) = &mut self.memory {
+            if self.history.is_empty() {
+                self.history = m.take_carry_over();
+            }
+        }
+    }
+
+    pub fn memory(&self) -> Option<&MemoryStore> {
+        self.memory.as_ref()
+    }
+
+    pub fn forget_fact(&mut self, id: u64) -> bool {
+        let Some(m) = &mut self.memory else { return false };
+        let gone = m.forget_id(id).is_some();
+        self.save_memory();
+        gone
+    }
+
+    pub fn clear_memory(&mut self) {
+        if let Some(m) = &mut self.memory {
+            m.clear();
+        }
+        self.save_memory();
+    }
+
+    fn save_memory(&self) {
+        if let Some(Err(e)) = self.memory.as_ref().map(MemoryStore::save) {
+            eprintln!("glitch: could not save memory: {e}");
+        }
+    }
+
+    /// Save the unsummarised end of the chat so it continues after a restart.
+    pub fn persist(&mut self) {
+        if let Some(m) = &mut self.memory {
+            m.save_carry_over(&self.history);
+        }
+        self.save_memory();
+    }
+
+    /// True when the chat is long enough to fold its oldest part into memory.
+    pub fn needs_compaction(&self) -> bool {
+        self.memory.is_some() && self.gate.pending().is_none() && self.history.len() > COMPACT_AT
+    }
+
+    /// Fold the oldest part of the chat (or all of it, with `everything`)
+    /// into the memory summary, picking up lasting facts on the way. Returns
+    /// the facts that were newly remembered. Uses the model, so call it while
+    /// the model is still loaded (right after a reply).
+    pub async fn compact(&mut self, model: &str, everything: bool) -> Result<Vec<String>, AgentError> {
+        let Some(memory) = &self.memory else { return Ok(Vec::new()) };
+        let cut = if everything {
+            self.history.len()
+        } else {
+            // Cut at a user message so the kept part starts cleanly.
+            let limit = self.history.len().saturating_sub(KEEP_RECENT);
+            match (1..=limit).rev().find(|&i| self.history[i].role == Role::User) {
+                Some(i) => i,
+                None => return Ok(Vec::new()),
+            }
+        };
+        if cut == 0 {
+            return Ok(Vec::new());
+        }
+        let request = memory::compaction_request(&memory.data.summary, &self.history[..cut]);
+        let reply = self.provider.chat(ChatRequest { model, messages: &request, tools: &[] }).await?;
+        let memory = self.memory.as_mut().expect("checked above");
+        let added = memory.apply_compaction(&reply.content, &memory::today());
+        self.history.drain(..cut);
+        self.save_memory();
+        Ok(added.into_iter().map(|f| f.text).collect())
     }
 
     /// Swap the AI backend (e.g. after the user changes the Ollama URL).
@@ -84,6 +174,8 @@ impl Agent {
         self.provider = provider;
     }
 
+    /// Start a fresh chat (memory is kept; see `compact(.., true)` to fold
+    /// the old chat into it first).
     pub fn reset(&mut self) {
         self.history.clear();
         self.queue.clear();
@@ -102,6 +194,9 @@ impl Agent {
         for call in self.queue.drain(..) {
             self.history.push(Message::tool_result(&call.name, json!({"ok": false, "skipped": true}).to_string()));
         }
+        if let Some(m) = &mut self.memory {
+            m.roll_day(&memory::today());
+        }
         self.history.push(Message::user(text));
         self.trim_history();
         self.model_calls = 0;
@@ -119,6 +214,9 @@ impl Agent {
     }
 
     async fn execute(&mut self, action: Action) {
+        if let Action::Remember { .. } | Action::Forget { .. } = action {
+            return self.execute_memory(action);
+        }
         let platform = self.platform.clone();
         let tool = action.tool_name();
         // File search touches the disk; keep it off the async worker threads.
@@ -131,6 +229,46 @@ impl Agent {
             });
         self.actions.push(outcome.summary);
         self.history.push(Message::tool_result(tool, outcome.for_model));
+    }
+
+    fn execute_memory(&mut self, action: Action) {
+        let tool = action.tool_name();
+        let (for_model, summary) = match (&mut self.memory, &action) {
+            (None, _) => (json!({"ok": false, "error": "memory is turned off"}), None),
+            (Some(m), Action::Remember { fact }) => match m.remember(fact, &memory::today()) {
+                Ok(Remembered::Added(f) | Remembered::Updated(f)) => {
+                    (json!({"ok": true, "remembered": f.text}), Some(format!("Remembered: {}", f.text)))
+                }
+                Ok(Remembered::AlreadyKnown(f)) => (json!({"ok": true, "already_known": f.text}), None),
+                Err(e) => (json!({"ok": false, "error": e.0}), None),
+            },
+            (Some(m), Action::Forget { about }) => {
+                let gone = m.forget_matching(about);
+                let n = gone.len();
+                let texts: Vec<String> = gone.into_iter().map(|f| f.text).collect();
+                (json!({"ok": n > 0, "forgotten": texts}), (n > 0).then(|| format!("Forgot {n} thing(s)")))
+            }
+            _ => unreachable!("only memory actions get here"),
+        };
+        self.save_memory();
+        if let Some(s) = summary {
+            self.actions.push(s);
+        }
+        self.history.push(Message::tool_result(tool, for_model.to_string()));
+    }
+
+    fn full_system_prompt(&self) -> String {
+        match &self.memory {
+            None => self.system_prompt.clone(),
+            Some(m) => {
+                let known = m.prompt_section();
+                if known.is_empty() {
+                    format!("{}\n\n{MEMORY_PROMPT}", self.system_prompt)
+                } else {
+                    format!("{}\n\n{MEMORY_PROMPT}\n\n{known}", self.system_prompt)
+                }
+            }
+        }
     }
 
     async fn run(&mut self, model: &str) -> Result<Step, AgentError> {
@@ -161,9 +299,9 @@ impl Agent {
             self.model_calls += 1;
 
             let mut messages = Vec::with_capacity(self.history.len() + 1);
-            messages.push(Message::system(&self.system_prompt));
+            messages.push(Message::system(self.full_system_prompt()));
             messages.extend(self.history.iter().cloned());
-            let specs = tools::specs();
+            let specs = tools::specs(self.memory.is_some());
             let reply = self.provider.chat(ChatRequest { model, messages: &messages, tools: &specs }).await?;
 
             self.queue.extend(reply.tool_calls.iter().cloned());
@@ -221,11 +359,16 @@ mod tests {
     struct ScriptedModel {
         replies: Mutex<VecDeque<Message>>,
         seen: Mutex<Vec<Vec<Message>>>,
+        seen_tools: Mutex<Vec<Vec<&'static str>>>,
     }
 
     impl ScriptedModel {
         fn new(replies: Vec<Message>) -> Arc<Self> {
-            Arc::new(Self { replies: Mutex::new(replies.into()), seen: Mutex::new(Vec::new()) })
+            Arc::new(Self {
+                replies: Mutex::new(replies.into()),
+                seen: Mutex::new(Vec::new()),
+                seen_tools: Mutex::new(Vec::new()),
+            })
         }
     }
 
@@ -236,6 +379,7 @@ mod tests {
         }
         async fn chat(&self, req: ChatRequest<'_>) -> Result<Message, AiError> {
             self.seen.lock().unwrap().push(req.messages.to_vec());
+            self.seen_tools.lock().unwrap().push(req.tools.iter().map(|t| t.name).collect());
             Ok(self.replies.lock().unwrap().pop_front().unwrap_or_else(|| Message::assistant("(script ended)")))
         }
     }
@@ -412,5 +556,112 @@ mod tests {
         }
         let mut a = Agent::new(Arc::new(Down), platform());
         assert!(matches!(a.send("m", "hi").await, Err(AgentError::Ai(AiError::Unreachable(_)))));
+    }
+
+    // ------------------------------------------------------------- memory
+
+    fn with_memory(model: Arc<ScriptedModel>) -> Agent {
+        let mut a = Agent::new(model, platform());
+        a.set_memory(Some(MemoryStore::in_memory()));
+        a
+    }
+
+    #[tokio::test]
+    async fn memory_tools_only_when_memory_is_on() {
+        let model = ScriptedModel::new(vec![Message::assistant("a"), Message::assistant("b")]);
+        let mut off = Agent::new(model.clone(), platform());
+        off.send("m", "hi").await.unwrap();
+        let mut on = with_memory(model.clone());
+        on.send("m", "hi").await.unwrap();
+        let tools = model.seen_tools.lock().unwrap();
+        assert!(!tools[0].contains(&"remember"));
+        assert!(tools[1].contains(&"remember") && tools[1].contains(&"forget"));
+        let seen = model.seen.lock().unwrap();
+        assert!(!seen[0][0].content.contains("You have a memory"));
+        assert!(seen[1][0].content.contains("You have a memory"));
+    }
+
+    #[tokio::test]
+    async fn remembered_facts_show_up_and_reach_the_next_prompt() {
+        let model = ScriptedModel::new(vec![
+            calls("remember", json!({"fact": "The user's dog is called Rex"})),
+            Message::assistant("Noted!"),
+            Message::assistant("Rex!"),
+        ]);
+        let mut a = with_memory(model.clone());
+        let step = a.send("m", "my dog is called Rex").await.unwrap();
+        assert_eq!(
+            step,
+            Step::Reply { text: "Noted!".into(), actions: vec!["Remembered: The user's dog is called Rex".into()] }
+        );
+        a.send("m", "what's my dog called?").await.unwrap();
+        let seen = model.seen.lock().unwrap();
+        assert!(seen[2][0].content.contains("- The user's dog is called Rex"));
+    }
+
+    #[tokio::test]
+    async fn secrets_are_refused_and_forget_works() {
+        let model = ScriptedModel::new(vec![
+            calls("remember", json!({"fact": "Password is hunter2"})),
+            Message::assistant("I won't keep that."),
+            calls("forget", json!({"about": "dog"})),
+            Message::assistant("Forgotten."),
+        ]);
+        let mut a = with_memory(model.clone());
+        a.memory.as_mut().unwrap().remember("Has a dog called Rex", "d").unwrap();
+        let Step::Reply { actions, .. } = a.send("m", "remember my password is hunter2").await.unwrap() else {
+            panic!()
+        };
+        assert!(actions.is_empty());
+        assert_eq!(a.memory().unwrap().data.facts.len(), 1);
+        let Step::Reply { actions, .. } = a.send("m", "forget my dog").await.unwrap() else { panic!() };
+        assert_eq!(actions, ["Forgot 1 thing(s)"]);
+        assert!(a.memory().unwrap().data.facts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn long_chats_are_compacted_into_memory() {
+        let mut replies: Vec<Message> = (0..8).map(|i| Message::assistant(format!("r{i}"))).collect();
+        replies.push(Message::assistant("Summary: They chatted about cats.\nFACT: The user likes cats"));
+        let model = ScriptedModel::new(replies);
+        let mut a = with_memory(model.clone());
+        for i in 0..8 {
+            a.send("m", &format!("u{i}")).await.unwrap();
+        }
+        assert!(a.needs_compaction());
+        let added = a.compact("m", false).await.unwrap();
+        assert_eq!(added, ["The user likes cats"]);
+        let mem = a.memory().unwrap();
+        assert_eq!(mem.data.summary, "They chatted about cats.");
+        assert!(a.history().len() <= KEEP_RECENT && a.history()[0].role == Role::User);
+        assert!(!a.needs_compaction());
+        // The compaction call had no tools and saw the old messages.
+        assert!(model.seen_tools.lock().unwrap().last().unwrap().is_empty());
+        assert!(model.seen.lock().unwrap().last().unwrap()[1].content.contains("User: u0"));
+        // The summary is part of the next prompt.
+        a.send("m", "hello again").await.unwrap();
+        assert!(model.seen.lock().unwrap().last().unwrap()[0].content.contains("They chatted about cats."));
+    }
+
+    #[tokio::test]
+    async fn compaction_never_cuts_while_waiting_for_approval_or_without_memory() {
+        let model = ScriptedModel::new(vec![]);
+        let mut off = Agent::new(model, platform());
+        assert_eq!(off.compact("m", true).await.unwrap(), Vec::<String>::new());
+        assert!(!off.needs_compaction());
+    }
+
+    #[tokio::test]
+    async fn the_chat_continues_after_a_restart() {
+        let model = ScriptedModel::new(vec![Message::assistant("Hi Andor!")]);
+        let mut a = with_memory(model.clone());
+        a.send("m", "I'm Andor").await.unwrap();
+        a.persist();
+        let carried = a.memory.as_mut().unwrap().data.carry_over.clone();
+        let mut store = MemoryStore::in_memory();
+        store.data.carry_over = carried;
+        let mut b = Agent::new(model, platform());
+        b.set_memory(Some(store));
+        assert_eq!(b.history(), [Message::user("I'm Andor"), Message::assistant("Hi Andor!")]);
     }
 }

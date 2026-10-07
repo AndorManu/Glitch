@@ -2,8 +2,10 @@
 //! until the user answers.
 //!
 //! Rule (from the milestone spec): opening a web page runs immediately;
-//! **everything else** (opening apps, searching files, opening files/folders)
-//! waits for an explicit "Allow" click. This is enforced here in Rust: the
+//! **everything else on the computer** (opening apps, searching files,
+//! opening files/folders) waits for an explicit "Allow" click. Remembering
+//! and forgetting only touch Glitch's own notes: they run immediately but are
+//! always shown in the chat and can be undone in Settings → Memory. This is enforced here in Rust: the
 //! agent cannot run a gated action without the matching one-time id.
 
 use std::collections::hash_map::RandomState;
@@ -20,7 +22,7 @@ pub enum Approval {
 /// The single policy table. Change it here and nowhere else.
 pub fn approval_for(action: &Action) -> Approval {
     match action {
-        Action::OpenUrl { .. } => Approval::Automatic,
+        Action::OpenUrl { .. } | Action::Remember { .. } | Action::Forget { .. } => Approval::Automatic,
         Action::OpenApp { .. } | Action::SearchFiles { .. } | Action::OpenPath { .. } => Approval::AskUser,
     }
 }

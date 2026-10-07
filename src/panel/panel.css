@@ -467,3 +467,22 @@ button:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; transform
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .bar.indeterminate .bar-fill { width: 100%; opacity: 0.5; }
 }
+
+/* ---- Settings → Memory ---- */
+.memory .memory-summary { margin-top: 8px; }
+.memory-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.memory-list li {
+  display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 10px;
+  border: 2px solid var(--line-soft); border-radius: 10px; font-size: 13px;
+}
+.memory-list li span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+button.icon-x {
+  flex: none; width: 24px; height: 24px; padding: 0; border-radius: 50%;
+  border: 2px solid transparent; background: transparent; color: var(--muted);
+  font-size: 16px; line-height: 1; box-shadow: none;
+}
+button.icon-x:hover:not(:disabled) { color: var(--danger); border-color: var(--line-soft); }
+.memory-history { margin-top: 10px; font-size: 13px; }
+.memory-history summary { cursor: pointer; font-weight: 600; }
+.memory-history p { margin: 6px 0 0; color: var(--muted); }
+button.danger-text { color: var(--danger); }

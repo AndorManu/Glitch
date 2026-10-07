@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { api, asUiError, type PanelView, type Settings, type SetupStatus } from "../shared/ipc";
 import { drawAvatar } from "./avatar";
 import { h } from "./dom";
+import { renderMemory } from "./memory";
 import { formatGb, layout, ollamaSummary, prettyModelName, SetupView, sameModel } from "./setup";
 import { loading, toggleSwitch } from "./ui";
 
@@ -81,6 +82,8 @@ async function renderSettings(): Promise<void> {
   });
 
   const ollama = ollamaSummary(status);
+  const memoryBody = h("div", { class: "memory" });
+  void renderMemory(memoryBody);
 
   layout(
     root,
@@ -105,6 +108,7 @@ async function renderSettings(): Promise<void> {
           h("button", { class: "secondary small", type: "button", onclick: () => showView("setup") }, "Run setup again"),
         ),
       ),
+      card("Memory", memoryBody),
       h("p", { class: `info ${ollama.state}` }, h("span", { class: "dot", "aria-hidden": "true" }), h("span", {}, ollama.text)),
     ],
     [
@@ -125,6 +129,10 @@ async function main(): Promise<void> {
   await listen<PanelView>("panel-view", (e) => showView(e.payload));
   await listen<Settings>("settings-changed", () => {
     if (current === "settings") void renderSettings();
+  });
+  await listen("memory-changed", () => {
+    const body = views.settings.querySelector<HTMLElement>(".memory");
+    if (current === "settings" && body) void renderMemory(body);
   });
   // Coming back from the browser/installer: re-check setup automatically.
   window.addEventListener("focus", () => {

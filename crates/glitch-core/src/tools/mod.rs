@@ -29,8 +29,45 @@ pub const OPEN_URL: &str = "open_url";
 pub const OPEN_APP: &str = "open_app";
 pub const SEARCH_FILES: &str = "search_files";
 pub const OPEN_PATH: &str = "open_path";
+pub const REMEMBER: &str = "remember";
+pub const FORGET: &str = "forget";
 
-pub fn specs() -> Vec<ToolSpec> {
+/// Tools offered to the model. Memory tools only when memory is on.
+pub fn specs(memory: bool) -> Vec<ToolSpec> {
+    let mut v = computer_specs();
+    if memory {
+        v.extend(memory_specs());
+    }
+    v
+}
+
+fn memory_specs() -> Vec<ToolSpec> {
+    vec![
+        ToolSpec {
+            name: REMEMBER,
+            description: "Save one short, lasting fact about the user to your memory, e.g. \"The user's dog is \
+                called Rex\" or \"Prefers dark mode\". Use it when the user tells you something worth knowing \
+                next week, or asks you to remember something. Never passwords, codes or card numbers.",
+            parameters: json!({
+                "type": "object",
+                "required": ["fact"],
+                "properties": { "fact": { "type": "string", "description": "One sentence, third person" } }
+            }),
+        },
+        ToolSpec {
+            name: FORGET,
+            description:
+                "Remove facts from your memory that contain these words, when the user asks you to forget something.",
+            parameters: json!({
+                "type": "object",
+                "required": ["about"],
+                "properties": { "about": { "type": "string", "description": "Key words, e.g. \"dog Rex\"" } }
+            }),
+        },
+    ]
+}
+
+fn computer_specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: OPEN_URL,
@@ -85,10 +122,26 @@ pub fn specs() -> Vec<ToolSpec> {
 /// A validated, ready-to-run tool call.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
-    OpenUrl { url: String },
-    OpenApp { app: AppEntry },
-    SearchFiles { query: files::Query },
-    OpenPath { path: PathBuf, is_dir: bool },
+    OpenUrl {
+        url: String,
+    },
+    OpenApp {
+        app: AppEntry,
+    },
+    SearchFiles {
+        query: files::Query,
+    },
+    OpenPath {
+        path: PathBuf,
+        is_dir: bool,
+    },
+    /// Handled by the agent (it owns the memory), not by `execute`.
+    Remember {
+        fact: String,
+    },
+    Forget {
+        about: String,
+    },
 }
 
 /// How an action is shown to the user in a confirmation card.
@@ -105,6 +158,8 @@ impl Action {
             Action::OpenApp { .. } => OPEN_APP,
             Action::SearchFiles { .. } => SEARCH_FILES,
             Action::OpenPath { .. } => OPEN_PATH,
+            Action::Remember { .. } => REMEMBER,
+            Action::Forget { .. } => FORGET,
         }
     }
 
@@ -131,6 +186,8 @@ impl Action {
                 ),
                 detail: path.display().to_string(),
             },
+            Action::Remember { fact } => Description { title: "Remember something".into(), detail: fact.clone() },
+            Action::Forget { about } => Description { title: "Forget something".into(), detail: about.clone() },
         }
     }
 }
@@ -165,6 +222,8 @@ pub fn prepare(call: &ToolCall, platform: &dyn Platform) -> Result<Action, ToolE
             let (path, is_dir) = paths::validate(str_arg(args, "path")?, platform)?;
             Ok(Action::OpenPath { path, is_dir })
         }
+        REMEMBER => Ok(Action::Remember { fact: str_arg(args, "fact")?.to_string() }),
+        FORGET => Ok(Action::Forget { about: str_arg(args, "about")?.to_string() }),
         other => Err(ToolError(format!("there is no tool called \"{other}\""))),
     }
 }
@@ -213,6 +272,10 @@ pub fn execute(action: &Action, platform: &dyn Platform) -> Outcome {
                 summary: format!("Searched files for \u{201c}{}\u{201d}: {n} found", query.words_text()),
             }
         }
+        Action::Remember { .. } | Action::Forget { .. } => Outcome {
+            for_model: json!({ "ok": false, "error": "memory is turned off" }).to_string(),
+            summary: "Memory is off".into(),
+        },
         Action::OpenPath { path, .. } => match platform.open_path(path) {
             Ok(()) => Outcome {
                 for_model: json!({ "ok": true, "opened": path }).to_string(),
@@ -276,9 +339,10 @@ mod tests {
 
     #[test]
     fn specs_have_unique_names_and_object_schemas() {
-        let s = specs();
+        let s = specs(true);
         let names: Vec<_> = s.iter().map(|t| t.name).collect();
-        assert_eq!(names, [OPEN_URL, OPEN_APP, SEARCH_FILES, OPEN_PATH]);
+        assert_eq!(names, [OPEN_URL, OPEN_APP, SEARCH_FILES, OPEN_PATH, REMEMBER, FORGET]);
+        assert_eq!(specs(false).len(), 4);
         for t in &s {
             assert_eq!(t.parameters["type"], "object");
             assert!(t.parameters["required"].is_array());

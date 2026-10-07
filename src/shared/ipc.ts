@@ -8,6 +8,23 @@ export interface Settings {
   onboarding_done: boolean;
   ollama_url: string;
   keep_alive: string;
+  memory_enabled: boolean;
+}
+
+export interface MemoryFact {
+  id: number;
+  text: string;
+  /** "YYYY-MM-DD" */
+  added: string;
+}
+
+export interface MemoryView {
+  enabled: boolean;
+  facts: MemoryFact[];
+  /** Rolling summary of today's earlier chat. */
+  summary: string;
+  /** One line per earlier day. */
+  journal: { date: string; text: string }[];
 }
 
 export interface ModelChoice {
@@ -83,7 +100,7 @@ export const api = {
   confirmAction: (id: string, approved: boolean) => invoke<Step>("confirm_action", { id, approved }),
   resetChat: () => invoke<void>("reset_chat"),
   getSettings: () => invoke<Settings>("get_settings"),
-  updateSettings: (patch: Partial<Pick<Settings, "model" | "movement_enabled" | "onboarding_done">>) =>
+  updateSettings: (patch: Partial<Pick<Settings, "model" | "movement_enabled" | "onboarding_done" | "memory_enabled">>) =>
     invoke<Settings>("update_settings", { patch }),
   /** Click on Glitch: toggles the chat bubble (or opens setup on first run). */
   mascotClicked: () => invoke<void>("mascot_clicked"),
@@ -98,5 +115,10 @@ export const api = {
   hidePanel: () => invoke<void>("hide_panel"),
   /** Setup done: hide the panel and open the chat bubble. */
   finishSetup: () => invoke<void>("finish_setup"),
+  /** What Glitch remembers (event "memory-changed" fires when it changes). */
+  getMemory: () => invoke<MemoryView>("get_memory"),
+  forgetMemory: (id: number) => invoke<boolean>("forget_memory", { id }),
+  /** Forget everything, including the saved chat. */
+  clearMemory: () => invoke<void>("clear_memory"),
   quit: () => invoke<void>("quit"),
 };
