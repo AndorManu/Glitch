@@ -19,3 +19,25 @@ export function explainError(e: UiError): { text: string; offerSetup: boolean } 
 
 export const WELCOME =
   "Hi, I'm Glitch! Ask me anything, or try “open YouTube”, “open the Calculator app” or “find a photo of a dog”.";
+
+/** Placeholder of the little compose pill. */
+export const PLACEHOLDER = "Say something to Glitch…";
+
+/** Screen-reader text while the thought cloud is up. */
+export const THINKING = "Glitch is thinking…";
+
+/** Shown when the model answered with nothing at all. */
+export const EMPTY_REPLY = "Hmm… I'm not sure what to say to that.";
+
+/**
+ * Turn a confirmation title from Rust ("Open the app “Spotify”") into Glitch
+ * asking for permission ("Can I open the app “Spotify”?"). Unit-tested.
+ */
+export function askPermission(title: string): string {
+  const t = title.trim().replace(/[.?!…]+$/, "");
+  if (!t) return "Can I go ahead?";
+  // Keep words like "URL" or "Spotify" intact: only lower a capital that
+  // starts an ordinary word.
+  const lowered = /^[A-Z][a-z]/.test(t) ? t[0].toLowerCase() + t.slice(1) : t;
+  return `Can I ${lowered}?`;
+}

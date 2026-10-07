@@ -1,0 +1,411 @@
+/* Glitch's chat bubble.
+   A transparent window: only the shapes are visible. Cream paper, crisp 2px
+   dark outline like the pixel art, a hard 2px "pixel" shadow, purple accents.
+   Layout (tail down): [speech or thought cloud] above [compose pill] with the
+   pill's tail pointing at Glitch. Tail up: the same, mirrored. */
+
+:root {
+  color-scheme: light dark;
+  --paper: #fffaf2;
+  --paper-2: #f1e8dc;
+  --ink: #1e1820;
+  --text: #241c27;
+  --muted: #7d6b6b;
+  --shadow: rgba(30, 24, 32, 0.28);
+  --accent: #9a00f5;
+  --accent-bright: #c000f0;
+  --accent-soft: #f1e2ff;
+  --accent-ink: #6f00b8;
+  --on-accent: #ffffff;
+  --danger: #b42343;
+  --danger-soft: #fde7eb;
+  --ring: rgba(192, 0, 240, 0.42);
+  --shine: rgba(255, 255, 255, 0.95);
+  --send-off: #e9dfd3;
+  --send-off-ink: #b3a49c;
+  font: 13.5px/1.42 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #33283b;
+    --paper-2: #43364b;
+    --ink: #08050a;
+    --text: #f4ecf5;
+    --muted: #ab9aa8;
+    --shadow: rgba(0, 0, 0, 0.45);
+    --accent: #a21cff;
+    --accent-bright: #d04dff;
+    --accent-soft: #3f1d5c;
+    --accent-ink: #e0b0ff;
+    --danger: #ff8aa0;
+    --danger-soft: #45192a;
+    --ring: rgba(214, 102, 255, 0.6);
+    --shine: rgba(255, 255, 255, 0.12);
+    --send-off: #43364b;
+    --send-off-ink: #7c6c7e;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+}
+body {
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+button { font: inherit; color: inherit; }
+/* :focus fallback for Safari 14, which lacks :focus-visible. */
+button:focus { outline: 2.5px solid var(--ring); outline-offset: 2px; }
+button:focus:not(:focus-visible) { outline: none; }
+.sr {
+  position: absolute;
+  width: 1px; height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ root */
+
+/* Pinned to the window edge nearest Glitch, so growing content never moves
+   the pill, even for the frame before the window catches up. */
+.bubble {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  transform-origin: var(--tail-x, 50%) 100%;
+  transition: opacity 0.14s ease-out, transform 0.24s cubic-bezier(0.25, 1.5, 0.5, 1);
+}
+.bubble.down { bottom: 0; padding: 10px 0 3px; }
+.bubble.up { top: 0; padding: 3px 0 10px; flex-direction: column-reverse; transform-origin: var(--tail-x, 50%) 0; }
+.bubble.away { opacity: 0; transform: translateY(6px) scale(0.9); }
+.bubble.up.away { transform: translateY(-6px) scale(0.9); }
+.away * { animation-play-state: paused !important; }
+
+/* Shared speech-tail look (see TAIL in shapes.ts). Its top 2px sit on the
+   shape's bottom border; flipped for tail-up. */
+.tail { position: absolute; top: 100%; display: block; overflow: visible; }
+.tail .fill { fill: var(--paper); }
+.tail .line { stroke: var(--ink); }
+.up .tail { top: auto; bottom: 100%; transform: scaleY(-1); }
+
+/* ------------------------------------------------------------- the pill */
+
+.pill {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  margin: 0 6px 13px;
+  padding: 3px;
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  border-radius: 21px;
+  filter: drop-shadow(0 2px 0 var(--shadow));
+  transition: border-color 0.15s;
+}
+.up .pill { margin: 13px 6px 0; }
+/* Typing focus: the outline (tail included) lights up glitch-purple. */
+.pill:focus-within { border-color: var(--accent); }
+.pill:focus-within > .tail .line { stroke: var(--accent); }
+.pill.multi { border-radius: 18px; }
+
+.input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  margin: 0;
+  padding: 5px 4px;
+  border: 0;
+  outline: 0;
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  line-height: 20px;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+.input::placeholder { color: var(--muted); opacity: 0.9; }
+.input::-webkit-scrollbar { width: 0; }
+/* More than four lines: soften the edge the text scrolls under. */
+.input.scrolls {
+  -webkit-mask-image: linear-gradient(transparent, #000 7px, #000 calc(100% - 4px), transparent);
+  mask-image: linear-gradient(transparent, #000 7px, #000 calc(100% - 4px), transparent);
+}
+
+.icon, .send, .close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+}
+.icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  transition: color 0.12s, background-color 0.12s, transform 0.3s;
+}
+.icon:hover { color: var(--text); background: var(--paper-2); }
+.gear:hover svg { transform: rotate(40deg); }
+.gear svg { transition: transform 0.3s; }
+
+.send {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.22);
+  transition: background-color 0.12s, transform 0.12s;
+}
+.send:hover:not(:disabled) { background: var(--accent-bright); transform: translateY(-1px); }
+.send:active:not(:disabled) { transform: translateY(1px); box-shadow: none; }
+.send:disabled { background: var(--send-off); color: var(--send-off-ink); box-shadow: none; cursor: default; }
+
+/* Tiny sticker-style × on the pill's corner. */
+.close {
+  position: absolute;
+  top: -9px;
+  right: 18px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+  transition: transform 0.12s, background-color 0.12s;
+}
+.up .close { top: auto; bottom: -9px; }
+.close-left .close { right: auto; left: 18px; }
+.close:hover { background: var(--accent-soft); transform: scale(1.1); }
+@media (prefers-color-scheme: dark) { .close { color: var(--text); } }
+
+/* ---------------------------------------------------------- the speech */
+
+.slot { position: relative; }
+.speech { padding-bottom: 14px; }
+.up .speech { padding: 14px 0 0; }
+
+.balloon {
+  position: relative;
+  width: max-content;
+  min-width: 60px;
+  max-width: calc(100vw - 12px);
+  padding: 7px 13px 8px;
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  border-radius: 18px;
+  filter: drop-shadow(0 2px 0 var(--shadow));
+  transform-origin: var(--tail-x, 50%) calc(100% + 14px);
+  animation: pop 0.28s cubic-bezier(0.25, 1.55, 0.5, 1) both;
+}
+.up .balloon { transform-origin: var(--tail-x, 50%) -14px; }
+.balloon.confirm { min-width: 210px; }
+
+.scroll {
+  max-height: 210px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin-right: -7px;
+  padding-right: 7px;
+}
+/* Fade the bottom edge while there's more to scroll to. */
+.scroll.more {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
+}
+.scroll::-webkit-scrollbar { width: 5px; }
+.scroll::-webkit-scrollbar-thumb { background: var(--paper-2); border-radius: 3px; }
+.scroll:hover::-webkit-scrollbar-thumb { background: var(--muted); }
+
+.say {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+/* Copying a reply shouldn't include the screen-reader copy of it. */
+.say .sr { user-select: none; -webkit-user-select: none; }
+.confirm .say { font-weight: 650; }
+.rest { visibility: hidden; }
+/* The typewriter's cursor: one glitch-purple pixel block (only while typing). */
+.caret { display: inline-block; position: relative; width: 0; }
+.caret::after {
+  content: "";
+  position: absolute;
+  left: 1px;
+  bottom: -2px;
+  width: 6px;
+  height: 14px;
+  background: var(--accent-bright);
+}
+
+/* (No flex `gap` anywhere: Safari 14.0 doesn't support it.) */
+.error .scroll { display: flex; align-items: flex-start; }
+.glyph {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin: 1px 8px 0 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 800;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.detail {
+  margin: 2px 0 0;
+  max-width: 250px;
+  color: var(--muted);
+  font: 11px/1.35 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  overflow-wrap: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.chips {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  margin: 6px -4px -3px 0;
+  padding: 0;
+}
+.balloon > .chips:first-child { margin-top: 0; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: calc(100% - 4px);
+  margin: 0 4px 4px 0;
+  padding: 2px 9px 2px 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 16px;
+}
+.chip svg { flex: none; margin-right: 4px; }
+.chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip.failed { background: var(--danger-soft); color: var(--danger); }
+
+.choices {
+  display: flex;
+  justify-content: flex-end;
+  margin: 8px -4px 1px 0;
+}
+.choice {
+  height: 26px;
+  padding: 0 14px;
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 2px 0 var(--ink);
+  transition: transform 0.08s, box-shadow 0.08s, background-color 0.12s;
+}
+.choice.yes { background: var(--accent); color: var(--on-accent); }
+.choice.yes:hover:not(:disabled) { background: var(--accent-bright); }
+.choice.no { background: var(--paper-2); color: var(--text); }
+.choice.no:hover:not(:disabled) { background: var(--paper); }
+.choice:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 0 0 var(--ink); }
+.choice + .choice { margin-left: 6px; }
+.choice:disabled { opacity: 0.45; cursor: default; }
+.balloon.stale { opacity: 0.6; }
+
+/* --------------------------------------------------------- thought cloud */
+
+.thought { display: flex; flex-direction: column; padding-bottom: 1px; }
+.up .thought { flex-direction: column-reverse; padding: 1px 0 0; }
+.cloud {
+  position: relative;
+  width: 92px;
+  height: 52px;
+  filter: drop-shadow(0 2px 0 var(--shadow));
+  transform-origin: 50% 100%;
+  animation: pop 0.3s 0.12s cubic-bezier(0.25, 1.6, 0.5, 1) both;
+}
+.up .cloud { transform-origin: 50% 0; }
+.cloud-shape { display: block; }
+.cloud-shape .line { fill: var(--ink); stroke: var(--ink); }
+.cloud-shape .fill { fill: var(--paper); }
+.cloud-shape .shine { stroke: var(--shine); }
+.glitchy { position: absolute; top: 0; right: 0; bottom: 0; left: 0; animation: glitch 2.4s steps(1, end) 0.6s infinite; }
+
+.dots {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 25px;
+  display: flex;
+  justify-content: center;
+  padding-left: 1px;
+}
+.dots i {
+  width: 6px;
+  height: 6px;
+  background: var(--ink);
+  animation: hop 1.05s ease-in-out infinite;
+}
+@media (prefers-color-scheme: dark) { .dots i { background: var(--text); } }
+.dots i + i { margin-left: 6px; }
+.dots i:nth-child(2) { background: var(--accent-bright); animation-delay: 0.15s; }
+.dots i:nth-child(3) { animation-delay: 0.3s; }
+
+.trail { width: 26px; height: 20px; margin: 1px 0 0; filter: drop-shadow(0 2px 0 var(--shadow)); }
+.trail svg { display: block; overflow: visible; }
+.up .trail svg { transform: scaleY(-1); }
+.puff { fill: var(--paper); stroke: var(--ink); transform-box: fill-box; transform-origin: center; animation: puff 0.22s cubic-bezier(0.25, 1.6, 0.5, 1) both; }
+.puff-big { animation-delay: 0.06s; }
+
+@keyframes pop {
+  from { opacity: 0; transform: scale(0.55); }
+  45% { opacity: 1; }
+  to { opacity: 1; transform: none; }
+}
+@keyframes puff {
+  from { transform: scale(0); }
+  to { transform: none; }
+}
+@keyframes hop {
+  0%, 55%, 100% { transform: translateY(0); }
+  25% { transform: translateY(-4px); }
+}
+/* Every so often the cloud "glitches": a jolt with a purple ghost. */
+@keyframes glitch {
+  0% { transform: none; filter: none; }
+  84% { transform: translate(2px, 0); filter: drop-shadow(-3px 0 0 var(--accent-bright)); }
+  86% { transform: translate(-2px, 1px) skewX(-6deg); filter: drop-shadow(3px 0 0 var(--accent)); }
+  88% { transform: translate(1px, 0); filter: drop-shadow(-2px 0 0 rgba(192, 0, 240, 0.6)); }
+  90% { transform: none; filter: none; }
+}
+
+/* ------------------------------------------------------- reduced motion */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .bubble.away { transform: none; }
+}

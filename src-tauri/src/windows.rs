@@ -144,6 +144,7 @@ pub fn show_bubble(app: &AppHandle) {
 pub fn hide_bubble(app: &AppHandle) {
     if let Some(b) = app.get_webview_window(BUBBLE) {
         let _ = b.hide();
+        let _ = b.emit("bubble-hidden", ());
     }
     emit_chat_visibility(app);
 }

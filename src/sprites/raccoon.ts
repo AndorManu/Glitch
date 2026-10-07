@@ -10,26 +10,26 @@ export const RACCOON: SheetSpriteSource = {
   frameWidth: 276,
   frameHeight: 180,
   frames: {
-    // used by the animations in src/mascot/animations.ts
+    // Names used by the keyframe animations in src/mascot/animations.ts
     idle0: 0, // front, glitch eye
     idle1: 3, // front, tail swapped to the other side
     blink: 0, // (no blink pose yet)
+    side: 1, // side view: glancing around
     walk0: 4,
-    walk1: 5,
-    happy: 10, // waving, mouth open
+    walk1: 5, // mid-stride, with its own motion pixels
     wave: 6,
-    think0: 14, // "?"
-    think1: 14,
+    glitch: 7, // crouched, glitching: bursts, dangling while dragged
+    sit: 8, // idle fidget
     sleep0: 9, // curled up, Zzz
     sleep1: 9,
-    // in the sheet, reserved for later milestones
-    side: 1,
-    back: 2,
-    glitch: 7,
-    sit: 8,
+    happy: 10, // waving, mouth open
     laugh: 11,
-    notify: 12, // peeking at a window (Claude Code notifications)
+    think0: 14, // "?"
+    think1: 14,
+    chaos: 15, // spinning in a purple swirl
     nap_rock: 13,
-    chaos: 15, // chaos mode
+    // in the sheet, reserved for later
+    back: 2,
+    notify: 12, // peeking at a window (Claude Code notifications)
   },
 };

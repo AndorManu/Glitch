@@ -1,10 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { explainError } from "./chat-text";
+import { askPermission, explainError } from "./chat-text";
 
 describe("chat errors", () => {
   it("offers setup for fixable problems", () => {
     expect(explainError({ code: "ollama_unreachable", message: "" }).offerSetup).toBe(true);
     expect(explainError({ code: "model_missing", message: "" }).offerSetup).toBe(true);
     expect(explainError({ code: "ai_error", message: "boom" })).toEqual({ text: "Oops, something went wrong: boom", offerSetup: false });
+  });
+});
+
+describe("askPermission", () => {
+  it("turns a confirmation title into a question", () => {
+    expect(askPermission("Open the app “Spotify”")).toBe("Can I open the app “Spotify”?");
+    expect(askPermission("Open a web page")).toBe("Can I open a web page?");
+    expect(askPermission("Search your files for “dog” (photos).")).toBe("Can I search your files for “dog” (photos)?");
+  });
+
+  it("keeps acronyms and handles empty titles", () => {
+    expect(askPermission("URL check")).toBe("Can I URL check?");
+    expect(askPermission("  ")).toBe("Can I go ahead?");
   });
 });

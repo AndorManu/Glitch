@@ -10,15 +10,25 @@ notifications are planned for later and are not in this build.
 
 What works in this milestone:
 
-* Glitch sits on top of your other windows, idles (shifts its tail), sometimes
-  walks a short way, and falls asleep after 10 quiet minutes. Drag it anywhere.
-* Click it to open a small chat panel. A first-run wizard checks for Ollama,
-  looks at how much memory your computer has, and suggests and downloads a
-  model that fits.
+* Glitch sits on top of your other windows and is properly alive: he
+  breathes, fidgets, hops, glitches (slice/RGB-split/pixel bursts every so
+  often), walks with a multi-frame bobbing run, dangles when you pick him up
+  and lands with a squash, and curls up asleep after 10 quiet minutes. See
+  [docs/ANIMATIONS.md](docs/ANIMATIONS.md) for every animation, including
+  ready-made actions for later features (grabbing the cursor, dragging a
+  window on a rope, teleporting).
+* Click him and a **small round chat bubble** pops up above him. Type, press
+  Enter; while he thinks you get a little thought cloud, and the answer
+  appears as a speech bubble.
+* A first-run wizard checks for Ollama, looks at how much memory your
+  computer has, and suggests and downloads a model that fits.
 * Glitch can **open web pages**, **open installed apps**, **search your files
   by name** and **open files or folders**. Anything except opening a web page
-  asks you first.
-* Settings: choose the model, turn walking on/off, clear the chat, quit.
+  asks you first (an Allow / Nope bubble).
+* **Memory**: he remembers facts you tell him, compacts long chats into a
+  short summary, keeps a one-line-per-day journal, and continues the chat
+  after a restart. You can see and delete everything in Settings → Memory.
+* Settings: choose the model, walking on/off, memory, clear chat, quit.
 
 ---
 
@@ -133,7 +143,7 @@ on the manual checklist below.
   may not float over another app's *full-screen* Space. Untested.
 * **Windows, tray icon** may be hidden behind the **^** arrow in the taskbar
   until you drag it out.
-* **Both**: the mascot window is a 138×90 rectangle. Clicks on its transparent
+* **Both**: the mascot window is a 160×110 rectangle. Clicks on its transparent
   corners still go to Glitch rather than to the window underneath.
 * **Unsigned builds** trigger SmartScreen / Gatekeeper warnings (see above).
   Code signing is a release task for a later milestone.
@@ -145,7 +155,9 @@ on the manual checklist below.
 ```
 src/                     frontend (TypeScript, no framework)
   mascot/                mascot window: animator, walker, click/drag
-  panel/                 chat panel: setup wizard, chat, settings
+  mascot/                animations, glitch effects, props, walking, input
+  bubble/                the chat bubble (compose pill, replies, thinking cloud)
+  panel/                 setup wizard + settings (incl. Memory)
   sprites/               sprite-sheet frame map, loader, fallback art
 art/                     the original character art (source of the sheet)
 public/sprites/          the generated sprite sheet the app loads
@@ -163,6 +175,8 @@ crates/glitch-core/      all the logic, no UI dependency, unit-tested
   src/platform/          the ONLY OS-specific logic (windows.rs, macos.rs)
   src/settings.rs        settings JSON file
 docs/PLAN.md             the plan this milestone followed
+docs/ANIMATIONS.md       every animation + the art wishlist
+dev/                     screenshot scripts and the animation gallery (dev only)
 ```
 
 **Swappable AI backend.** Everything talks to the `AiProvider` trait
@@ -199,13 +213,17 @@ API-key provider would be a new file implementing `chat()`.
   Sizes are approximate. The wizard shows the real download progress. For
   thinking-capable models Glitch sends `think: false` so replies come quickly.
 * **Animation has no frame loop.** No `requestAnimationFrame`: frames are
-  drawn on timers, frame rates are capped at 12 fps, unchanged frames are not
-  redrawn, and repeated frames share one timer. Idle Glitch repaints less
-  than once per second, a sleeping Glitch once every 2 s. Walking moves the
+  drawn on timers capped at 20 fps, unchanged frames are not redrawn, and
+  repeated frames share one timer. Idle Glitch (including his random glitch
+  bursts) averages under one repaint per second, a sleeping Glitch about one
+  every 2.4 s; this is enforced by unit tests. Walking redraws and moves the
   window 15 times per second, only for a few seconds every 25–75 s, and
-  never while the chat is open.
-* **The chat panel is only created when first opened**, then hidden (not
-  destroyed) when you close it, so your conversation is kept.
+  never while the chat is open. The bubble's thought-cloud animation only
+  exists while Glitch is thinking.
+* **The chat bubble and the settings panel are only created when first
+  opened**, then hidden (not destroyed), so the conversation is kept.
+* **Memory compaction** runs right after a reply, while the model is still
+  loaded anyway, so it never wakes the model up by itself.
 * **File search is bounded**: max depth 8, 200,000 entries, 4 seconds, 15
   results; it skips hidden folders, `node_modules`, `AppData`, `Library` etc.
 
@@ -226,6 +244,7 @@ anything happens (the UI can't skip these checks):
 | `open_app` | asks first | must match an app found on this computer; terminals, PowerShell/Command Prompt, Registry Editor, Script Editor, Automator, Shortcuts are refused outright |
 | `search_files` | asks first | file **names** only, in your standard folders, bounded (above) |
 | `open_path` | asks first | must exist inside your home or user folders (after resolving `..` and symlinks); programs, scripts, installers, shortcuts, disk images and `.app` bundles are refused, as are files marked executable |
+| `remember` / `forget` | yes (only Glitch's own notes) | always shown as a chip, visible and deletable in Settings → Memory; passwords, PINs and long numbers are refused |
 
 There is no tool to delete, move, rename or edit files and no shell access.
 A confirmation is a one-time ID held in Rust: a stale or replayed "Allow"
@@ -245,17 +264,12 @@ jump between poses) and writes:
 
 Which pose plays when is set in `src/sprites/raccoon.ts`:
 
-| Animation | Poses |
-|---|---|
-| idle | front pose, now and then the tail-swapped front pose |
-| walk | the two side-running poses (mirrored when walking left) |
-| thinking / waiting for "Allow" | the "?" pose |
-| after answering | waving, then waving with mouth open |
-| asleep (10 idle minutes) | curled up with Zzz |
-
-Not used yet (they're in the sheet for later milestones): side, back,
-glitching, sitting, laughing, peeking at a window (for Claude Code
-notifications), napping on a rock, and the chaos spin (for chaos mode).
+The animations themselves (keyframes with squash/stretch, hops, glitch
+effects and small code-drawn props like a cursor and a mini browser window)
+are in `src/mascot/animations.ts`; [docs/ANIMATIONS.md](docs/ANIMATIONS.md)
+lists every one, what triggers it, and **which new poses would improve it
+most**, ready to paste into an image generator. Preview them all with
+`npm run dev` and open http://localhost:1420/dev/gallery.html.
 
 **To change the art:** replace the source image (same rough 4×4 layout,
 transparent background), then run
@@ -277,7 +291,8 @@ to a tiny code-drawn creature (`src/sprites/glitch.ts`), so the app still works.
 
 **Automated (runs in CI on every push):**
 
-* `cargo test --workspace`: 83 Rust tests
+* `cargo test --workspace`: 101 Rust tests (incl. memory: facts, secrets
+  refused, compaction with a scripted model, journal roll-over, restart)
   * Ollama client against a mock HTTP server using the documented API
     responses: request body (`stream:false`, `keep_alive`, `num_ctx`,
     `tools`, `think:false` only for thinking models), tool-call parsing,
@@ -291,9 +306,12 @@ to a tiny code-drawn creature (`src/sprites/glitch.ts`), so the app still works.
     loop with a scripted fake model (auto URL, approve, decline, invalid
     calls, loop cap, history trimming)
   * panel placement next to Glitch (multi-monitor, screen edges)
-* `npm test`: 22 frontend tests: walker stays inside the screen, animator
-  never has more than one timer, idle repaint budget, sprite grids are
-  well-formed, wizard helpers.
+* `npm test`: 63 frontend tests: animation engine (one timer max, idle and
+  sleep repaint budgets over 40 random seeds, every animation ends or loops
+  as intended), deterministic glitch slicing, walker stays on screen, bubble
+  state machine (stale confirmations, double answers), text helpers, wizard
+  and memory-card helpers.
+* `node dev/bubble-check.mjs`: 40 browser checks of the bubble with mocked IPC.
 * CI also **builds the real app on Windows and macOS runners**, which proves
   the OS-specific code compiles and the unit tests pass on both OSes.
 
@@ -329,13 +347,18 @@ test the wizard from scratch.
 - [ ] No white/grey fringe around the raccoon's outline
 - [ ] It shifts its tail now and then; within ~1–2 minutes it walks a short way
       and stays fully on screen (also on a second monitor)
-- [ ] Dragging Glitch moves it; a simple click (no drag) opens the chat
+- [ ] Dragging Glitch moves it and he dangles; letting go plays a fall + landing
+- [ ] A simple click (no drag) opens the chat bubble right above him; clicking
+      again (or Esc, or ×) closes it; dragging him moves the bubble along
 - [ ] Looks crisp (not blurry) on a high-DPI / Retina screen
 - [ ] No taskbar button (Windows) / no Dock icon (macOS); tray / menu-bar icon
       is present, and its menu works (Chat, Let Glitch wander, Quit)
 - [ ] Settings → turn off "walk around": it stops walking (tray tick updates too)
 - [ ] Leave it alone for 10 minutes: it curls up asleep (Zzz); hover wakes it
-- [ ] While it's thinking it shows the "?" pose; after a reply it waves
+- [ ] While it's thinking it shows the "?" pose and the bubble shows a thought
+      cloud; after a reply it waves or laughs
+- [ ] Every so often (8–25 s) he glitches briefly (sliced/RGB-split flicker)
+- [ ] Near the top of the screen the bubble appears below him (tail up)
 
 **Setup wizard**
 
@@ -350,15 +373,24 @@ test the wizard from scratch.
 - [ ] "hi" gets a reply (first reply may take a while: model loading)
 - [ ] "open twitter on elon musk's page" opens x.com/elonmusk in your default
       browser **without** asking
-- [ ] "open the calculator" (or Spotify, etc.) shows an Allow card; Allow
-      opens it, "Don't allow" doesn't
+- [ ] "open the calculator" (or Spotify, etc.) shows an Allow / Nope bubble;
+      Allow opens it, Nope doesn't
 - [ ] "open a terminal" / "open powershell" is refused
 - [ ] Put a file named `dog.jpg` in Pictures. "find a photo of a dog" asks,
       then lists it; asking to open it asks again, then opens it
       (macOS: the folder-access prompt appears once; allow it)
 - [ ] Typing a new message while an Allow card is waiting disables the card
 - [ ] Stop Ollama mid-session and send a message: a friendly error with
-      "Open setup" appears
+      "Fix it" appears
+
+**Memory**
+
+- [ ] "Remember that my dog is called Rex" shows a "Remembered" chip and the
+      fact appears in Settings → Memory; × deletes it
+- [ ] "Remember my password is 1234" is refused
+- [ ] Chat for a while (15+ messages): Settings → Memory → "What we talked
+      about" shows a summary
+- [ ] Quit and restart Glitch: he still knows the fact and the last chat
 
 **Lightweight**
 
@@ -375,9 +407,11 @@ test the wizard from scratch.
   in the tray / menu bar), or open the panel → Settings → Run setup again.
 * **Replies are slow**: pick a smaller model in Settings. The first reply after
   a pause is always slower (the model is loading).
-* **Settings file**: `%APPDATA%\dev.glitch.companion\settings.json` (Windows),
-  `~/Library/Application Support/dev.glitch.companion/settings.json` (macOS).
-  Delete it to start the wizard again.
+* **Settings and memory files**: `settings.json` and `memory.json` in
+  `%APPDATA%\dev.glitch.companion\` (Windows) or
+  `~/Library/Application Support/dev.glitch.companion/` (macOS).
+  Delete `settings.json` to start the wizard again; delete `memory.json` (or
+  use Settings → Memory → Forget everything) to wipe his memory.
 
 ## Next milestone (suggested)
 

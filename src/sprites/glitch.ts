@@ -64,5 +64,14 @@ export const GLITCH: GridSpriteSource = {
     walk1: variant({ 1: "........mm......", 14: ".....kk..kk....." }),
     sleep0: variant({ ...EYES_CLOSED, 0: "...........zzz..", 1: ".......mm....z..", 2: "........k..zzz.." }),
     sleep1: variant(EYES_CLOSED),
+    // Aliases for raccoon poses the mascot animations use (closest match).
+    side: variant({ 1: "........mm......", 2: "........k......." }),
+    sit: variant(EYES_CLOSED),
+    laugh: variant({ 7: "..kbbppbbppbbk..", 8: "..kbbbbbbbbbbk..", 10: "..kbbbkmmkbbbk.." }),
+    glitch: variant({ 7: "..kbbwwbbmmbbk..", 8: "..kbbwpbbmmbbk.." }),
+    chaos: variant({ 7: "..kbbmmbbmmbbk..", 8: "..kbbmmbbmmbbk..", 10: "..kbbbkmmkbbbk.." }),
+    nap_rock: variant({ ...EYES_CLOSED, 0: "...........zzz..", 1: ".......mm....z..", 2: "........k..zzz.." }),
+    notify: variant({ 7: "..kbbwpbbwpbbk..", 8: "..kbbwwbbwwbbk.." }),
+    back: variant({ 7: "..kbbbbbbbbbbk..", 8: "..kbbbbbbbbbbk.." }),
   },
 };

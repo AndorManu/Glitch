@@ -1,15 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { GLITCH } from "../sprites/glitch";
 import { RACCOON } from "../sprites/raccoon";
-import { ANIMATIONS, Animator, type Clock, frameDelay, MAX_FPS } from "./animations";
+import {
+  type Animation,
+  type AnimationName,
+  ANIMATIONS,
+  Animator,
+  burst,
+  type Clock,
+  isAnimationName,
+  type Keyframe,
+  MAX_FPS,
+  MIN_KEY_MS,
+  type Pose,
+} from "./animations";
+import { mulberry32 } from "./glitchfx";
+import { PROPS } from "./props";
 
 /** Manual clock: tracks pending timers so we can assert there is never more than one. */
 function fakeClock() {
   const timers = new Map<number, { fn: () => void; ms: number }>();
   let next = 1;
+  let maxPending = 0;
   const clock: Clock = {
     setTimeout: (fn, ms) => {
       timers.set(next, { fn, ms });
+      maxPending = Math.max(maxPending, timers.size);
       return next++;
     },
     clearTimeout: (id) => void timers.delete(id as number),
@@ -20,15 +36,50 @@ function fakeClock() {
     t.fn();
     return t.ms;
   };
-  return { clock, timers, fire };
+  return { clock, timers, fire, maxPending: () => maxPending };
 }
 
+/** Run an animation for `ms` of fake time; count repaints and timer wakeups. */
+function simulate(name: AnimationName, ms: number, seed = 1, anims: Record<AnimationName, Animation> = ANIMATIONS) {
+  const poses: { pose: Pose; at: number }[] = [];
+  const delays: number[] = [];
+  let elapsed = 0;
+  const { clock, timers, maxPending } = fakeClock();
+  const a = new Animator((pose) => poses.push({ pose, at: elapsed }), anims, clock, mulberry32(seed));
+  a.play(name);
+  let wakeups = 0;
+  while (elapsed < ms && timers.size > 0) {
+    // Advance the clock first so repaints are stamped with the time they happen.
+    const [id, t] = [...timers.entries()][0];
+    timers.delete(id);
+    delays.push(t.ms);
+    elapsed += t.ms;
+    wakeups++;
+    t.fn();
+  }
+  return { poses, draws: poses.length, wakeups, elapsed: Math.max(elapsed, ms), delays, maxPending: maxPending(), animator: a };
+}
+
+/** All keys an animation can produce (makers are random: sample many seeds). */
+function allKeys(anim: Animation): Keyframe[] {
+  if (typeof anim.keys !== "function") return anim.keys;
+  const out: Keyframe[] = [];
+  for (let seed = 1; seed <= 200; seed++) out.push(...anim.keys(mulberry32(seed)));
+  out.push(...burst(mulberry32(7)));
+  return out;
+}
+
+const keys = (frames: string[], ms: number, o: Partial<Keyframe> = {}): Keyframe[] => frames.map((frame) => ({ frame, ms, ...o }));
+
 describe("animations", () => {
-  it("every frame used by an animation exists in both sprite sets", () => {
+  it("every keyframe uses a frame both sprite sets have, and known props", () => {
     for (const [name, anim] of Object.entries(ANIMATIONS)) {
-      for (const f of anim.frames) {
-        expect(RACCOON.frames, `raccoon: ${name} uses ${f}`).toHaveProperty(f);
-        expect(GLITCH.frames, `fallback: ${name} uses ${f}`).toHaveProperty(f);
+      for (const key of allKeys(anim)) {
+        expect(RACCOON.frames, `raccoon: ${name} uses ${key.frame}`).toHaveProperty(key.frame);
+        expect(GLITCH.frames, `fallback: ${name} uses ${key.frame}`).toHaveProperty(key.frame);
+        for (const p of key.props ?? []) expect(p.name === "tether" || p.name in PROPS, `${name} prop ${p.name}`).toBe(true);
+        if (key.glitch !== undefined) expect(key.glitch).toBeGreaterThanOrEqual(0);
+        if (key.glitch !== undefined) expect(key.glitch).toBeLessThanOrEqual(1);
       }
     }
   });
@@ -37,79 +88,174 @@ describe("animations", () => {
     for (const i of Object.values(RACCOON.frames)) expect(i >= 0 && i < 16).toBe(true);
   });
 
-  it("frame rates are capped", () => {
-    for (const anim of Object.values(ANIMATIONS)) {
-      expect(anim.fps).toBeLessThanOrEqual(MAX_FPS);
-      expect(frameDelay(anim)).toBeGreaterThanOrEqual(1000 / MAX_FPS - 1);
-    }
-    expect(frameDelay({ frames: ["a", "b"], fps: 240 })).toBe(Math.round(1000 / MAX_FPS));
+  it("follow-ups name real animations", () => {
+    for (const anim of Object.values(ANIMATIONS)) if (anim.next) expect(isAnimationName(anim.next)).toBe(true);
+    expect(isAnimationName("grabCursor")).toBe(true);
+    expect(isAnimationName("toString")).toBe(false);
+    expect(isAnimationName(42)).toBe(false);
   });
 
-  it("sleeping wakes the CPU at most every two seconds", () => {
-    expect(frameDelay(ANIMATIONS.sleep)).toBeGreaterThanOrEqual(2000);
+  it("actions either finish (once) or loop, as intended", () => {
+    const once: AnimationName[] = ["happy", "startled", "laugh", "grabCursor", "peek", "fall", "land", "glitchOut", "gone", "glitchIn", "chaosSpin"];
+    const loops: AnimationName[] = ["idle", "walk", "think", "ask", "sleep", "carryCursor", "dragWindow", "pushWindow", "dangle", "napRock"];
+    expect([...once, ...loops].sort()).toEqual(Object.keys(ANIMATIONS).sort());
+    for (const name of once) {
+      const r = simulate(name, 20_000);
+      // Every one-shot chain ends back in idle within a few seconds.
+      expect(r.animator.animation, name).toBe("idle");
+    }
+    for (const name of loops) expect(simulate(name, 20_000).animator.animation, name).toBe(name);
+  });
+
+  it("the teleport chain: glitchOut -> gone (invisible) -> glitchIn -> idle", () => {
+    const seen: string[] = [];
+    const { clock, fire } = fakeClock();
+    const a = new Animator(() => seen[seen.length - 1] !== a.animation && seen.push(a.animation), ANIMATIONS, clock, mulberry32(3));
+    a.play("glitchOut");
+    for (let i = 0; i < 60 && a.animation !== "idle"; i++) fire();
+    expect(seen).toEqual(["glitchOut", "gone", "glitchIn", "idle"]);
   });
 });
 
 describe("Animator", () => {
-  it("cycles frames with exactly one pending timer", () => {
+  it("steps through keys with exactly one pending timer", () => {
     const drawn: string[] = [];
     const { clock, timers, fire } = fakeClock();
-    const a = new Animator((f) => drawn.push(f), { ...ANIMATIONS, walk: { frames: ["w0", "w1"], fps: 5 } }, clock);
+    const a = new Animator((p) => drawn.push(p.frame), { ...ANIMATIONS, walk: { keys: keys(["w0", "w1"], 200) } }, clock);
     a.play("walk");
     expect(drawn).toEqual(["w0"]);
     expect(timers.size).toBe(1);
     expect(fire()).toBe(200);
     fire();
     expect(drawn).toEqual(["w0", "w1", "w0"]);
-    a.play("walk"); // same animation: no restart, no extra timer
+    a.play("walk"); // same loop: no restart, no extra timer
     expect(timers.size).toBe(1);
     a.stop();
     expect(timers.size).toBe(0);
   });
 
-  it("holds repeated frames: one timer, no redundant redraws", () => {
+  it("holds identical keys with one timer and no redundant redraws", () => {
     const drawn: string[] = [];
     const { clock, timers, fire } = fakeClock();
-    const a = new Animator((f) => drawn.push(f), { ...ANIMATIONS, idle: { frames: ["a", "a", "a", "b"], fps: 1 } }, clock);
+    const idle = [...keys(["a", "a", "a"], 1000), ...keys(["a"], 500, { dy: -2 }), ...keys(["b"], 1000)];
+    const a = new Animator((p) => drawn.push(`${p.frame}${p.dy}`), { ...ANIMATIONS, idle: { keys: idle } }, clock);
     a.play("idle");
-    expect(drawn).toEqual(["a"]);
-    expect(fire()).toBe(3000);
-    expect(drawn).toEqual(["a", "b"]);
+    expect(drawn).toEqual(["a0"]);
+    expect(fire()).toBe(3000); // three "a" keys merged
+    expect(drawn).toEqual(["a0", "a-2"]); // a transform change is a new look
+    expect(fire()).toBe(500);
     expect(fire()).toBe(1000);
-    expect(drawn).toEqual(["a", "b", "a"]);
+    expect(drawn).toEqual(["a0", "a-2", "b0", "a0"]);
     expect(timers.size).toBe(1);
   });
 
-  it("idle: under one repaint and one timer wakeup per second on average", () => {
-    let draws = 0;
-    let wakeups = 0;
-    let elapsed = 0;
+  it("glitch / fx keys repaint every time, even when repeated", () => {
+    const drawn: number[] = [];
     const { clock, fire } = fakeClock();
-    const a = new Animator(() => draws++, ANIMATIONS, clock);
+    const a = new Animator((_, tick) => drawn.push(tick), { ...ANIMATIONS, idle: { keys: keys(["a", "a", "a"], 50, { glitch: 0.5 }) } }, clock);
     a.play("idle");
-    while (elapsed < 60_000) {
-      elapsed += fire();
-      wakeups++;
-    }
-    expect(draws / (elapsed / 1000)).toBeLessThan(1);
-    expect(wakeups / (elapsed / 1000)).toBeLessThan(1);
+    expect(fire()).toBe(50); // not merged
+    fire();
+    expect(drawn).toEqual([0, 1, 2]); // a fresh noise seed per repaint
   });
 
-  it("one-shot animations return to idle", () => {
+  it("caps the frame rate whatever the keys say", () => {
+    const { clock, fire } = fakeClock();
+    const a = new Animator(() => {}, { ...ANIMATIONS, idle: { keys: keys(["a", "b"], 1) } }, clock);
+    a.play("idle");
+    expect(fire()).toBe(MIN_KEY_MS);
+    expect(MIN_KEY_MS).toBeGreaterThanOrEqual(1000 / MAX_FPS);
+  });
+
+  it("one-shots return to their follow-up (default idle, or the `then` given)", () => {
     const drawn: string[] = [];
     const { clock, fire } = fakeClock();
-    const anims = { ...ANIMATIONS, happy: { frames: ["h"], fps: 4, once: true }, idle: { frames: ["i0", "i1"], fps: 2 } };
-    const a = new Animator((f) => drawn.push(f), anims, clock);
+    const anims = { ...ANIMATIONS, happy: { keys: keys(["h"], 100), once: true }, idle: { keys: keys(["i0", "i1"], 500) }, think: { keys: keys(["t"], 500) } };
+    const a = new Animator((p) => drawn.push(p.frame), anims, clock);
     a.play("happy");
     fire();
     expect(a.animation).toBe("idle");
     expect(drawn).toEqual(["h", "i0"]);
+    a.play("happy", "think");
+    expect(a.base).toBe("think");
+    fire();
+    expect(a.animation).toBe("think");
   });
 
-  it("single-frame looping animations schedule no timer at all", () => {
+  it("a burst interjects, then the animation carries on where it was", () => {
+    const drawn: Pose[] = [];
+    const { clock, fire } = fakeClock();
+    const a = new Animator((p) => drawn.push(p), { ...ANIMATIONS, think: { keys: keys(["t0", "t1"], 400) } }, clock, mulberry32(9));
+    a.play("think");
+    a.glitchBurst(400);
+    expect(drawn.length).toBe(2);
+    while (drawn[drawn.length - 1].glitch > 0) fire();
+    const burstKeys = drawn.slice(1, -1);
+    expect(burstKeys.length).toBe(8); // 400 ms at 20 fps
+    expect(burstKeys.every((p) => p.glitch > 0)).toBe(true);
+    expect(drawn[drawn.length - 1].frame).toBe("t1");
+    expect(a.animation).toBe("think");
+  });
+
+  it("single-key still loops schedule no timer at all", () => {
     const { clock, timers } = fakeClock();
-    const a = new Animator(() => {}, { ...ANIMATIONS, sleep: { frames: ["z"], fps: 1 } }, clock);
+    const a = new Animator(() => {}, { ...ANIMATIONS, sleep: { keys: keys(["z"], 1000) } }, clock);
     a.play("sleep");
     expect(timers.size).toBe(0);
+  });
+});
+
+describe("CPU budgets (60 s of fake time)", () => {
+  it("idle, bursts included: under 1.5 repaints and 1.5 timer wakeups per second", () => {
+    let bursts = 0;
+    let worst = 0;
+    for (let seed = 1; seed <= 40; seed++) {
+      const r = simulate("idle", 60_000, seed);
+      const s = r.elapsed / 1000;
+      expect(r.draws / s, `seed ${seed} repaints/s`).toBeLessThan(1.5);
+      expect(r.wakeups / s, `seed ${seed} wakeups/s`).toBeLessThan(1.5);
+      expect(r.maxPending).toBe(1);
+      worst = Math.max(worst, r.draws / s, r.wakeups / s);
+      // Bursts: count runs of glitchy repaints; each is short and at most 20 fps.
+      let run: number[] = [];
+      for (const { pose, at } of [...r.poses, { pose: { glitch: 0 } as Pose, at: Infinity }]) {
+        if (pose.glitch > 0) run.push(at);
+        else if (run.length) {
+          if (run.length >= 4) {
+            bursts++;
+            expect(run[run.length - 1] - run[0], `seed ${seed} ${run.join(",")}`).toBeLessThanOrEqual(600);
+          }
+          run = [];
+        }
+      }
+    }
+    expect(bursts).toBeGreaterThan(40 * 2); // 60 s of idle has a few bursts in every run
+    console.info(`idle: worst seed ${worst.toFixed(2)} repaints-or-wakeups/s`);
+  });
+
+  it("sleep: at most one repaint every two seconds", () => {
+    const r = simulate("sleep", 60_000);
+    expect(r.draws / (r.elapsed / 1000)).toBeLessThanOrEqual(0.5);
+    expect(r.wakeups / (r.elapsed / 1000)).toBeLessThanOrEqual(0.5);
+  });
+
+  it("every animation runs at 20 fps or less with one timer", () => {
+    for (const name of Object.keys(ANIMATIONS) as AnimationName[]) {
+      const r = simulate(name, 10_000, 5);
+      expect(Math.min(...r.delays), name).toBeGreaterThanOrEqual(MIN_KEY_MS);
+      expect(r.draws / (r.elapsed / 1000), name).toBeLessThanOrEqual(MAX_FPS);
+      expect(r.maxPending, name).toBe(1);
+    }
+  });
+
+  it("walking repaints in step with the 15 fps window moves", () => {
+    const r = simulate("walk", 10_000);
+    // (67 ms keys: 14.9 repaints/s, the 15 window moves/s of main.ts)
+    expect(r.draws / (r.elapsed / 1000)).toBeLessThanOrEqual(15.1);
+  });
+
+  it("thinking stays modest (it can last minutes on a slow model)", () => {
+    const r = simulate("think", 60_000);
+    expect(r.draws / (r.elapsed / 1000)).toBeLessThan(4);
   });
 });
