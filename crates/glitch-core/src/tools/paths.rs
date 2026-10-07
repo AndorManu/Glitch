@@ -19,12 +19,30 @@ use super::ToolError;
 /// Besides images/documents/videos/audio (see `files::Kind`), these are fine
 /// to open with their default app.
 const EXTRA_OK_EXTENSIONS: &[&str] =
-    &["txt", "md", "log", "json", "csv", "tsv", "xml", "yaml", "yml", "zip", "7z", "rar", "tar", "gz", "html", "htm"];
+    &["txt", "md", "log", "json", "csv", "tsv", "xml", "yaml", "yml", "zip", "7z", "rar", "tar", "gz"];
+
+/// Found by `search_files`, but never opened with their default app: web
+/// pages and SVG run script in the browser (under a `file://` origin), and
+/// legacy Office formats and RTF can carry macros or exploits. Glitch opens
+/// the folder instead.
+const SHOW_IN_FOLDER_EXTENSIONS: &[&str] = &[
+    "html", "htm", "xhtml", "xht", "shtml", "mht", "mhtml", "svg", "svgz", "doc", "dot", "xls", "xlt", "xla", "ppt",
+    "pot", "pps", "rtf",
+];
 
 fn allowed_file_extension(p: &Path) -> bool {
     let Some(ext) = p.extension().and_then(|e| e.to_str()).map(str::to_lowercase) else { return false };
+    if SHOW_IN_FOLDER_EXTENSIONS.contains(&ext.as_str()) {
+        return false;
+    }
     EXTRA_OK_EXTENSIONS.contains(&ext.as_str())
         || [Kind::Image, Kind::Document, Kind::Video, Kind::Audio].iter().any(|k| k.has_extension(&ext))
+}
+
+fn shown_in_folder_only(p: &Path) -> bool {
+    p.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| SHOW_IN_FOLDER_EXTENSIONS.contains(&e.to_lowercase().as_str()))
 }
 
 /// Resolve `.` and `..` without touching the disk.
@@ -243,6 +261,13 @@ pub fn validate(raw: &str, platform: &dyn Platform) -> Result<(PathBuf, bool), T
     if has_blocked_extension(&canonical) || is_unix_executable(&canonical, is_dir) {
         return Err(refuse());
     }
+    if !is_dir && shown_in_folder_only(&canonical) {
+        return Err(ToolError(
+            "this kind of file (web page, SVG or old Office file) can run code when opened, so Glitch doesn't open \
+             it. Open the folder it is in instead (call open_path with the folder's path)."
+                .into(),
+        ));
+    }
     if !is_dir && !allowed_file_extension(&canonical) {
         return Err(refuse());
     }
@@ -353,11 +378,25 @@ mod tests {
     #[test]
     fn opens_common_documents_and_media() {
         let h = home();
-        for f in ["a.pdf", "b.DOCX", "c.png", "d.mp3", "e.mov", "notes.txt", "page.html", "pack.zip"] {
+        for f in ["a.pdf", "b.DOCX", "c.png", "d.mp3", "e.mov", "notes.txt", "pack.zip", "f.xlsx", "g.pptx"] {
             let p = h.root.join("Downloads").join(f);
             std::fs::write(&p, b"").unwrap();
             assert!(validate(p.to_str().unwrap(), &h.platform).is_ok(), "{f} should open");
         }
+    }
+
+    #[test]
+    fn script_capable_documents_are_not_opened() {
+        // Review 2026-10-08, L3: still searchable, but only their folder opens.
+        let h = home();
+        for f in ["page.html", "b.HTM", "c.xhtml", "d.svg", "e.doc", "f.XLS", "g.ppt", "h.rtf", "i.mhtml"] {
+            let p = h.root.join("Downloads").join(f);
+            std::fs::write(&p, b"").unwrap();
+            let err = validate(p.to_str().unwrap(), &h.platform).unwrap_err();
+            assert!(err.0.contains("folder"), "{f}: {}", err.0);
+        }
+        assert!(validate(h.root.join("Downloads").to_str().unwrap(), &h.platform).unwrap().1);
+        assert!(Kind::Image.has_extension("svg") && Kind::Document.has_extension("doc"));
     }
 
     /// Absolute paths that point outside the user's folders, per OS. On Windows
