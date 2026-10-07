@@ -130,6 +130,24 @@ export function playAction(name: unknown): boolean {
 function applySettings(s: Settings): void {
   creature?.setMovement(s.movement_enabled);
   creature?.setChaos(s.chaos_enabled ?? true);
+  mirrorOn = s.stream_overlay?.enabled === true;
+  if (mirrorOn) mirrored = ""; // resend: a page that just connected wants the current one
+}
+
+// ------------------------------------------------------- stream overlay
+// While the OBS overlay is on, tell Rust whenever the animation or facing
+// changes (checked on each repaint, sent only on change), so the overlay's
+// Glitch can play the same one (src-tauri/src/stream/, src/overlay/).
+
+let mirrorOn = false;
+let mirrored = "";
+
+function mirrorTick(c: Creature, r: Renderer): void {
+  if (!mirrorOn) return;
+  const key = `${c.animation}|${r.facingLeft}`;
+  if (key === mirrored) return;
+  mirrored = key;
+  void invoke("stream_mirror", { animation: c.animation, facingLeft: r.facingLeft }).catch(() => {});
 }
 
 async function main(): Promise<void> {
@@ -138,6 +156,11 @@ async function main(): Promise<void> {
   const renderer = new Renderer(canvas, sprites);
   const c = new Creature(host, renderer);
   creature = c;
+  const render = renderer.render.bind(renderer);
+  renderer.render = (pose, tick) => {
+    render(pose, tick);
+    mirrorTick(c, renderer);
+  };
   // Debug builds (`tauri dev` / `tauri build --debug`): creature events on the Rust console.
   if (import.meta.env.DEV || import.meta.env.TAURI_ENV_DEBUG === "true") {
     c.onEvent = (what) => void invoke("chaos_debug_log", { what }).catch(() => {});
@@ -147,6 +170,7 @@ async function main(): Promise<void> {
     settings = await api.getSettings();
     c.movement = settings.movement_enabled;
     c.chaosOn = settings.chaos_enabled ?? true;
+    mirrorOn = settings.stream_overlay?.enabled === true;
   } catch (e) {
     console.error("could not load settings", e);
   }

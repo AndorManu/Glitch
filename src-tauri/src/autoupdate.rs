@@ -37,8 +37,9 @@ pub struct UpdateStatus {
     pub available: Option<Available>,
     /// Should the bubble offer it now (not snoozed with "Later")?
     pub offer: bool,
-    /// Downloading/installing: 0-100, or null while the size is unknown.
-    pub installing: Option<Option<u8>>,
+    pub installing: bool,
+    /// Download percent while installing (None: size unknown).
+    pub progress: Option<u8>,
     /// Unix seconds of the last finished check (0 = never).
     pub last_check: u64,
     pub error: Option<String>,
@@ -77,7 +78,8 @@ pub fn status(app: &AppHandle) -> UpdateStatus {
         checking,
         available,
         offer,
-        installing,
+        installing: installing.is_some(),
+        progress: installing.flatten(),
         last_check,
         error,
     }

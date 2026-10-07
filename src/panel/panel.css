@@ -529,3 +529,30 @@ button.danger-text.armed:hover:not(:disabled) { background: var(--danger); }
 .voice-model-line.stack { flex-direction: column; align-items: flex-start; gap: 6px; }
 .voice-error { color: var(--danger); }
 .voice-gap { height: 12px; border-bottom: 2px dashed var(--line-soft); margin-bottom: 12px; }
+
+/* ------------------------------------------------- Settings > Features */
+
+.feature-block { margin-top: 12px; padding-top: 12px; border-top: 2px dashed var(--line-soft); }
+.feature-title { font-size: 13px; font-weight: 750; margin-bottom: 6px; }
+.feature-line { font-size: 12.5px; margin-top: 8px; color: var(--muted); overflow-wrap: anywhere; }
+.feature-line.ok { color: var(--ok); }
+.feature-line.error { color: var(--danger); }
+.feature-sub { display: block; margin-top: 12px; }
+.feature-tests { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.feature-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.feature-more { margin-top: 12px; }
+.feature-more summary { cursor: pointer; font-weight: 650; font-size: 12.5px; }
+.feature-more summary:hover { color: var(--accent-ink); }
+.feature-more > .hint { margin-top: 6px; overflow-wrap: anywhere; }
+.text-input {
+  width: 100%;
+  font: inherit;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  padding: 8px 11px;
+  border: 2px solid var(--outline);
+  border-radius: 10px;
+}
+.text-input:hover { background: var(--accent-tint); }
+.text-input::placeholder { color: var(--muted); font-weight: 500; }
