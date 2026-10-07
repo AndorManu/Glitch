@@ -288,15 +288,19 @@ export class Creature {
     if (left === this.facingLeft) return [];
     const frame = this.animator.pose?.frame ?? "idle0";
     this.facingLeft = left;
-    if (this.mode !== "stand" || !isStanding(this.surface) || this.asleep) return [];
+    if (this.mode !== "stand" || this.asleep) return [];
     const fam = familyOf(frame);
+    if (fam === "wall" && !isStanding(this.surface)) return turnKeys("wall", left, frame);
+    if (!isStanding(this.surface)) return [];
     return fam === "side" || fam === "front" ? turnKeys(fam, left, frame) : [];
   }
 
   /** Turn round on the spot, then carry on with what was playing. */
-  private turnNow(left: boolean): void {
+  /** Turn round on the spot, then carry on with what was playing. Returns how long the turn takes (ms). */
+  private turnNow(left: boolean): number {
     const keys = this.turn(left);
     if (keys.length) this.animator.interject(() => keys);
+    return keys.reduce((t, k) => t + k.ms, 0);
   }
 
   /**
@@ -917,7 +921,8 @@ export class Creature {
         const left = facesLeftFor(this.surface.kind, dir);
         // Already side-on and turning round: the drawn turn first, standing still meanwhile.
         let lead: Keyframe[] = [];
-        if (familyOf(this.animator.pose?.frame ?? "idle0") === "side") lead = this.turn(left);
+        const fam = familyOf(this.animator.pose?.frame ?? "idle0");
+        if (fam === "side" || fam === "wall") lead = this.turn(left);
         else this.facingLeft = left;
         const wait = lead.reduce((t, k) => t + k.ms, 0);
         this.loco = { to, gait: step.gait, v: 0, dir, freezeUntil: this.now + wait, skip: 0, nextGlitchAt: this.now + 2500 + this.rand() * 9000 };
@@ -938,10 +943,13 @@ export class Creature {
         }
         return;
       }
-      case "face":
-        this.turnNow(facesLeftFor(this.surface.kind, step.dir));
+      case "face": {
+        const ms = this.turnNow(facesLeftFor(this.surface.kind, step.dir));
         this.place();
+        // Let the turn play before the next step (a jump's crouch would cut it off).
+        if (ms > 0) return this.wait(ms, () => this.nextStep());
         return this.nextStep();
+      }
       case "jump": {
         const spin = step.spin ?? 0;
         const jp = planJump(this.body, step.to, w, spin ? 150 : undefined);
@@ -953,10 +961,13 @@ export class Creature {
         this.animator.play("crouch", "airUp");
         return;
       }
-      case "hop":
-        this.facingLeft = facesLeftFor(this.surface.kind, step.dir);
-        this.launch({ x: step.dir * 190 * u, y: -430 * u }, { planned: true, panic: false });
+      case "hop": {
+        const go = () => this.launch({ x: step.dir * 190 * u, y: -430 * u }, { planned: true, panic: false });
+        const ms = this.turnNow(facesLeftFor(this.surface.kind, step.dir));
+        if (ms > 0) return this.wait(ms, () => (this.mode === "stand" ? go() : this.finishPlan()));
+        go();
         return;
+      }
       case "drop": {
         const kind = this.surface.kind;
         if (isStanding(this.surface)) return this.nextStep();

@@ -1,38 +1,42 @@
-// Glitch's animation sheet: public/sprites/glitch-anim.png, built by
-// scripts/slice-generated.py + scripts/pack-sprites.py from the generated
-// on-model sheets (art/generated) and the original 16 poses. Pixel art at
-// its own pixel size, drawn crisp at 1.5 CSS px per art px (the same size
-// the old 2x sheet had on screen).
+// Glitch's animation sheet, built by scripts/slice-generated.py +
+// scripts/pack-sprites.py from the generated on-model sheets (art/generated)
+// and the original 16 poses.
 //
-// Cycles (8 frames unless noted): idle, talk, wave, walk, run (6), jump,
-// think, sleep, wake, dangle, climb, laugh, sad, angry, surprised, scared,
-// peek, push, spin, teleport, listen, celebrate, dance, eat, grab_tab.
-// The old sheet's names (blink, side, sit, sleep0, think0...) are aliases
-// of the closest frame, so everything that used raccoon.ts keeps working.
+// public/sprites/glitch-anim.png is the art grid (1 px per art pixel); the
+// app draws one of the display sheets rendered from it at the exact device
+// size, so nothing is ever scaled by a non-integer factor at runtime:
+//   glitch-anim@1x.png  1.5 device px per art px (smoothly resampled), DPR < 1.5
+//   glitch-anim@2x.png  3 device px per art px (crisp), DPR >= 1.5
+// Either way a frame is 1.5 CSS px per art px on screen.
+//
+// The old sheet's names (blink, side, sit, sleep0, think0...) are aliases of
+// the closest frame, so everything that used raccoon.ts keeps working.
 
 import { ANIM_EYES, ANIM_FRAME_H, ANIM_FRAME_W, ANIM_INDEX } from "./anim";
 import { mirrorable } from "./families";
 import type { SheetSpriteSource } from "./types";
 
+/** CSS px per art px. */
+export const ART_SCALE = 1.5;
+
 /** Old frame names -> frames of this sheet. */
 export const ALIASES: Record<string, string> = {
   blink: "idle5",
   blink_half: "idle4",
-  side: "pose_side",
+  // Side-on standing (the turn's last frame: drawn with the glitch eye).
+  side: "turn_front_to_side5",
   wave: "wave4",
-  glitch: "pose_glitch",
-  sit: "pose_sit",
-  sleep0: "pose_sleep",
-  sleep1: "pose_sleep",
-  happy: "pose_happy",
-  laugh: "pose_laugh",
-  think0: "pose_think",
-  think1: "pose_think",
-  chaos: "pose_chaos",
-  nap_rock: "pose_push",
-  back: "pose_back",
-  notify: "pose_notify",
-  front_alt: "pose_front_alt",
+  glitch: "stand_up_glitch2",
+  sit: "sit0",
+  happy: "celebrate3",
+  laugh: "laugh2",
+  think0: "think4",
+  think1: "think5",
+  chaos: "spin2",
+  nap_rock: "sit_down7",
+  back: "turn_to_back5",
+  notify: "point4",
+  front_alt: "idle1",
   crouch: "jump1",
   air_up: "jump2",
   air_tuck: "jump3",
@@ -51,6 +55,7 @@ for (const [alias, target] of Object.entries(ALIASES)) {
   eyes[alias] = ANIM_EYES[target];
 }
 
+/** The art-grid sheet (1 px per art px): frame names and eye positions in art px. */
 export const GLITCH_ANIM: SheetSpriteSource = {
   kind: "sheet",
   url: "/sprites/glitch-anim.png",
@@ -58,7 +63,28 @@ export const GLITCH_ANIM: SheetSpriteSource = {
   frameHeight: ANIM_FRAME_H,
   frames,
   pixelated: true,
-  scale: 1.5,
+  scale: ART_SCALE,
   eyes,
   mirrorable,
 };
+
+/**
+ * The display sheet for a device pixel ratio: rendered at the device size,
+ * drawn 1:1 (smoothing on, for rotations and squash).
+ */
+export function glitchAnimFor(dpr: number): SheetSpriteSource {
+  const hi = dpr >= 1.5;
+  // Device px per art px in the sheet, and CSS px per sheet px.
+  const k = hi ? 3 : 1.5;
+  const scaled: Record<string, [number, number]> = {};
+  for (const [n, [x, y]] of Object.entries(eyes)) scaled[n] = [x * k, y * k];
+  return {
+    ...GLITCH_ANIM,
+    url: hi ? "/sprites/glitch-anim@2x.png" : "/sprites/glitch-anim@1x.png",
+    frameWidth: ANIM_FRAME_W * k,
+    frameHeight: ANIM_FRAME_H * k,
+    pixelated: false,
+    scale: ART_SCALE / k,
+    eyes: scaled,
+  };
+}

@@ -294,7 +294,7 @@ function frame(): void {
 }
 
 async function main(): Promise<void> {
-  const sprites = await loadGlitchSprites();
+  const sprites = await loadGlitchSprites(DPR);
   renderer = new Renderer(mascotCanvas, sprites, { pixelRatio: () => DPR });
   const render = renderer.render.bind(renderer);
   renderer.render = (pose, tick) => {

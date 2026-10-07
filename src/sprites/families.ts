@@ -25,8 +25,28 @@ const FAMILY_PREFIX: [string, Family][] = [
   ["climb", "wall"],
 ];
 
-/** Frames that belong to no family (clips, effects, being held): never bridged from or to. */
-const NEUTRAL = ["sit_down", "stand_up", "turn_", "walk_start", "walk_stop", "lie_down", "get_up", "wake", "dangle", "spin", "teleport", "land", "peek", "pose_glitch", "pose_chaos"];
+/**
+ * Transition clips: the family they start in and the one they end in. A
+ * frame of a clip counts as the start family in the first half and the end
+ * family in the second, so a clip cut short still bridges correctly.
+ */
+const CLIPS: Record<string, [Family, Family, number]> = {
+  sit_down: ["front", "sit", 8],
+  stand_up_paws: ["sit", "front", 8],
+  stand_up_hop: ["sit", "front", 6],
+  stand_up_glitch: ["sit", "front", 6],
+  turn_front_to_side: ["front", "side", 6],
+  turn_side_to_front: ["side", "front", 6],
+  turn_to_back: ["front", "back", 6],
+  walk_start: ["front", "side", 6],
+  walk_stop: ["side", "side", 6],
+  lie_down: ["front", "curled", 8],
+  get_up: ["curled", "front", 8],
+  wake: ["curled", "front", 8],
+};
+
+/** Frames that belong to no family (effects, being held): never bridged from or to. */
+const NEUTRAL = ["turn_around", "dangle", "spin", "teleport", "land", "peek", "pose_glitch", "pose_chaos"];
 
 const cache = new Map<string, Family>();
 
@@ -40,7 +60,10 @@ export function familyOf(frame: string): Family {
   let f = cache.get(frame);
   if (f) return f;
   f = "any";
-  if (!NEUTRAL.some((p) => frame.startsWith(p))) {
+  const [base, i] = splitName(frame);
+  const clip = CLIPS[base];
+  if (clip) f = i < clip[2] / 2 ? clip[0] : clip[1];
+  else if (!NEUTRAL.some((p) => frame.startsWith(p))) {
     let best = 0;
     for (const [p, fam] of FAMILY_PREFIX) {
       if (frame.startsWith(p) && p.length > best && /^\d*$/.test(frame.slice(p.length))) {

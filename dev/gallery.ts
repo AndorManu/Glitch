@@ -29,7 +29,7 @@ function section(title: string, cls: string): HTMLElement {
 }
 
 async function main(): Promise<void> {
-  const sprites = q.get("old") === "1" ? await loadSprites(RACCOON) : q.get("fallback") === "1" ? await loadSprites(GLITCH) : await loadGlitchSprites();
+  const sprites = q.get("old") === "1" ? await loadSprites(RACCOON) : q.get("fallback") === "1" ? await loadSprites(GLITCH) : await loadGlitchSprites(2); // the gallery renders at DPR 2
 
   if (q.get("live") !== "0") {
     const grid = section("Live (once-animations replay)", "live");

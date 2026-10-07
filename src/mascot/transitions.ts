@@ -73,6 +73,10 @@ function buildEdges(): Partial<Record<Edge, Variant[]>> {
   add("front>curled", "yawn_down", 1, () => clip("wake", 130, { reverse: true, ease: 2 }), ["wake"]);
   add("curled>front", "get_up", 2, () => clip("get_up", 110, { ease: 2 }), ["get_up"]);
   add("curled>front", "wake", 2, () => clip("wake", 120, { ease: 2 }), ["wake"]);
+  // Off a wall onto the floor: the landing crouch (side-on), then on through
+  // side>front. Onto a wall from facing you: turn side-on first.
+  add("wall>side", "off_wall", 1, () => [key("jump7", 120), key("jump7", 80)], ["jump"]);
+  add("side>wall", "onto_wall", 1, () => [key("jump1", 90)], ["jump"]);
   // Sitting <-> lying down, directly.
   add("sit>curled", "sit_to_sleep", 1, () => clip("lie_down", 120, { ease: 2, pick: [3, 4, 5, 6, 7] }), ["lie_down"]);
   return E;
@@ -131,6 +135,18 @@ export function pickVariant(vs: Variant[], rand: () => number, last?: string): V
  */
 export function turnKeys(fam: Family, toLeft: boolean, next: string): Keyframe[] {
   if (fam === "front") return [];
+  if (fam === "wall") {
+    // On a wall or the ceiling there is no drawn turn: he swings round on the
+    // spot (a quick rotation through the wall's normal), never a mirror flip.
+    const frame = next.startsWith("climb") ? next : "climb0";
+    return [
+      key(frame, 60, { flip: true, rot: 40, pivot: 0.45 }),
+      key(frame, 60, { flip: true, rot: 85, pivot: 0.45 }),
+      key(frame, 60, { rot: -85, pivot: 0.45 }),
+      key(frame, 60, { rot: -40, pivot: 0.45 }),
+      key(frame, 70, { rot: -10, pivot: 0.45 }),
+    ];
+  }
   if (fam === "side") {
     if (has("turn_around")) {
       const ks = clip("turn_around", 75, { ease: 1 });
@@ -160,8 +176,6 @@ export function bridge(fromFrame: string | null, next: string, rand: () => numbe
   const a = familyOf(fromFrame);
   const b = familyOf(next);
   if (a === b || a === "any" || b === "any") return [];
-  // Walls and the floor are switched by the physics (corners): no clip there.
-  if (a === "wall" || b === "wall") return [];
   const p = path(a, b);
   if (!p) return glitchCut(next);
   const last = (mem.lastClip ??= {});

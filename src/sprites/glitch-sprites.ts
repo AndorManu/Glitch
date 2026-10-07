@@ -2,12 +2,17 @@
 // the tiny code-drawn fallback.
 
 import { GLITCH } from "./glitch";
-import { GLITCH_ANIM } from "./glitch-anim";
+import { GLITCH_ANIM, glitchAnimFor } from "./glitch-anim";
 import { loadSprites } from "./load";
 import { RACCOON } from "./raccoon";
 import type { SpriteSet } from "./types";
 
-export async function loadGlitchSprites(): Promise<SpriteSet> {
+export async function loadGlitchSprites(dpr = typeof window === "undefined" ? 1 : window.devicePixelRatio || 1): Promise<SpriteSet> {
+  try {
+    return await loadSprites(glitchAnimFor(dpr));
+  } catch (e) {
+    console.error("display sheet failed to load, using the art-grid sheet", e);
+  }
   try {
     return await loadSprites(GLITCH_ANIM);
   } catch (e) {

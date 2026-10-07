@@ -50,20 +50,44 @@ LEGACY = {
 }
 
 
+def drop_ground_lines(a: np.ndarray) -> np.ndarray:
+    """The original art draws a thin shadow line under some poses: drop
+    opaque rows at the bottom that are separated from the body by a gap."""
+    op = a[:, :, 3] > 0
+    rows = np.where(op.any(1))[0]
+    if len(rows) < 3:
+        return a
+    out = a.copy()
+    # Walk up from the bottom: a run of <= 2 rows followed by an empty row is a ground line.
+    y = rows.max()
+    run = 0
+    while y >= 0 and op[y].any():
+        run += 1
+        y -= 1
+    if run <= 2 and y >= 0 and not op[y].any():
+        out[y + 1 :] = 0
+    return out
+
+
 def legacy_frame(i: int) -> np.ndarray:
     a = np.array(Image.open(POSES / f"pose-{i:02d}.png").convert("RGBA"))
     a[:, :, 3] = np.where(a[:, :, 3] > 127, 255, 0)
-    a = sg.trim(a)
+    a = sg.trim(drop_ground_lines(a))
     return sg.place(a, sg.body_x(a, "left"))
 
 
 def eye_of(a: np.ndarray) -> tuple[int, int]:
-    """Centre of the glitch eye: the magenta pixels' centroid (bits included), else the head's right side."""
+    """Centre of the glitch eye: the densest 5x5 patch of magenta (the eye's
+    square ring, not the loose bits around it), else the head's right side."""
     r, g, b = (a[:, :, i].astype(int) for i in range(3))
-    m = (a[:, :, 3] > 0) & (r > 150) & (b > 180) & (g < 110)
+    m = ((a[:, :, 3] > 0) & (r > 150) & (b > 180) & (g < 110)).astype(int)
     if m.sum() >= 3:
-        ys, xs = np.where(m)
-        return int(np.median(xs)), int(np.median(ys))
+        k = 5
+        p = np.pad(m, k)
+        c = np.cumsum(np.cumsum(p, 0), 1)
+        win = c[k:, k:] - c[:-k, k:] - c[k:, :-k] + c[:-k, :-k]
+        y, x = np.unravel_index(int(np.argmax(win)), win.shape)
+        return int(x - k / 2), int(y - k / 2)
     ys, xs = np.where(a[:, :, 3] > 0)
     return int(xs.max() - 8), int(ys.min() + 22)
 
@@ -124,7 +148,39 @@ def best_shift(a: np.ndarray, ref: np.ndarray, span: int = 14) -> int:
     return best
 
 
+#: Loops drawn with the body wandering from frame to frame: every frame is
+#: shifted to overlap the first one best (sideways, and vertically for the
+#: airborne ones), so the loop holds still where the art didn't.
+STEADY = {"climb": False, "dangle": True, "dizzy": False, "spin": True, "hop_idle": False, "tail_copter": True, "glide": True, "fall_flail": True, "hang_ledge": False}
+
+
+def steady(sheet: str, frames: list[np.ndarray]) -> list[np.ndarray]:
+    if sheet not in STEADY or not frames:
+        return frames
+    vertical = STEADY[sheet]
+    ref = frames[0]
+    out = [ref]
+    for f in frames[1:]:
+        dx = best_shift(f, ref, 16)
+        g = shift_x(f, dx)
+        dy = 0
+        if vertical:
+            best = -1.0
+            mr = body_mask(ref)
+            for d in range(-8, 9):
+                m = np.roll(body_mask(g), d, axis=0)
+                u = (m | mr).sum()
+                iou = (m & mr).sum() / u if u else 0
+                if iou > best + 1e-9:
+                    best, dy = iou, d
+            g = np.roll(g, dy, axis=0)
+        out.append(g)
+    print(f"  steady {sheet}")
+    return out
+
+
 def align(sheet: str, frames: list[np.ndarray], lookup) -> list[np.ndarray]:
+    frames = steady(sheet, frames)
     refs = ALIGN.get(sheet)
     if not refs or not frames:
         return frames
@@ -197,6 +253,27 @@ def main():
     ce = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(ce)
     ce.clean(SHEET)
+    display_sheets()
+
+
+#: Display sheets: the art grid rendered at the exact device size, so the app
+#: never scales pixel art by a non-integer factor at runtime (1.5 CSS px per
+#: art px would make art pixels alternately 1 and 2 device px wide on a 1x
+#: screen). @2x: 3 device px per art px, nearest neighbour (crisp). @1x: 1.5
+#: device px per art px: nearest x3 then an area downsample by 2 (premultiplied
+#: alpha), smooth like the original high-res sheet.
+DISPLAY = {"@1x": (3, 2), "@2x": (3, 1)}
+
+
+def display_sheets():
+    art = Image.open(SHEET).convert("RGBA")
+    for suffix, (up, down) in DISPLAY.items():
+        big = art.resize((art.width * up, art.height * up), Image.NEAREST)
+        if down > 1:
+            big = big.convert("RGBa").resize((big.width // down, big.height // down), Image.BOX).convert("RGBA")
+        path = SHEET.with_name(f"{SHEET.stem}{suffix}.png")
+        big.save(path, optimize=True)
+        print(f"wrote {path.relative_to(ROOT)} ({up / down:g} px per art px)")
 
 
 if __name__ == "__main__":

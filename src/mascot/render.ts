@@ -284,10 +284,24 @@ export class Renderer {
     return { w: (img.width * s) / dpr, h: (img.height * s) / dpr };
   }
 
-  private drawSprite(c: CanvasRenderingContext2D, img: CanvasImageSource, m: M, w: number, h: number): void {
-    c.setTransform(...m);
+  private drawSprite(c: CanvasRenderingContext2D, img: FrameImage, m: M, w: number, h: number): void {
     c.imageSmoothingEnabled = !this.sprites.pixelated;
     c.imageSmoothingQuality = "high";
+    // Upright and unscaled (one sheet px = one device px, the display sheets'
+    // design): draw 1:1 at whole device pixels, never resampled.
+    const kx = (m[0] * w) / img.width;
+    const ky = (m[3] * h) / img.height;
+    if (Math.abs(m[1]) < 1e-6 && Math.abs(m[2]) < 1e-6 && Math.abs(Math.abs(kx) - 1) < 1e-3 && Math.abs(ky - 1) < 1e-3) {
+      const x0 = m[4] - (m[0] * w) / 2;
+      const left = Math.round(Math.min(x0, x0 + m[0] * w));
+      const top = Math.round(m[5] - m[3] * h);
+      if (kx < 0) c.setTransform(-1, 0, 0, 1, left + img.width, top);
+      else c.setTransform(1, 0, 0, 1, left, top);
+      c.drawImage(img, 0, 0);
+      c.setTransform(1, 0, 0, 1, 0, 0);
+      return;
+    }
+    c.setTransform(...m);
     c.drawImage(img, -w / 2, -h, w, h);
     c.setTransform(1, 0, 0, 1, 0, 0);
   }
