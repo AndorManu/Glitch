@@ -532,8 +532,8 @@ button.danger-text.armed:hover:not(:disabled) { background: var(--danger); }
 
 /* ------------------------------------------------- Settings > Features */
 
-.feature-block { margin-top: 12px; padding-top: 12px; border-top: 2px dashed var(--line-soft); }
-.feature-title { font-size: 13px; font-weight: 750; margin-bottom: 6px; }
+.fx-block { margin-top: 12px; padding-top: 12px; border-top: 2px dashed var(--line-soft); }
+.fx-title { font-size: 13px; font-weight: 750; margin-bottom: 6px; }
 .feature-line { font-size: 12.5px; margin-top: 8px; color: var(--muted); overflow-wrap: anywhere; }
 .feature-line.ok { color: var(--ok); }
 .feature-line.error { color: var(--danger); }
@@ -556,3 +556,9 @@ button.danger-text.armed:hover:not(:disabled) { background: var(--danger); }
 }
 .text-input:hover { background: var(--accent-tint); }
 .text-input::placeholder { color: var(--muted); font-weight: 500; }
+/* Features: "He reacts to what you're doing" (src/panel/features/context.ts). */
+.context-details { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; padding-left: 10px; border-left: 2px dashed var(--line-soft); }
+.context-details[hidden] { display: none; }
+.context-details .row { margin-top: 0; padding-top: 10px; align-items: flex-end; }
+.context-details .voice-field { margin-top: 0; }
+.context-details input[type="time"] { font: inherit; padding: 4px 6px; border: 2px solid var(--outline); border-radius: 8px; background: var(--surface); color: inherit; }

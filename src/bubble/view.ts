@@ -18,7 +18,7 @@ import {
   TRAIL,
   TRAIL_W,
 } from "./shapes";
-import { canSend, type BubbleState, type Speech, type Work } from "./state";
+import { canSend, updateText, type BubbleState, type Speech, type Work } from "./state";
 import { actionChip, breakChunks, centerOn, narrowestFit, tailWithin } from "./text";
 import { Typewriter } from "./typewriter";
 import { micActive, micHint, setupText, type MicState } from "./voice";
@@ -41,6 +41,9 @@ export interface ViewHandlers {
   voiceDismiss(): void;
   voiceCancelDownload(): void;
   openMicSettings(): void;
+  /** New version offer buttons. */
+  updateInstall(): void;
+  updateLater(): void;
 }
 
 /** Transparent gap kept around the shapes for their shadow and focus ring. */
@@ -61,6 +64,8 @@ type SpeechShown = {
   choices: HTMLButtonElement[];
   /** Voice setup offer: progress bar, status line, and its button rows. */
   setup?: { bar: HTMLElement; fill: HTMLElement; note: HTMLElement; pct: HTMLElement; offer: HTMLElement; running: HTMLElement };
+  /** New version offer: its two buttons and the "didn't work" line. */
+  update?: { install: HTMLButtonElement; later: HTMLButtonElement; note: HTMLElement };
 };
 /** While busy: the thought cloud (no text yet) or the reply streaming in. Both carry the step list. */
 type CloudShown = { kind: "cloud"; el: HTMLElement; work: HTMLElement };
@@ -366,7 +371,13 @@ export class BubbleView {
   private buildSpeech(speech: Speech, rev: number): { shown: SpeechShown; typed: HTMLElement; text: string } {
     const balloon = h("div", { class: `balloon ${speech.kind}${speech.kind === "notice" ? ` ${speech.tone}` : ""}` });
     const main =
-      speech.kind === "confirm" ? askPermission(speech.title) : speech.kind === "voice_setup" ? setupText(speech.sizeMb) : speech.text;
+      speech.kind === "confirm"
+        ? askPermission(speech.title)
+        : speech.kind === "voice_setup"
+          ? setupText(speech.sizeMb)
+          : speech.kind === "update"
+            ? updateText(speech.version)
+            : speech.text;
 
     // Screen readers get the whole text at once; the eyes get it typed.
     const say = h("p", { class: "say" });
@@ -428,6 +439,17 @@ export class BubbleView {
       balloon.append(bar, note, offer, running);
     }
 
+    let update: SpeechShown["update"];
+    if (speech.kind === "update") {
+      const install = h("button", { type: "button", class: "choice yes", onclick: () => this.on.updateInstall() }, "Install");
+      const later = h("button", { type: "button", class: "choice no", onclick: () => this.on.updateLater() }, "Later");
+      const note = h("p", { class: "note", role: "alert" });
+      // Focus lands on "Later": an Enter meant for the chat never installs anything.
+      choices.push(later, install);
+      update = { install, later, note };
+      balloon.append(note, h("div", { class: "choices", role: "group", "aria-label": "Update Glitch?" }, install, later));
+    }
+
     const tail = svg(TAIL, "tail");
     balloon.append(tail);
     balloon.addEventListener("click", () => this.typer?.finish());
@@ -435,7 +457,7 @@ export class BubbleView {
 
     scroll.addEventListener("scroll", () => this.markOverflow(scroll), { passive: true });
 
-    const shown: SpeechShown = { kind: "speech", rev, el, balloon, tail, choices, setup };
+    const shown: SpeechShown = { kind: "speech", rev, el, balloon, tail, choices, setup, update };
     this.updateSpeech(shown, speech);
     return { shown, typed, text: main };
   }
@@ -473,6 +495,16 @@ export class BubbleView {
       note.hidden = !text;
       const label = speech.failed ? "Try again" : "Download";
       if (offer.firstElementChild && offer.firstElementChild.textContent !== label) offer.firstElementChild.textContent = label;
+      return;
+    }
+    if (speech.kind === "update" && s.update) {
+      const { install, later, note } = s.update;
+      install.disabled = later.disabled = speech.installing;
+      const label = speech.installing ? "Installing…" : speech.failed ? "Try again" : "Install";
+      if (install.textContent !== label) install.textContent = label;
+      const text = speech.failed ?? "";
+      if (note.textContent !== text) note.textContent = text;
+      note.hidden = !text;
       return;
     }
     if (speech.kind !== "confirm") return;

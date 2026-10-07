@@ -246,7 +246,7 @@ async function render(root: HTMLElement): Promise<void> {
 export function featureBlock(title: string, fill: (body: HTMLElement) => Promise<void>): HTMLElement {
   const body = h("div", { class: "feature-body" });
   void fill(body);
-  return h("section", { class: "feature-block" }, h("h4", { class: "feature-title" }, title), body);
+  return h("section", { class: "fx-block" }, h("h4", { class: "fx-title" }, title), body);
 }
 
 export const streamFeature: Feature = { id: "stream", render: () => featureBlock("Streaming overlay", render) };

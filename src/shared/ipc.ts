@@ -21,6 +21,8 @@ export interface Settings {
   stream_overlay?: StreamSettings;
   /** Update checks (see the updates section). */
   auto_update?: UpdateSettings;
+  /** "He reacts to what you're doing" (see ./context.ts). Missing from old builds: defaults. */
+  context?: import("./context").ContextSettings;
 }
 
 export interface MemoryFact {

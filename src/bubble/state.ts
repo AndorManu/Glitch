@@ -17,7 +17,9 @@ export type Speech =
   /** Voice: a hint or a microphone problem (optionally with an "Open settings" button). */
   | { kind: "notice"; text: string; tone: "info" | "error"; action: "mic-settings" | null }
   /** Voice: offer to download the speech model, then its progress. */
-  | { kind: "voice_setup"; model: string; sizeMb: number; progress: number | null; failed: string | null };
+  | { kind: "voice_setup"; model: string; sizeMb: number; progress: number | null; failed: string | null }
+  /** A new version of Glitch: Install / Later (src-tauri/src/autoupdate.rs). */
+  | { kind: "update"; version: string; installing: boolean; failed: string | null };
 
 /** One tool step in the live step list ("Reading your clipboard"). */
 export interface WorkStep {
@@ -69,6 +71,10 @@ export type BubbleEvent =
   | { type: "voice_setup"; model: string; sizeMb: number }
   /** "Clear chat" in Settings: a fresh start (drops anything in flight). */
   | { type: "cleared" }
+  /** A new version is out (and not snoozed): offer it. */
+  | { type: "update_offer"; version: string }
+  /** Installing it started / stopped (`failed`: why it stopped). */
+  | { type: "update_state"; installing: boolean; failed: string | null }
   /** Speech-model download progress (percent), or its end. */
   | { type: "voice_download"; state: "running" | "done" | "failed" | "cancelled"; percent: number | null; failed: string | null; ready: string };
 
@@ -78,6 +84,13 @@ export type Request = { kind: "send"; text: string } | { kind: "confirm"; id: st
 export interface Transition {
   state: BubbleState;
   request: Request | null;
+}
+
+export const UPDATE_FAILED = "The update didn't go through. Try again later?";
+
+/** What Glitch says about a new version. */
+export function updateText(version: string): string {
+  return `Psst! There's a new me: Glitch ${version}. Want me to update myself? I'll be back in a few seconds.`;
 }
 
 /** Reopening the bubble after this long shows just the pill again. */
@@ -178,6 +191,19 @@ export function transition(s: BubbleState, e: BubbleEvent): Transition {
     case "voice_setup":
       if (s.busy) return none(s);
       return none(speak(s, { kind: "voice_setup", model: e.model, sizeMb: e.sizeMb, progress: null, failed: null }));
+    case "update_offer":
+      if (s.busy) return none(s);
+      // Already offering (or installing) this one: keep it as it is.
+      if (s.speech?.kind === "update" && s.speech.version === e.version) return none(s);
+      return none(speak(s, { kind: "update", version: e.version, installing: false, failed: null }));
+    case "update_state": {
+      const sp = s.speech;
+      if (sp?.kind !== "update") return none(s);
+      // Stopped without restarting: it failed (the restart never comes back here).
+      const failed = !e.installing && sp.installing ? (e.failed ?? UPDATE_FAILED) : e.installing ? null : sp.failed;
+      if (sp.installing === e.installing && sp.failed === failed) return none(s);
+      return none({ ...s, speech: { ...sp, installing: e.installing, failed } });
+    }
     case "voice_download": {
       const sp = s.speech;
       if (s.busy || sp?.kind !== "voice_setup") return none(s);
