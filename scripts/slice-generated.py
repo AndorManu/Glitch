@@ -193,6 +193,32 @@ def dehalo(a: np.ndarray, passes: int = 2) -> np.ndarray:
     return a
 
 
+def drop_strays(a: np.ndarray, max_px: int = 24) -> np.ndarray:
+    """Remove small loose pixel clusters on the tail side (the neighbouring
+    frame's glitch pixels that ended up in this frame's slice)."""
+    op = a[:, :, 3] > 0
+    h, w = op.shape
+    seen = np.zeros_like(op)
+    out = a.copy()
+    for y0, x0 in zip(*np.where(op)):
+        if seen[y0, x0]:
+            continue
+        comp, q = [], [(y0, x0)]
+        seen[y0, x0] = True
+        while q:
+            y, x = q.pop()
+            comp.append((y, x))
+            for yy in range(y - 1, y + 2):
+                for xx in range(x - 1, x + 2):
+                    if 0 <= yy < h and 0 <= xx < w and op[yy, xx] and not seen[yy, xx]:
+                        seen[yy, xx] = True
+                        q.append((yy, xx))
+        if len(comp) <= max_px and np.mean([x for _, x in comp]) < w * 0.3:
+            for y, x in comp:
+                out[y, x] = 0
+    return out
+
+
 def trim(a: np.ndarray) -> np.ndarray:
     op = a[:, :, 3] > 0
     if not op.any():
@@ -268,7 +294,7 @@ def process(name: str, cfg: dict, report: dict) -> list[np.ndarray]:
     votes = 0
     for i, c in enumerate(crops):
         _, ox, oy = best_pitch(c, use * 2 - 0.01, use * 2 + 0.01)
-        art = trim(dehalo(sample(c, use, ox % use, oy % use)))
+        art = trim(drop_strays(trim(dehalo(sample(c, use, ox % use, oy % use)))))
         ex = glitch_eye_x(art)
         if ex is not None:
             votes += 1 if ex > art.shape[1] / 2 else -1
