@@ -14,6 +14,7 @@
 
 import { RACCOON } from "../sprites/raccoon";
 import type { FrameImage, SpriteSet } from "../sprites/types";
+import type { AccessoryLayer } from "./accessories";
 import type { Pose, PropPlacement } from "./animations";
 import { mulberry32, planBlocks, planSlices, planTrail, type Rect, seedFor } from "./glitchfx";
 import { PROP_PALETTE, PROP_PX, PROPS, type GridPropName } from "./props";
@@ -145,6 +146,8 @@ export class Renderer {
    */
   contact = false;
   shadow = false;
+  /** Hats, eye colour, play overlays, sinking out of sight, chubbiness (accessories.ts). */
+  accessories: AccessoryLayer | null = null;
   /** Drawn body's bounding box (window CSS px) at the last render, for the click hitbox. */
   bodyRect: BodyRect | null = null;
   private readonly opaque = new WeakMap<object, [number, number, number, number]>();
@@ -214,6 +217,7 @@ export class Renderer {
     this.drawProps(pose.props, false, dpr, propFace);
     if (pose.glitch > 0 || pose.fx === "eye") this.drawEyeSparks(img, pose, m, w, h, rand, dpr, mir);
     if (pose.fx) this.drawFx(pose, tick, rand, dpr, face);
+    this.accessories?.draw({ ctx, dpr, css, img, w, h, frame: pose.frame, eye: this.sprites.eye?.(pose.frame) ?? null, placement: this.placement, hidden: pose.dissolve >= 1, tick });
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
   }
@@ -224,7 +228,8 @@ export class Renderer {
     const mo = this.motion;
     const shear: M = [1, 0, mo.shear, 1, 0, 0];
     const pad = this.contact ? this.feetPad() : 0;
-    return [translate(p.x, p.y), rotate(p.angle), translate(0, pad), translate(0, mo.pivotY), shear, scale(mo.sx, mo.sy), translate(0, -mo.pivotY)].reduce(mul);
+    const acc = this.accessories;
+    return [translate(p.x, p.y), rotate(p.angle), translate(0, pad + (acc?.sink ?? 0)), translate(0, mo.pivotY), shear, scale(mo.sx * (acc?.girth ?? 1), mo.sy), translate(0, -mo.pivotY)].reduce(mul);
   }
 
   /** Transparent CSS px under the feet in the standing frame (same baseline for the whole sheet). */
