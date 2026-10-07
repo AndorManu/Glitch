@@ -174,6 +174,19 @@ def trim_thin_bottom(a: np.ndarray, keep: int) -> np.ndarray:
     return out
 
 
+def head_x(a: np.ndarray) -> float:
+    """x centre of the head: the top third of the character, glitch pixels ignored."""
+    v = a[:, :, :3].astype(int)
+    glitchy = ((v[..., 0] > 120) & (v[..., 2] > 140) & (v[..., 1] < 120)) | ((v[..., 2] > 150) & (v[..., 1] > 150) & (v[..., 0] < 120))
+    m = (a[:, :, 3] > 0) & ~glitchy
+    ys = np.where(m.any(1))[0]
+    if not len(ys):
+        return a.shape[1] / 2
+    top, bottom = ys.min(), ys.max()
+    band = m[top : top + max(1, (bottom - top) // 3)]
+    return float(np.where(band)[1].mean())
+
+
 def body_height(c: np.ndarray) -> int:
     """Height of the character in a source crop, ignoring the loose glitch
     pixels (magenta/purple/cyan) that float around him."""
@@ -538,6 +551,11 @@ def process(name: str, cfg: dict, report: dict) -> list[np.ndarray]:
         return "right" if ex is not None and ex < f.shape[1] * 0.42 else "left"
 
     anchors = [body_x(f, tail_side(f)) - cfg.get("shift", 0) for f in frames]
+    if cfg.get("anchor") == "head":
+        # Turning round: the tail swings from one side to the other, so anchor on the head
+        # (its centre is the turn's pivot), keeping the first frame where body_x put it.
+        heads = [head_x(f) for f in frames]
+        anchors = [anchors[0] + (hx - heads[0]) for hx in heads]
     placed = [place(f, ax) for f, ax in zip(frames, anchors)]
     if cfg.get("cursor_clean"):
         placed, grips = clean_cursor(placed)
@@ -587,6 +605,8 @@ for _name in ["sit_down", "stand_up_paws", "stand_up_hop", "stand_up_glitch", "t
 for _name in ["stand_up_paws", "stand_up_hop", "stand_up_glitch", "turn_side_to_front", "walk_stop", "get_up"]:
     SHEETS[_name]["ref"] = -1  # these end standing
 SHEETS["turn_around"]["target"] = 54  # side-on, like walk0
+for _name in ["turn_around", "turn_front_to_side", "turn_side_to_front", "turn_to_back"]:
+    SHEETS[_name]["anchor"] = "head"
 # Sitting: as tall as the sitting end of sit_down / the start of stand_up_* (~47 px
 # when standing is 55), so sitting down lands exactly on the sit loop.
 SHEETS["sit"] = {"ref": 0, "target": 47, "tolerance": 0}

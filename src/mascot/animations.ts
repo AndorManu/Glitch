@@ -607,13 +607,20 @@ export function landKeys(impact: number, base: Omit<Keyframe, "ms"> = { frame: "
 /** Sitting on the very edge of a window, legs over the side, swinging (the drawn swing). */
 function sitEdgeKeys(rand: () => number): Keyframe[] {
   // Lowered so he sits on the edge with his legs hanging over it.
-  const over = { dy: 24 };
+  const over = { dy: EDGE_DY };
   if (!has("sit_edge_swing")) return [k("sit0", 1500, { dy: 14 })];
   const keys: Keyframe[] = [];
   for (let i = 0; i < 3; i++) keys.push(...cycle("sit_edge_swing", [0, 1, 2, 3, 4, 5, 6, 7], 150 + rand() * 60, over));
   keys.push(k("sit_edge_swing0", 1200 + rand() * 800, over));
   return keys;
 }
+
+/**
+ * Sitting on a window's edge: the swing frames are drawn with the legs
+ * hanging, the head 30 art px higher in the frame than sitting (sit_down7);
+ * lowered by that (x1.5 CSS px) the heads line up and his seat is on the edge.
+ */
+const EDGE_DY = 45;
 
 /** Ramp a clip's dy from a to b (CSS px). */
 const slideDy = (keys: Keyframe[], a: number, b: number): Keyframe[] => keys.map((key, i) => ({ ...key, dy: a + ((b - a) * i) / Math.max(1, keys.length - 1) }));
@@ -622,7 +629,8 @@ const slideDy = (keys: Keyframe[], a: number, b: number): Keyframe[] => keys.map
 function edgeSitDown(_rand: () => number, mem: Memory): Keyframe[] {
   const fam = familyOf(String(mem.fromFrame ?? ""));
   if (fam !== "front" || !has("sit_down")) return [];
-  return slideDy(clip("sit_down", 95, { ease: 2 }), 0, 24);
+  // Sits down, then slides forward over the edge so his seat ends on it and the legs hang over.
+  return [...clip("sit_down", 95, { ease: 2 }), ...slideDy([k("sit_down7", 90), k("sit_down7", 90), k("sit_down7", 90)], EDGE_DY / 4, (EDGE_DY * 3) / 4)];
 }
 
 /** Off the edge: back up onto it and stand (one of the drawn stand-ups). */
@@ -632,7 +640,7 @@ function edgeStandUp(rand: () => number, mem: Memory): Keyframe[] {
   const last = ((mem.lastClip as Record<string, string>) ??= {});
   const v = pickVariant(up, rand, last["sit>front"]);
   last["sit>front"] = v.id;
-  return slideDy(v.keys(rand, mem), 24, 0);
+  return [...slideDy([k("sit_down7", 90), k("sit_down7", 90), k("sit_down7", 90)], (EDGE_DY * 3) / 4, EDGE_DY / 4), ...v.keys(rand, mem)];
 }
 
 /** At a window's edge: lean right over it to look down, eye flickering. */

@@ -446,9 +446,11 @@ export class Creature {
     if (left === this.facingLeft) return [];
     const frame = this.animator.pose?.frame ?? "idle0";
     this.facingLeft = left;
-    if (this.mode !== "stand" || this.asleep) return [];
+    if (this.asleep) return [];
     const fam = familyOf(frame);
-    if (fam === "wall" && !isStanding(this.surface)) return turnKeys("wall", left, frame);
+    // Crawling on a wall (also mid-corner or letting go): swing round, never a mirror flip.
+    if (fam === "wall") return turnKeys("wall", left, frame);
+    if (this.mode !== "stand") return [];
     if (!isStanding(this.surface)) return [];
     return fam === "side" || fam === "front" ? turnKeys(fam, left, frame) : [];
   }
@@ -830,7 +832,10 @@ export class Creature {
   private kTarget(): number {
     if (this.mode !== "stand" && this.mode !== "corner") return 0;
     // On his own platform the feet sit higher so the slab under them fits in the window.
-    return this.surface.kind === "platform" ? 0.55 : 1;
+    if (this.surface.kind === "platform") return 0.55;
+    // Sitting on an edge with his legs over it: the feet line higher, so the legs fit in the window.
+    if (this.animator && (this.animator.animation === "sitEdge" || this.animator.animation === "sit_edge_swing")) return 0.2;
+    return 1;
   }
 
   private needsMotion(): boolean {
@@ -1245,6 +1250,7 @@ export class Creature {
       this.flight = null;
       this.motion = CALM;
       this.settle({ kind: c.side as "left" | "right" | "ceiling" });
+      // Grabbing on: the cling pose turned the way he faces (the frame before was a flight pose, never mirrored).
       this.facingLeft = this.rand() < 0.5;
       this.animator.play("cling");
       this.animator.glitchBurst(220);
@@ -1444,6 +1450,8 @@ export class Creature {
   }
 
   private animationChanged(name: AnimationName): void {
+    // Sitting on an edge raises the feet in the window (kTarget): ease there.
+    if (this.mode === "stand" && Math.abs(this.k - this.kTarget()) > 1e-3) this.ensureMotion();
     if (name === "sleep") return this.enterSleep();
     const w = this.waiting;
     if (w && name !== w.name) {
@@ -1533,6 +1541,14 @@ export class Creature {
         return this.nextStep();
       }
       case "jump": {
+        // Asleep or sitting: get up first (the drawn get-up / stand-up), then jump.
+        const fam = familyOf(this.animator.pose?.frame ?? "idle0");
+        if (this.mode === "stand" && (fam === "curled" || fam === "sit")) {
+          this.asleep = false;
+          this.animator.play("idle");
+          this.stepIndex--;
+          return this.wait(1200, () => this.nextStep());
+        }
         const spin = step.spin ?? 0;
         const kicking = this.mode === "air" && !!this.flight?.frozen;
         const jp = planJump(this.body, step.to, w, step.height ?? (spin ? 150 : undefined));
@@ -1608,7 +1624,7 @@ export class Creature {
         if (step.float) {
           // Let go and float down: upright, no tumbling.
           this.body.spin = 0;
-          this.facingLeft = (step.drift ?? 0) < 0;
+          this.turnNow((step.drift ?? 0) < 0);
           const anim = chaosAnim(step.float === "copter" ? "tail_copter" : "glide");
           this.launch({ x: push.x * 0.5, y: -40 * u }, { planned: true, panic: false, drag: false, extra: { anim, float: { drift: step.drift ?? 0 } } });
           return;
