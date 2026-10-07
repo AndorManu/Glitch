@@ -123,7 +123,9 @@ export type BehaviourName =
   | "fish"
   | "wallJump"
   /** Chaos mode (planned by chaos.ts, never picked by the dice here). */
-  | "mischief";
+  | "mischief"
+  /** Reacting to what the user does (planned by context.ts, never picked by the dice). */
+  | "react";
 
 export interface Plan {
   name: BehaviourName;
@@ -174,6 +176,7 @@ export const BEHAVIOURS: Record<BehaviourName, Entry> = {
   sleep: { weight: 0, cooldown: 0, moves: false },
   celebrate: { weight: 0, cooldown: 0, moves: false },
   mischief: { weight: 0, cooldown: 0, moves: true },
+  react: { weight: 0, cooldown: 0, moves: false },
   copter: { weight: 1.1, cooldown: 120, moves: true },
   hangOn: { weight: 1.3, cooldown: 90, moves: true },
   slideDown: { weight: 1.2, cooldown: 90, moves: true },
@@ -390,6 +393,8 @@ export class Brain {
         return standing ? steps({ do: "anim", name: "yawn" }) : null;
       case "mischief":
         return null; // chaos.ts plans these (it needs to ask Rust first)
+      case "react":
+        return null; // context.ts plans these (from what the user is doing)
       case "copter":
         return this.planCopter(ctx);
       case "hangOn": {

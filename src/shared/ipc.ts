@@ -19,6 +19,8 @@ export interface Settings {
   voice?: VoiceSettings;
   /** Games, play and growth + wardrobe (see the play section at the end of this file). */
   play?: PlaySettings;
+  /** "He reacts to what you're doing" (see ./context.ts). Missing from old builds: defaults. */
+  context?: import("./context").ContextSettings;
 }
 
 export interface MemoryFact {

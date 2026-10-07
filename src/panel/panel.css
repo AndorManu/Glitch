@@ -529,3 +529,10 @@ button.danger-text.armed:hover:not(:disabled) { background: var(--danger); }
 .voice-model-line.stack { flex-direction: column; align-items: flex-start; gap: 6px; }
 .voice-error { color: var(--danger); }
 .voice-gap { height: 12px; border-bottom: 2px dashed var(--line-soft); margin-bottom: 12px; }
+
+/* Features: "He reacts to what you're doing" (src/panel/features/context.ts). */
+.context-details { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; padding-left: 10px; border-left: 2px dashed var(--line-soft); }
+.context-details[hidden] { display: none; }
+.context-details .row { margin-top: 0; padding-top: 10px; align-items: flex-end; }
+.context-details .voice-field { margin-top: 0; }
+.context-details input[type="time"] { font: inherit; padding: 4px 6px; border: 2px solid var(--outline); border-radius: 8px; background: var(--surface); color: inherit; }

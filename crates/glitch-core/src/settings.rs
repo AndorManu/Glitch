@@ -7,6 +7,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::ai::ollama;
+use crate::context::ContextSettings;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -35,6 +36,9 @@ pub struct Settings {
     pub voice: VoiceSettings,
     /// Games, play and growth + the wardrobe (see play.rs). Missing in older files -> defaults.
     pub play: crate::play::PlaySettings,
+    /// "He reacts to what you're doing" (music, coding, games, focus...).
+    /// Missing in older files -> defaults (all on except focus auto-suggest).
+    pub context: ContextSettings,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -71,6 +75,7 @@ impl Default for Settings {
             notes_trusted: false,
             voice: VoiceSettings::default(),
             play: crate::play::PlaySettings::default(),
+            context: ContextSettings::default(),
         }
     }
 }
@@ -163,6 +168,7 @@ mod tests {
         let s = Settings::load(&path);
         assert!(s.onboarding_done && !s.memory_enabled);
         assert_eq!(s.voice, VoiceSettings::default());
+        assert_eq!(s.context, ContextSettings::default());
         // Partial voice section: the rest falls back to defaults.
         std::fs::write(&path, r#"{"voice":{"model":"tiny","future":1}}"#).unwrap();
         let s = Settings::load(&path);

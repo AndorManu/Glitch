@@ -4,6 +4,8 @@
 mod chaos;
 mod chaos_native;
 mod commands;
+mod context;
+mod context_native;
 mod desktop;
 mod hover;
 mod layout;
@@ -34,11 +36,12 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let chaos = CheckMenuItem::with_id(app, "chaos", "Chaos mode", true, state.settings().chaos_enabled, None::<&str>)?;
+    let focus = context::tray_item(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Glitch", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let fetch = MenuItem::with_id(app, "play_fetch", "Play fetch", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, "play_hide", "Play hide and seek", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&chat, &fetch, &hide, &wander, &chaos, &settings, &sep, &quit])?;
+    let menu = Menu::with_items(app, &[&chat, &fetch, &hide, &wander, &chaos, &focus, &settings, &sep, &quit])?;
     *state.wander_item.lock().unwrap() = Some(wander);
     *state.chaos_item.lock().unwrap() = Some(chaos);
 
@@ -70,6 +73,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 }
                 "play_fetch" => play::start_game(app, glitch_core::play::Game::Fetch),
                 "play_hide" => play::start_game(app, glitch_core::play::Game::HideSeek),
+                "focus" => context::tray_toggle(app),
                 "quit" => {
                     let app = app.clone();
                     tauri::async_runtime::spawn(async move { commands::quit_app(&app).await });
@@ -100,6 +104,7 @@ fn main() {
             app.manage(AppState::new(app.handle(), app.path().app_config_dir()?));
             app.manage(hover::Hitbox::default());
             app.manage(chaos::ChaosState::default());
+            app.manage(context::ContextState::default());
             voice::setup(app.handle());
             hover::start(app.handle().clone());
             os::configure(app);
@@ -110,6 +115,8 @@ fn main() {
             windows::place_mascot(app.handle());
             play::watch_drops(app.handle());
             chaos::debug_trigger(app.handle());
+            context::start(app.handle());
+            context::debug_trigger(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -164,6 +171,10 @@ fn main() {
             play::belly_list,
             play::belly_restore,
             play::belly_choose_folder,
+            context::context_status,
+            context::focus_start,
+            context::update_context_settings,
+            context::context_debug,
             ledge_watch::ledge_watch,
             ledge_watch::ledge_frame,
             voice::commands::voice_status,
