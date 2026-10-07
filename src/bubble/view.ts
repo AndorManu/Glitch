@@ -31,6 +31,8 @@ export interface ViewHandlers {
   openSetup(): void;
   /** The current speech has been fully revealed on screen. */
   seen(): void;
+  /** Glitch starts "saying" a reply or question of `chars` characters (he moves his mouth). */
+  talk?(chars: number): void;
   /** Mic button pressed / released (pointer or keyboard). */
   micDown(): void;
   micUp(): void;
@@ -312,6 +314,7 @@ export class BubbleView {
     const scroll = shown.balloon.querySelector<HTMLElement>(".scroll");
     if (scroll) this.markOverflow(scroll);
     if (this.live) queueMicrotask(() => typer.start());
+    if (this.live && (speech.kind === "reply" || speech.kind === "confirm") && text.trim()) this.on.talk?.(text.length);
   }
 
   private buildCloud(): HTMLElement {

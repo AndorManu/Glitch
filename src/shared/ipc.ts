@@ -71,7 +71,7 @@ export interface PullProgress {
   total: number | null;
 }
 
-export type Mood = "thinking" | "happy" | "asking" | "idle" | "listening";
+export type Mood = "thinking" | "happy" | "asking" | "idle" | "listening" | "talking";
 
 export type PanelView = "setup" | "settings";
 
@@ -133,6 +133,12 @@ export function asUiError(e: unknown): UiError {
  * finished, so the bubble drops what it was showing.
  */
 export const CHAT_CLEARED_EVENT = "chat-cleared";
+
+/**
+ * Window-to-window event (no Rust involved): the bubble started showing a
+ * reply of N characters; the mascot moves his mouth for a while (payload: N).
+ */
+export const MASCOT_TALK_EVENT = "mascot-talk";
 
 export const api = {
   setupStatus: () => invoke<SetupStatus>("setup_status"),

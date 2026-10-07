@@ -270,8 +270,29 @@ export class Creature {
   /** Stop every timer (tests, page unload). */
   dispose(): void {
     this.animator.stop();
-    for (const t of [this.motionTimer, this.brainTimer, this.pollTimer, this.actionTimer]) if (t !== null) this.clock.clearTimeout(t);
-    this.motionTimer = this.brainTimer = this.pollTimer = this.actionTimer = null;
+    for (const t of [this.motionTimer, this.brainTimer, this.pollTimer, this.actionTimer, this.talkTimer]) if (t !== null) this.clock.clearTimeout(t);
+    this.motionTimer = this.brainTimer = this.pollTimer = this.actionTimer = this.talkTimer = null;
+  }
+
+  private talkTimer: unknown = null;
+
+  /**
+   * The chat bubble started showing a reply of `chars` characters: move his
+   * mouth for about as long as it takes to read (1.2-6 s), then go back to
+   * the mood he was in. Ignored while he is busy (thinking, listening), not
+   * standing, held or asleep.
+   */
+  talk(chars: number): void {
+    const ms = Math.min(6000, Math.max(1200, chars * 45));
+    if (this.mode !== "stand" || this.hold || this.asleep) return;
+    if (this.mood !== "idle" && this.mood !== "happy" && this.mood !== "talking") return;
+    const after = this.mood === "talking" ? "idle" : this.mood;
+    if (this.talkTimer !== null) this.clock.clearTimeout(this.talkTimer);
+    this.setMood("talking");
+    this.talkTimer = this.clock.setTimeout(() => {
+      this.talkTimer = null;
+      if (this.mood === "talking") this.setMood(after === "happy" ? "idle" : after);
+    }, ms);
   }
 
   private settle(surface: Surface): void {

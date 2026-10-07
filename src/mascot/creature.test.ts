@@ -316,6 +316,23 @@ describe("creature: reactions", () => {
     expect(t.c.animation).toBe("idle");
   });
 
+  it("talks while a reply appears, then goes back to idle; not while thinking", async () => {
+    const t = setup({ seed: 3 });
+    await t.c.start({ x: 1700, y: 880 });
+    await t.fc.run(500);
+    t.c.talk(60); // 60 chars: 2.7 s
+    expect(t.c.animation).toBe("talk");
+    await t.fc.run(2000);
+    expect(t.c.animation).toBe("talk");
+    await t.fc.run(1000);
+    expect(t.c.mood).toBe("idle");
+    expect(t.c.animation).not.toBe("talk");
+    t.c.setMood("thinking");
+    t.c.talk(60);
+    expect(t.c.animation).toBe("think");
+    t.c.dispose();
+  });
+
   it("listening: at most ~10 repaints per second", async () => {
     const t = setup();
     await t.c.start({ x: 1700, y: 880 });

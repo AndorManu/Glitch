@@ -16,7 +16,7 @@ import {
   PhysicalPosition,
   primaryMonitor,
 } from "@tauri-apps/api/window";
-import { api, type Settings, type WorldSnapshot } from "../shared/ipc";
+import { api, MASCOT_TALK_EVENT, type Settings, type WorldSnapshot } from "../shared/ipc";
 import { loadGlitchSprites } from "../sprites/glitch-sprites";
 import type { AnimationName } from "./animations";
 import { Creature, type Host } from "./creature";
@@ -137,6 +137,8 @@ async function main(): Promise<void> {
   await listen<boolean>("mascot-hover", (e) => c.setHovered(e.payload));
   // For behaviours driven from Rust or other windows; unknown names are ignored.
   await listen<string>("mascot-action", (e) => void playAction(e.payload));
+  // The bubble shows a reply: he says it (mouth moving while it appears).
+  await listen<number>(MASCOT_TALK_EVENT, (e) => c.talk(Number(e.payload) || 0));
   window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener("change", () => renderer.redraw());
   // Show only now that the first frame is drawn (no blank/white flash).
   await win.show();

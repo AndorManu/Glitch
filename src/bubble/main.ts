@@ -5,11 +5,12 @@
 // and the thought cloud (only while the model is working, paused when the
 // window is hidden).
 
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import {
   api,
   asUiError,
   CHAT_CLEARED_EVENT,
+  MASCOT_TALK_EVENT,
   voiceApi,
   type BubbleLayout,
   type Settings,
@@ -42,6 +43,8 @@ const view = new BubbleView(root, {
   openSettings: () => void api.showPanel("settings").catch(() => {}),
   openSetup: () => void api.showPanel("setup").catch(() => {}),
   seen: () => dispatch({ type: "seen" }),
+  // The mascot window moves his mouth while the reply appears (see MASCOT_TALK_EVENT).
+  talk: (chars) => void emit(MASCOT_TALK_EVENT, chars).catch(() => {}),
   micDown: () => micDispatch({ type: "press", at: performance.now() }),
   micUp: () => micDispatch({ type: "release", at: performance.now() }),
   voiceDownload: () => void voiceApi.downloadModel(setupModel()).catch(() => {}),
