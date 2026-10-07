@@ -8,3 +8,5 @@ dev/ollama-check/report.json
 
 # local agent worktrees
 .claude/worktrees/
+dev/out/
+art/frames/

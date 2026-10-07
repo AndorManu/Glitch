@@ -12,8 +12,7 @@ import { mulberry32 } from "../src/mascot/glitchfx";
 import type { Vec } from "../src/mascot/physics";
 import { type BodyRect, Renderer } from "../src/mascot/render";
 import type { Ledge, WorldSnapshot } from "../src/shared/ipc";
-import { loadSprites } from "../src/sprites/load";
-import { RACCOON } from "../src/sprites/raccoon";
+import { loadGlitchSprites } from "../src/sprites/glitch-sprites";
 
 const q = new URLSearchParams(location.search);
 const DEBUG = q.get("debug") === "1";
@@ -295,7 +294,7 @@ function frame(): void {
 }
 
 async function main(): Promise<void> {
-  const sprites = await loadSprites(RACCOON);
+  const sprites = await loadGlitchSprites();
   renderer = new Renderer(mascotCanvas, sprites, { pixelRatio: () => DPR });
   const render = renderer.render.bind(renderer);
   renderer.render = (pose, tick) => {

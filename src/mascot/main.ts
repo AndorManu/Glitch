@@ -17,9 +17,7 @@ import {
   primaryMonitor,
 } from "@tauri-apps/api/window";
 import { api, type Settings, type WorldSnapshot } from "../shared/ipc";
-import { GLITCH } from "../sprites/glitch";
-import { loadSprites } from "../sprites/load";
-import { RACCOON } from "../sprites/raccoon";
+import { loadGlitchSprites } from "../sprites/glitch-sprites";
 import type { AnimationName } from "./animations";
 import { Creature, type Host } from "./creature";
 import { WIN, type Vec } from "./physics";
@@ -118,10 +116,7 @@ function applySettings(s: Settings): void {
 
 async function main(): Promise<void> {
   // The raccoon sheet; the tiny code-drawn creature only if the PNG fails.
-  const sprites = await loadSprites(RACCOON).catch((e) => {
-    console.error("sprite sheet failed to load, using fallback art", e);
-    return loadSprites(GLITCH);
-  });
+  const sprites = await loadGlitchSprites();
   const renderer = new Renderer(canvas, sprites);
   const c = new Creature(host, renderer);
   creature = c;

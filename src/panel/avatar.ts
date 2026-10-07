@@ -24,7 +24,7 @@ export function squareCrop(w: number, h: number, focusX = 0.5, zoom = 1): Rect {
 
 /** Draw Glitch's portrait into a square canvas of `size` CSS px. */
 export async function drawAvatar(c: HTMLCanvasElement, size: number): Promise<void> {
-  const sprites = await loadSprites(RACCOON).catch(() => loadSprites(GLITCH));
+  const sprites = await loadSprites(RACCOON).catch(() => loadSprites(GLITCH)); // portrait: the smooth 2x sheet
   const img = sprites.frame("idle0");
   const dpr = window.devicePixelRatio || 1;
   c.width = c.height = Math.round(size * dpr);
