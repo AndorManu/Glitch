@@ -115,6 +115,9 @@ export function transition(s: BubbleState, e: BubbleEvent): Transition {
       return none(s);
     }
     case "cleared":
+      // A speech-model download keeps running in Rust: keep its progress
+      // balloon, or "done" would have nothing to land on.
+      if (s.speech?.kind === "voice_setup" && s.speech.progress !== null) return none({ ...s, busy: false });
       return none(speak(s, { kind: "reply", text: CLEARED, actions: [] }));
     case "notice":
       if (s.busy) return none(s);

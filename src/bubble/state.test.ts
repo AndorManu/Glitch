@@ -26,6 +26,18 @@ describe("bubble state", () => {
     expect(canSend(asking, "x")).toBe(true);
   });
 
+  it("Clear chat keeps a running speech-model download on screen", () => {
+    const downloading = run(
+      initialState(),
+      { type: "voice_setup", model: "base", sizeMb: 142 },
+      { type: "voice_download", state: "running", percent: 40, failed: null, ready: "Ready" },
+      { type: "cleared" },
+    );
+    expect(downloading.speech).toMatchObject({ kind: "voice_setup", progress: 40 });
+    const done = run(downloading, { type: "voice_download", state: "done", percent: 100, failed: null, ready: "Ready" });
+    expect(done.speech).toEqual({ kind: "reply", text: "Ready", actions: [] });
+  });
+
   it("sends trimmed text once and thinks", () => {
     const t = transition(initialState(), { type: "send", text: "  hi  " });
     expect(t.request).toEqual({ kind: "send", text: "hi" });
