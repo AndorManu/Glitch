@@ -172,8 +172,8 @@ async function open(query = "") {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2 });
   page.on("pageerror", (e) => console.error("page error:", e.message));
   await page.clock.install({ time: new Date("2026-10-07T09:00:00") });
-  await page.goto(`${BASE}/dev/stage.html?seed=${SEED}${query}`);
-  await page.waitForSelector("body[data-ready='1']", { timeout: 30000 });
+  await page.goto(`${BASE}/dev/stage.html?seed=${SEED}${query}`, { timeout: 180000, waitUntil: "domcontentloaded" });
+  await page.waitForSelector("body[data-ready='1']", { timeout: 180000 });
   const now = await page.evaluate(() => Date.now());
   await page.clock.pauseAt(now + 200);
   await page.clock.runFor(800);
