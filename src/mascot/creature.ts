@@ -1073,9 +1073,11 @@ export class Creature {
     const u = this.u;
     const feet = { x: this.body.x, y: this.body.y + HALF * u };
     if (this.pawLast && Math.hypot(feet.x - this.pawLast.x, feet.y - this.pawLast.y) < 22 * u) return;
+    // Toes lean the way he walks, so the trail reads as footsteps going somewhere.
+    const lean = this.pawLast ? Math.sign(feet.x - this.pawLast.x) * 18 : 0;
     this.pawLast = feet;
     this.pawLeft = !this.pawLeft;
-    this.host.chaos.paws([{ x: feet.x, y: feet.y, angle: 0, left: this.pawLeft }]);
+    this.host.chaos.paws([{ x: feet.x, y: feet.y, angle: lean, left: this.pawLeft }]);
   }
 
   /** Knock on the inside of the screen glass. */
