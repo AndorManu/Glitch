@@ -8,7 +8,7 @@ use glitch_core::ai::ollama::PullProgress;
 use glitch_core::ai::AiError;
 use glitch_core::memory::{Fact, JournalEntry, MemoryStore};
 use glitch_core::models::{self, Recommendation};
-use glitch_core::platform::{self, Os, Platform};
+use glitch_core::platform::{self, Os};
 use glitch_core::settings::Settings;
 use glitch_core::world::{self, Ledge, ScreenRect};
 use serde::{Deserialize, Serialize};

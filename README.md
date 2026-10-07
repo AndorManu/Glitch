@@ -72,6 +72,13 @@ and on first run the setup panel opens next to it.
 To build a normal installer instead: `npm run tauri build`. The installer ends
 up in `target\release\bundle\nsis\` (named like `Glitch_0.1.0_x64-setup.exe`).
 
+If the build fails in `whisper-rs-sys` with `MSB6003 ... Could not find a part
+of the path`, the folder path is too long for MSBuild (260 characters): clone
+into a short folder (e.g. `C:\src\Glitch`) or set a short build folder first:
+`$env:CARGO_TARGET_DIR = "C:\gt"` (the installer is then in
+`C:\gt\release\bundle\nsis\`). `Unable to find libclang` means LLVM (step 6)
+is missing or `LIBCLANG_PATH` doesn't point at its `bin` folder.
+
 ## 2. Run it on macOS
 
 You need these once:
@@ -419,6 +426,20 @@ off on Linux, so it wasn't part of this run.
 **Live check with a real Ollama:** `node dev/ollama-check/check.mjs --pull`
 sends Glitch's exact prompts/tools to your local Ollama and checks the model
 calls the right tools (see [dev/ollama-check](dev/ollama-check/check.mjs)).
+
+**Windows end-to-end smoke test:** `node dev/windows-smoke.mjs` launches the
+built `glitch.exe` with WebView2 remote debugging and drives it over the
+DevTools protocol, no mouse needed: first run (setup wizard opens, IPC keeps
+answering), `setup_status`, finishing setup (the bubble page loads), mascot
+clicks toggling the bubble, a real Ollama chat ("open twitter on elon musk's
+page" opens the URL right away, "open the calculator" asks first, small talk,
+remembering a fact, the memory view), the settings panel and quit. After
+every window-creating call it checks `get_settings` still answers within 2 s.
+Your `settings.json`/`memory.json` are moved aside and restored. By default
+opening things is only logged (`GLITCH_DRY_RUN_ACTIONS=1`); pass
+`--real-actions` to really open them. It passed 25/25 on Windows 11 with
+Ollama 0.40 and qwen3.5:4b (2026-10-07), and CI runs it (without Ollama) on
+the Windows build.
 
 **NOT verified (I had no Windows or macOS desktop):**
 
