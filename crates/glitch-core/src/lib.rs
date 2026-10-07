@@ -8,6 +8,7 @@ pub mod ai;
 pub mod chaos;
 pub mod confirm;
 pub mod desktop;
+pub mod hands;
 pub mod memory;
 pub mod models;
 pub mod platform;
