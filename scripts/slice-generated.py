@@ -491,6 +491,48 @@ def clean_cursor(frames: list[np.ndarray], mode: str = "grip") -> tuple[list[np.
     return steady, grips
 
 
+def tail_composite(frames: list[np.ndarray], cfg: dict) -> list[np.ndarray]:
+    """A stable body with only the tail moving.
+
+    The generated idle loops redraw the whole character every frame, so the
+    body jitters. Keep the body of frame `base` and take only the tail region
+    (`rects`, canvas art px [x0, y0, x1, y1]) from each frame, aligned to the
+    base body by the best whole-pixel shift. The tail goes behind the body:
+    pasted only where the base body is not. Frames in `drop` are left out.
+    """
+    base = frames[cfg.get("base", 0)]
+    H, W = base.shape[:2]
+    R = np.zeros((H, W), bool)
+    for x0, y0, x1, y1 in cfg["rects"]:
+        R[y0:y1, x0:x1] = True
+    body = (base[:, :, 3] > 0) & ~R
+    out = []
+    for i, f in enumerate(frames):
+        if i in cfg.get("drop", ()):
+            continue
+        best, bs = (0, 0), -1.0
+        for dy in range(-4, 5):
+            for dx in range(-4, 5):
+                g = np.roll(np.roll(f, dy, 0), dx, 1)
+                m = (g[:, :, 3] > 0) & ~R
+                iou = (m & body).sum() / max(1, (m | body).sum())
+                if iou > bs:
+                    best, bs = (dx, dy), iou
+        g = np.roll(np.roll(f, best[1], 0), best[0], 1)
+        t = (g[:, :, 3] > 0) & R
+        # Only the tail itself (and glitch bits): big pieces, not slivers of its body.
+        keep = np.zeros_like(t)
+        for comp in _components(t):
+            if comp.sum() >= 24:
+                keep |= comp
+        o = base.copy()
+        o[R & ~body] = 0
+        paste = keep & ~body
+        o[paste] = g[paste]
+        out.append(o)
+    return out
+
+
 def _review(before, after, points, file):
     """Before / after strip with the anchor point marked (red square)."""
     z = 3
@@ -589,6 +631,8 @@ def process(name: str, cfg: dict, report: dict) -> list[np.ndarray]:
     clipped = [i for i, (f, p) in enumerate(zip(frames, placed)) if (p[:, :, 3] > 0).sum() < (f[:, :, 3] > 0).sum()]
     if clipped:
         print(f"  WARNING {name}: frames {clipped} clipped by the canvas")
+    if cfg.get("tail_composite"):
+        placed = tail_composite(placed, cfg["tail_composite"])
     report[name] = {
         "frames": len(placed),
         "block_px": round(pitch, 2),
@@ -659,6 +703,30 @@ SHEETS["bite_cursor"]["cursor_clean"] = "bite"
 SHEETS["annoyed"] = {"n": None, "ref": 0, "target": 55, "tolerance": 0}
 # The fishing line hangs far below him: cut it at his feet (it goes on over the edge).
 SHEETS["fish"]["trim_line"] = 0  # down to his feet: frames stay on one baseline
+
+# The living idle (round 4): 12-frame base loops, the tail always moving.
+SHEETS["idle_tail"] = {"n": 12, "ref": 0, "target": 55, "tolerance": 0}
+SHEETS["idle_tail_sit"] = {"n": 12, "ref": 0, "target": 47, "tolerance": 0}
+# Their bodies are redrawn (jitter) every frame: a stable body, only the tail moving.
+SHEETS["idle_tail"]["tail_composite"] = {"base": 0, "rects": [[0, 0, 29, 90], [29, 70, 35, 90]]}
+SHEETS["idle_tail_sit"]["tail_composite"] = {"base": 0, "rects": [[0, 0, 30, 90], [30, 72, 33, 90]], "drop": [8, 9]}
+# Fun fidgets for the feature agents (round 4), wired under their file names.
+for _name in ["dance_beat", "celebrate_focus", "hold_sign", "sweat_fan", "worried_battery", "glasses_type",
+              "knock_screen", "hide_peek", "watch_tv", "fetch_ball"]:
+    SHEETS[_name] = {"cell": 3.8, "n": None}
+SHEETS["fetch_ball"]["side"] = True
+# Standing front views: frame 0 as tall as idle0; sitting ones as tall as sit.
+for _name in ["dance_beat", "celebrate_focus", "sweat_fan", "worried_battery"]:
+    SHEETS[_name] = {"n": None, "ref": 0, "target": 55, "tolerance": 0}
+SHEETS["knock_screen"] = {"n": 6, "ref": 0, "target": 64, "tolerance": 0}  # right up against the glass: a bit bigger
+SHEETS["watch_tv"] = {"n": None, "ref": 0, "target": 47, "tolerance": 0}
+SHEETS["hide_peek"]["cell"] = 6.2  # drawn big: head as big as idle0
+SHEETS["glasses_type"]["cell"] = 4.9  # sitting: eye height like sit0
+SHEETS["hold_sign"]["cell"] = 4.6  # the sign makes him look tall: sized by the head
+SHEETS["chubby_idle"] = {"n": None, "ref": 0, "target": 55, "tolerance": 0}
+SHEETS["streamer"] = {"n": 8, "ref": 0, "target": 55, "tolerance": 0}
+# A hat catalogue (one hat per frame; the hats sit on top, so not measured by height).
+SHEETS["hats"] = {"n": 8, "cell": 4.7}
 
 
 def main():

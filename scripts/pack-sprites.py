@@ -115,6 +115,12 @@ ALIGN = {
     "get_up": ("sleep0", STAND),
     "wake": ("sleep0", STAND),
     **{s: (STAND, STAND) for s in ["scratch", "groom", "shake_off", "hop_idle", "look_back", "tail_chase", "sneeze"]},
+    # Round 4: the living idle loops and the fun fidgets.
+    "idle_tail": (STAND, STAND),
+    "idle_tail_sit": ("sit0", "sit0"),
+    **{s: (STAND, STAND) for s in ["dance_beat", "celebrate_focus", "sweat_fan", "worried_battery", "hold_sign", "knock_screen", "streamer", "chubby_idle", "hats"]},
+    **{s: ("sit0", "sit0") for s in ["glasses_type", "watch_tv"]},
+    "fetch_ball": ("walk0", None),
     **{s: (STAND, None) for s in ["wave", "talk", "think", "laugh", "celebrate", "sad", "angry", "scared", "eat", "dance", "typing", "point", "dizzy", "listen", "surprised"]},
 }
 
@@ -151,7 +157,9 @@ def best_shift(a: np.ndarray, ref: np.ndarray, span: int = 14) -> int:
 #: Loops drawn with the body wandering from frame to frame: every frame is
 #: shifted to overlap the first one best (sideways, and vertically for the
 #: airborne ones), so the loop holds still where the art didn't.
-STEADY = {"climb": False, "dangle": True, "dizzy": False, "spin": True, "hop_idle": False, "tail_copter": True, "glide": True, "fall_flail": True, "hang_ledge": False}
+STEADY = {"climb": False, "dangle": True, "dizzy": False, "spin": True, "hop_idle": False, "tail_copter": True, "glide": True, "fall_flail": True, "hang_ledge": False,
+          # Round 4 fidgets: redrawn every frame, the body wanders sideways.
+          **{s: False for s in ["hats", "sweat_fan", "worried_battery", "hold_sign", "streamer", "chubby_idle", "glasses_type", "watch_tv", "knock_screen"]}}
 
 
 def steady(sheet: str, frames: list[np.ndarray]) -> list[np.ndarray]:
@@ -201,6 +209,68 @@ def align(sheet: str, frames: list[np.ndarray], lookup) -> list[np.ndarray]:
     return [shift_x(f, s) for f, s in zip(frames, shifts)]
 
 
+#: Crown height above the glitch eye (art px): typically 17, at most 24 (the frames' spread).
+CROWN_TYPICAL, CROWN_MAX = 17, 24
+
+
+def head_top(a: np.ndarray) -> tuple[int, int]:
+    """Where a hat sits (art px): the top of the head between the ears.
+
+    Found from the glitch eye when it shows (it is on the head): the head
+    centre is the middle of the forehead (the body run through the eye's
+    column, 5-12 rows above it), the crown the top of the head straight up
+    from there (walking up the solid column, so a tail or a sign held above
+    the head is not taken for it). Without the eye (back views): the middle
+    of the top third of the character and the highest pixel there.
+    """
+    m = body_mask(a)
+    ys = np.where(m.any(1))[0]
+    if not len(ys):
+        return (a.shape[1] // 2, a.shape[0] // 2)
+    r, g, b = (a[:, :, i].astype(int) for i in range(3))
+    magenta = (a[:, :, 3] > 0) & (r > 150) & (b > 180) & (g < 110)
+    if magenta.sum() >= 8:
+        ex, ey = eye_of(a)
+        mids = []
+        for y in range(max(0, ey - 12), max(0, ey - 4)):
+            row = m[y]
+            xs = np.where(row)[0]
+            if not len(xs):
+                continue
+            x0 = int(xs[np.argmin(np.abs(xs - ex))])
+            lo = x0
+            while lo > 0 and row[lo - 1]:
+                lo -= 1
+            hi = x0
+            while hi < len(row) - 1 and row[hi + 1]:
+                hi += 1
+            mids.append((lo + hi) / 2)
+        if mids:
+            hx = int(round(float(np.median(mids))))
+            y = ey
+            gap = 0
+            top = ey
+            while y > 0:
+                y -= 1
+                if m[y, max(0, hx - 1) : hx + 2].any():
+                    top, gap = y, 0
+                else:
+                    gap += 1
+                    if gap > 1:
+                        break
+            # Something solid goes on up from the head (a tail overhead, raised
+            # paws, a sign): the crown is where it usually is above the eye.
+            if top < ey - CROWN_MAX:
+                top = ey - CROWN_TYPICAL
+            return (hx, top)
+    top, bottom = int(ys.min()), int(ys.max())
+    band = m[top : top + max(1, (bottom - top) // 3)]
+    hx = int(round(float(np.where(band)[1].mean())))
+    cols = m[:, max(0, hx - 2) : hx + 3]
+    rows = np.where(cols.any(1))[0]
+    return (hx, int(rows.min()) if len(rows) else top)
+
+
 def grip_lines(sheets: tuple[str, ...]) -> list[str]:
     """Grip points saved by slice-generated.py (art/frames/<sheet>-grips.json)."""
     import json
@@ -238,10 +308,12 @@ def main():
     rows = (len(imgs) + COLS - 1) // COLS
     out = np.zeros((rows * sg.CANVAS_H, COLS * sg.CANVAS_W, 4), np.uint8)
     eyes = []
+    heads = []
     for k, a in enumerate(imgs):
         x, y = (k % COLS) * sg.CANVAS_W, (k // COLS) * sg.CANVAS_H
         out[y : y + sg.CANVAS_H, x : x + sg.CANVAS_W] = a
         eyes.append(eye_of(a))
+        heads.append(head_top(a))
     SHEET.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(out, "RGBA").save(SHEET, optimize=True)
     lines = [
@@ -255,6 +327,11 @@ def main():
         "};",
         "export const ANIM_EYES: Record<string, [number, number]> = {",
         *[f"  {n}: [{e[0]}, {e[1]}]," for n, e in zip(names, eyes)],
+        "};",
+        "// Where a hat sits (art px in the frame): the top of the head between the ears, every frame",
+        "// (upright head; upside-down or tumbling frames get a point on the head but no tilt).",
+        "export const ANIM_HEADS: Record<string, [number, number]> = {",
+        *[f"  {n}: [{h[0]}, {h[1]}]," for n, h in zip(names, heads)],
         "};",
         "// Where the cursor tip is held (art px in the frame), for frames drawn holding on to the cursor.",
         "export const ANIM_GRIPS: Record<string, [number, number]> = {",
