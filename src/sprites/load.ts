@@ -62,6 +62,7 @@ async function fromSheet(src: SheetSpriteSource): Promise<SpriteSet> {
   }
   const set = spriteSet(src.frameWidth, src.frameHeight, !!src.pixelated, cache);
   if (src.scale) set.scale = src.scale;
+  if (src.mirrorable) set.mirrorable = src.mirrorable;
   const eyes = src.eyes;
   if (eyes) set.eye = (name) => (eyes[name] ? [eyes[name][0] / src.frameWidth, eyes[name][1] / src.frameHeight] : null);
   return set;

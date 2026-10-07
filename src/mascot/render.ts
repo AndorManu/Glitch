@@ -182,7 +182,8 @@ export class Renderer {
     const img = this.sprites.frame(pose.frame);
     const { w, h } = this.artSize(img, dpr);
     const face = this.facingLeft ? -1 : 1;
-    const mir = pose.flip ? -face : face;
+    // Front-facing frames never mirror (the glitch eye stays on its eye); side-on ones turn with him.
+    const mir = this.sprites.mirrorable?.(pose.frame) === false ? 1 : pose.flip ? -face : face;
     // Feet anchor + surface angle + secondary motion: the body's frame (CSS px).
     const base = this.baseMatrix();
     // Then the pose: offset, pivot rotation, mirrored scale. All in CSS px, then x dpr.
@@ -192,14 +193,16 @@ export class Renderer {
     this.bodyRect = this.boundsOf(css, img, w, h);
 
     if (this.platform) this.drawPlatform(this.platform, mul(scale(dpr, dpr), base), rand, dpr);
-    this.drawProps(pose.props, true, dpr, face);
+    // Props held by a front-facing frame stay where that frame's paws are.
+    const propFace = this.sprites.mirrorable?.(pose.frame) === false ? 1 : face;
+    this.drawProps(pose.props, true, dpr, propFace);
     if (pose.dissolve < 1) {
       this.drawGhosts(img, m, w, h, dpr);
       if (pose.glitch <= 0 && pose.dissolve <= 0) this.drawSprite(ctx, img, m, w, h);
       else this.drawGlitched(img, m, css, w, h, pose, rand, dpr);
     }
     if (pose.dissolve > 0 && pose.dissolve < 1) this.drawScatter(m, h, pose.dissolve, rand, dpr);
-    this.drawProps(pose.props, false, dpr, face);
+    this.drawProps(pose.props, false, dpr, propFace);
     if (pose.glitch > 0 || pose.fx === "eye") this.drawEyeSparks(img, pose, m, w, h, rand, dpr, mir);
     if (pose.fx) this.drawFx(pose, tick, rand, dpr, face);
     ctx.setTransform(1, 0, 0, 1, 0, 0);

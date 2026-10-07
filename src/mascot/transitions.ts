@@ -13,48 +13,9 @@
 import { ANIM_INDEX } from "../sprites/anim";
 import type { Keyframe } from "./animations";
 
-export type Family = "front" | "side" | "sit" | "curled" | "back" | "wall" | "any";
+import { type Family, familyOf } from "../sprites/families";
 
-/** Frame-name prefix -> family. Longest prefix wins. */
-const FAMILY_PREFIX: [string, Family][] = [
-  // standing, facing you
-  ...(["idle", "talk", "wave", "think", "laugh", "celebrate", "sad", "angry", "scared", "eat", "dance", "typing", "point", "dizzy", "sneeze", "listen", "surprised"] as const).map((p) => [p, "front"] as [string, Family]),
-  ...(["scratch", "groom", "stretch", "shake_off", "hop_idle", "tail_chase", "look_back"] as const).map((p) => [p, "front"] as [string, Family]),
-  ...(["pose_front", "pose_happy", "pose_think", "pose_laugh", "pose_wave"] as const).map((p) => [p, "front"] as [string, Family]),
-  // side view (walking, running, jumping, pushing)
-  ...(["walk", "run", "jump", "push", "grab_tab", "pose_side", "pose_walk", "pose_notify", "pose_push"] as const).map((p) => [p, "side"] as [string, Family]),
-  ["sit", "sit"],
-  ["sit_idle_look", "sit"],
-  ["pose_sit", "sit"],
-  ["sleep", "curled"],
-  ["pose_sleep", "curled"],
-  ["pose_back", "back"],
-  ["climb", "wall"],
-];
-
-/** Frames that belong to no family (clips, effects, being held): never bridged from or to. */
-const NEUTRAL = ["sit_down", "stand_up", "turn_", "walk_start", "walk_stop", "lie_down", "get_up", "wake", "dangle", "spin", "teleport", "land", "peek", "pose_glitch", "pose_chaos"];
-
-const cache = new Map<string, Family>();
-
-export function familyOf(frame: string): Family {
-  let f = cache.get(frame);
-  if (f) return f;
-  f = "any";
-  if (!NEUTRAL.some((p) => frame.startsWith(p))) {
-    let best = 0;
-    for (const [p, fam] of FAMILY_PREFIX) {
-      if (frame.startsWith(p) && p.length > best && /^\d*$/.test(frame.slice(p.length))) {
-        best = p.length;
-        f = fam;
-      }
-    }
-    // Old sheet aliases.
-    if (best === 0) f = ({ side: "side", sit: "sit", back: "back", blink: "front", happy: "front", laugh: "front", notify: "side" } as Record<string, Family>)[frame] ?? "any";
-  }
-  cache.set(frame, f);
-  return f;
-}
+export { type Family, familyOf };
 
 /** Frames name0..name(n-1) that exist in the sheet. */
 export function framesOf(name: string): string[] {
@@ -162,24 +123,23 @@ export function pickVariant(vs: Variant[], rand: () => number, last?: string): V
  * keys first: keys with `flip` still show the old facing.
  *
  * turn_around is drawn turning from facing right to facing left (the art
- * convention faces right). With no turn sheet: through the front view
- * (side -> front in the old facing, front -> side in the new one), else a
- * glitch cut.
+ * convention faces right) and is never mirrored (families.ts): played
+ * forwards to end facing left, backwards to end facing right. Without it:
+ * through the front view (side -> front in the old facing, front -> side in
+ * the new one), else a glitch cut. Facing you there is nothing to turn:
+ * front-facing frames are never mirrored.
  */
 export function turnKeys(fam: Family, toLeft: boolean, next: string): Keyframe[] {
-  if (fam === "side" || fam === "front") {
-    if (fam === "side" && has("turn_around")) {
+  if (fam === "front") return [];
+  if (fam === "side") {
+    if (has("turn_around")) {
       const ks = clip("turn_around", 75, { ease: 1 });
-      // Facing left after: show the sheet as drawn (cancel the new mirror). Facing right: reversed.
-      return toLeft ? ks.map((k) => ({ ...k, flip: true })) : [...ks].reverse();
+      return toLeft ? ks : [...ks].reverse();
     }
     if (has("turn_side_to_front") && has("turn_front_to_side")) {
       const toFront = clip("turn_side_to_front", 75, { ease: 1 });
       const toSide = clip("turn_front_to_side", 75, { ease: 1 });
-      // Side: turn to face you (old facing), then to the new side. Front: a glance through the side view.
-      return fam === "side"
-        ? [...toFront.map((k) => ({ ...k, flip: true })), ...toSide]
-        : [...toSide.map((k) => ({ ...k, flip: true })), ...toFront];
+      return [...toFront.map((k) => ({ ...k, flip: true })), ...toSide];
     }
   }
   return glitchCut(next);

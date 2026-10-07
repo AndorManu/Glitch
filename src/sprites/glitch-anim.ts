@@ -11,6 +11,7 @@
 // of the closest frame, so everything that used raccoon.ts keeps working.
 
 import { ANIM_EYES, ANIM_FRAME_H, ANIM_FRAME_W, ANIM_INDEX } from "./anim";
+import { mirrorable } from "./families";
 import type { SheetSpriteSource } from "./types";
 
 /** Old frame names -> frames of this sheet. */
@@ -59,4 +60,5 @@ export const GLITCH_ANIM: SheetSpriteSource = {
   pixelated: true,
   scale: 1.5,
   eyes,
+  mirrorable,
 };

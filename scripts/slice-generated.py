@@ -342,7 +342,13 @@ def process(name: str, cfg: dict, report: dict) -> list[np.ndarray]:
     elif votes < 0 and not cfg.get("keep_facing"):
         frames = [f[:, ::-1].copy() for f in frames]
     # Body centred; `shift` moves a whole sheet (e.g. the long run tail must fit the canvas).
-    anchors = [body_x(f, "left") - cfg.get("shift", 0) for f in frames]
+    # The tail is on the side away from the glitch eye (front: tail left, eye right;
+    # side view facing right: tail left; turned to face left: tail right).
+    def tail_side(f):
+        ex = glitch_eye_x(f)
+        return "right" if ex is not None and ex < f.shape[1] * 0.42 else "left"
+
+    anchors = [body_x(f, tail_side(f)) - cfg.get("shift", 0) for f in frames]
     placed = [place(f, ax) for f, ax in zip(frames, anchors)]
     clipped = [i for i, (f, p) in enumerate(zip(frames, placed)) if (p[:, :, 3] > 0).sum() < (f[:, :, 3] > 0).sum()]
     if clipped:
@@ -391,6 +397,8 @@ SHEETS["turn_around"]["target"] = 54  # side-on, like walk0
 # Sitting: as tall as the sitting end of sit_down / the start of stand_up_* (~47 px
 # when standing is 55), so sitting down lands exactly on the sit loop.
 SHEETS["sit"] = {"ref": 0, "target": 47, "tolerance": 0}
+# The stretch is 8 side-on frames, three pairs touching (auto-splitting can't tell).
+SHEETS["stretch"].update({"n": 8, "target": 54})
 SHEETS["sit_idle_look"]["target"] = 47
 # The wall crawl, rotated onto the floor; a bit smaller so the long body + tail fits the canvas.
 SHEETS["climb"] = {"cell": 4.9, "rotate": -1, "shift": 6}

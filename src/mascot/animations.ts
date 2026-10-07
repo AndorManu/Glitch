@@ -100,20 +100,21 @@ const sum = (keys: Keyframe[]) => keys.reduce((t, key) => t + key.ms, 0);
 
 /**
  * A glitch burst on top of `base`: 300-600 ms at 20 fps, intensity spikes
- * then decays, sometimes one key swaps to the glitch/chaos pose.
+ * then decays, sometimes one key tears half apart. The pose itself never
+ * changes (no cut to another drawing in the middle of a burst).
  */
 export function burst(rand: () => number, base: Omit<Keyframe, "ms"> = { frame: "idle0" }, ms?: number): Keyframe[] {
   const n = Math.max(4, Math.round((ms ?? 300 + rand() * 300) / MIN_KEY_MS));
   const peak = 0.55 + 0.45 * rand();
-  const swapAt = rand() < 0.4 ? 1 + Math.floor(rand() * (n - 2)) : -1;
-  const swapTo = rand() < 0.6 ? "glitch" : "chaos";
+  const tearAt = rand() < 0.4 ? 1 + Math.floor(rand() * (n - 2)) : -1;
+  const tear = 0.2 + 0.2 * rand();
   const keys: Keyframe[] = [];
   for (let i = 0; i < n; i++) {
     const env = i === 0 ? 0.6 : 1 - ((i - 1) / (n - 1)) * 0.75;
     const jitter = rand() < 0.3 ? (rand() < 0.5 ? -2 : 2) : 0;
     keys.push({
       ...base,
-      frame: i === swapAt ? swapTo : base.frame,
+      ...(i === tearAt ? { dissolve: tear } : {}),
       ms: MIN_KEY_MS,
       dx: (base.dx ?? 0) + jitter,
       glitch: Math.max(0.1, peak * env * (0.7 + 0.3 * rand())),
@@ -170,7 +171,7 @@ const fidgetSit = sitLoop;
 /** A sheet played as an idle fidget: eased in and out, ending back on idle0. */
 const sheetFidget = (name: string, ms: number, o: { ease?: number; hold?: number } = {}): Keyframe[] => [...clip(name, ms, { ease: o.ease ?? 2, hold: o.hold }), k("idle0", 200)];
 
-interface Fidget {
+export interface Fidget {
   id: string;
   weight: number;
   /** Idle loops (8-25 s each) before it may come again. */
@@ -191,7 +192,7 @@ function sitBreak(rand: () => number, mem: Memory): Keyframe[] | null {
   return [...d.keys(rand), ...sitLoop(rand), ...u.keys(rand), k("idle0", 200)];
 }
 
-const FIDGETS: Fidget[] = [
+export const FIDGETS: Fidget[] = [
   { id: "tail", weight: 2, cooldown: 1, make: (r) => [k("idle1", 1800 + r() * 1500)] },
   { id: "eye", weight: 1, cooldown: 1, make: () => [k("idle0", 60, { glitch: 0.2, fx: "eye" }), k("idle0", 120, { fx: "eye" }), k("idle0", 60, { glitch: 0.35, fx: "eye" })] },
   {
@@ -204,7 +205,16 @@ const FIDGETS: Fidget[] = [
   { id: "sit", weight: 2, cooldown: 2, make: sitBreak },
   { id: "scratch", weight: 2, cooldown: 2, make: () => (has("scratch") ? sheetFidget("scratch", 110) : null) },
   { id: "groom", weight: 2, cooldown: 2, make: () => (has("groom") ? sheetFidget("groom", 120) : null) },
-  { id: "stretch", weight: 1.5, cooldown: 3, make: () => (has("stretch") ? sheetFidget("stretch", 130, { hold: 500 }) : null) },
+  {
+    id: "stretch",
+    weight: 1.5,
+    cooldown: 3,
+    // A side-on stretch: turns side-on, stretches, turns back to you.
+    make: () =>
+      has("stretch") && has("turn_front_to_side") && has("turn_side_to_front")
+        ? [...clip("turn_front_to_side", 80, { ease: 1 }), ...clip("stretch", 130, { ease: 2, hold: 500 }), ...clip("turn_side_to_front", 80, { ease: 1 }), k("idle0", 200)]
+        : null,
+  },
   { id: "shake_off", weight: 1, cooldown: 3, make: () => (has("shake_off") ? sheetFidget("shake_off", 80) : null) },
   { id: "hop", weight: 1.5, cooldown: 2, make: (r) => (has("hop_idle") ? sheetFidget("hop_idle", 85, { ease: 1 }) : hop("idle0", 6 + r() * 4)) },
   { id: "look_back", weight: 2, cooldown: 2, make: () => (has("look_back") ? sheetFidget("look_back", 120, { hold: 700 }) : null) },
@@ -544,24 +554,16 @@ function runKeys(rand: () => number): Keyframe[] {
 /** Anticipation before a jump: the drawn crouch, held, a spark in the eye. */
 const CROUCH: Keyframe[] = [k("jump0", 70), k("jump1", 110), k("jump1", 90, { glitch: 0.2, fx: "eye" })];
 
-/** Thrown and spinning: the purple swirl pose, crackling. */
+/** Thrown and spinning: the drawn spin, crackling. */
 function tumbleKeys(rand: () => number): Keyframe[] {
-  return [
-    k("chaos", 70, { glitch: 0.2 + 0.3 * rand(), fx: "eye", pivot: 0.45 }),
-    k("glitch", 70, { glitch: 0.15, pivot: 0.45 }),
-    k("chaos", 70, { glitch: 0.35, fx: "eye", pivot: 0.45, sx: 1.04 }),
-    k("glitch", 70, { pivot: 0.45, sy: 1.05 }),
-  ];
+  return cycle("spin", [0, 1, 2, 3, 4, 5, 6, 7], 70, { pivot: 0.45 }).map((key, i) => (i % 3 === 0 ? { ...key, glitch: 0.2 + 0.3 * rand(), fx: "eye" as const } : key));
 }
 
-/** Falling in a panic: legs going, looking both ways, the eye sparking. */
+/** Falling in a panic: the drawn kicking (dangle frames, played fast), the eye sparking. */
 function flailKeys(rand: () => number): Keyframe[] {
-  return [
-    k("walk1", 60, { rot: -9, sy: 1.07, pivot: 0.5 }),
-    k("walk0", 60, { rot: 7, flip: true, sy: 1.06, pivot: 0.5 }),
-    k("walk1", 60, { rot: -6, flip: true, sy: 1.07, pivot: 0.5, fx: "eye" }),
-    k("walk0", 60, { rot: 9, sy: 1.05, pivot: 0.5, glitch: rand() < 0.35 ? 0.45 : 0, fx: "eye" }),
-  ];
+  const keys = cycle("dangle", [0, 2, 4, 6], 70, { pivot: 0.5 });
+  keys[3] = { ...keys[3], glitch: rand() < 0.35 ? 0.45 : 0, fx: "eye" };
+  return keys;
 }
 
 /** Landed far too hard: flattened, glitching, pops back up. Then `dizzy`. */
@@ -627,31 +629,37 @@ function peekEdgeKeys(): Keyframe[] {
   ];
 }
 
-/** A look around, ending with turning his back to stare at your screen. */
+/** A look around, ending with turning his back to stare at your screen (the drawn turn, held, turned back). */
 function lookAroundKeys(rand: () => number): Keyframe[] {
-  const first = rand() < 0.5;
+  if (!has("turn_to_back")) return [k("idle0", 1500)];
+  const glance = has("turn_front_to_side") ? clip("turn_front_to_side", 90, { ease: 1, pick: [0, 1, 2] }) : [];
+  const toBack = clip("turn_to_back", 90, { ease: 1 });
+  const back = toBack[toBack.length - 1].frame;
   return [
-    k("side", 800, { flip: first }),
-    k("side", 900, { flip: !first }),
-    k("idle0", 120, { sx: 1.02, sy: 0.98 }),
-    k("back", 1500 + rand() * 800),
-    k("back", 60, { glitch: 0.35, fx: "eye" }),
-    k("back", 500),
-    k("idle0", 140, { sx: 1.03, sy: 0.97 }),
+    ...glance,
+    k(glance.at(-1)?.frame ?? "idle0", 800 + rand() * 400),
+    ...[...glance].reverse(),
+    ...toBack,
+    k(back, 1500 + rand() * 800),
+    k(back, 60, { glitch: 0.35, fx: "eye" }),
+    k(back, 500),
+    ...[...toBack].reverse(),
+    k("idle0", 200),
   ];
 }
 
 /** On a wall: stop and look back down at where he came from. */
 const LOOK_BACK: Keyframe[] = [k("climb0", 300), k("climb7", 900), k("climb7", 60, { glitch: 0.3, fx: "eye" }), k("climb0", 300)];
 
-/** Conjuring a platform out of glitch pixels. */
+/** Conjuring a platform out of glitch pixels: points at the spot, it builds, a little cheer. */
 function buildKeys(rand: () => number): Keyframe[] {
   return [
-    k("wave", 90, { glitch: 0.5, fx: "eye" }),
-    k("happy", 120, { glitch: 0.3, fx: "sparkle" }),
-    k("wave", 150, { fx: "sparkle", glitch: rand() < 0.5 ? 0.25 : 0 }),
-    k("happy", 250, { fx: "sparkle" }),
-    k("wave", 300, { fx: "sparkle" }),
+    ...cycle("point", [0, 1, 2], 90),
+    k("point3", 150, { glitch: 0.5, fx: "eye" }),
+    k("point4", 250, { fx: "sparkle", glitch: rand() < 0.5 ? 0.25 : 0 }),
+    k("point5", 200, { fx: "sparkle" }),
+    ...cycle("celebrate", [2, 3, 4], 110, { fx: "sparkle" }),
+    k("idle0", 200),
   ];
 }
 
@@ -831,9 +839,10 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   dangle: { keys: dangleKeys },
   fall: {
     keys: [
-      k("idle0", 60, { dy: -18, sx: 0.88, sy: 1.12 }),
-      k("idle0", 60, { dy: -9, sx: 0.9, sy: 1.1 }),
-      k("idle0", 50, { dy: -2, sx: 0.94, sy: 1.06 }),
+      // The drawn fall (arms up) dropping in, then the landing.
+      k("jump5", 60, { dy: -18 }),
+      k("jump5", 60, { dy: -9 }),
+      k("jump5", 50, { dy: -2 }),
     ],
     once: true,
     next: "land",
