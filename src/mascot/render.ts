@@ -272,6 +272,10 @@ export class Renderer {
 
   /** Drawn size in CSS px: the sheet at half size; pixel grids by whole numbers. */
   private artSize(img: FrameImage, dpr: number): { w: number; h: number } {
+    if (this.sprites.scale) {
+      // Fixed on-screen size (crisp whole device px per art px at DPR 2, 4...; nearest-neighbour otherwise).
+      return { w: img.width * this.sprites.scale, h: img.height * this.sprites.scale };
+    }
     if (!this.sprites.pixelated) return { w: ART_W, h: ART_H };
     const s = Math.max(1, Math.floor(Math.min((ART_W * dpr) / img.width, (ART_H * dpr) / img.height)));
     return { w: (img.width * s) / dpr, h: (img.height * s) / dpr };
@@ -462,7 +466,8 @@ export class Renderer {
 
   private drawEyeSparks(img: FrameImage, pose: Pose, m: M, w: number, h: number, rand: () => number, dpr: number, mir: number): void {
     const index = RACCOON.frames[pose.frame];
-    const eye = this.sprites.pixelated || index === undefined ? [0.66, 0.5] : [EYE_BY_INDEX[index][0] / img.width, EYE_BY_INDEX[index][1] / img.height];
+    const known = this.sprites.eye?.(pose.frame);
+    const eye = known ?? (this.sprites.pixelated || index === undefined ? [0.66, 0.5] : [EYE_BY_INDEX[index][0] / img.width, EYE_BY_INDEX[index][1] / img.height]);
     const [ex, ey] = apply(m, (eye[0] - 0.5) * w, (eye[1] - 1) * h);
     const n = pose.glitch > 0 ? 2 + Math.round(5 * pose.glitch) : 3;
     const r = (this.placement.angle * Math.PI) / 180;

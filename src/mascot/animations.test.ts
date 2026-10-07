@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { GLITCH } from "../sprites/glitch";
 import { RACCOON } from "../sprites/raccoon";
+import { ANIM_INDEX } from "../sprites/anim";
+import { GLITCH_ANIM } from "../sprites/glitch-anim";
 import {
   type Animation,
   type AnimationName,
@@ -75,8 +77,10 @@ describe("animations", () => {
   it("every keyframe uses a frame both sprite sets have, and known props", () => {
     for (const [name, anim] of Object.entries(ANIMATIONS)) {
       for (const key of allKeys(anim)) {
-        expect(RACCOON.frames, `raccoon: ${name} uses ${key.frame}`).toHaveProperty(key.frame);
-        expect(GLITCH.frames, `fallback: ${name} uses ${key.frame}`).toHaveProperty(key.frame);
+        expect(GLITCH_ANIM.frames, `animation sheet: ${name} uses ${key.frame}`).toHaveProperty(key.frame);
+        // The old sheet and the code-drawn fallback show their first frame for names they lack.
+        void RACCOON;
+        void GLITCH;
         for (const p of key.props ?? []) expect(p.name === "tether" || p.name in PROPS, `${name} prop ${p.name}`).toBe(true);
         if (key.glitch !== undefined) expect(key.glitch).toBeGreaterThanOrEqual(0);
         if (key.glitch !== undefined) expect(key.glitch).toBeLessThanOrEqual(1);
@@ -86,6 +90,23 @@ describe("animations", () => {
 
   it("raccoon frames point inside the 4x4 sheet", () => {
     for (const i of Object.values(RACCOON.frames)) expect(i >= 0 && i < 16).toBe(true);
+  });
+
+  it("the animation sheet has every old frame name, full cycles, and an eye for each frame", () => {
+    for (const name of Object.keys(RACCOON.frames)) expect(GLITCH_ANIM.frames, name).toHaveProperty(name);
+    const count = Object.keys(ANIM_INDEX).length;
+    for (const [name, i] of Object.entries(GLITCH_ANIM.frames)) {
+      expect(i >= 0 && i < count, name).toBe(true);
+      expect(GLITCH_ANIM.eyes?.[name], name).toBeDefined();
+    }
+    for (const [cycle, n] of [["walk", 8], ["idle", 8], ["run", 6], ["wave", 8], ["talk", 8], ["jump", 8]] as const) {
+      for (let i = 0; i < n; i++) expect(ANIM_INDEX, `${cycle}${i}`).toHaveProperty(`${cycle}${i}`);
+    }
+  });
+
+  it("the walk plays all 8 drawn frames in order", () => {
+    const frames = (ANIMATIONS.walk.keys as (r: () => number) => Keyframe[])(mulberry32(3)).map((k) => k.frame);
+    expect(frames).toEqual(["walk0", "walk1", "walk2", "walk3", "walk4", "walk5", "walk6", "walk7"]);
   });
 
   it("follow-ups name real animations", () => {
@@ -98,11 +119,11 @@ describe("animations", () => {
   it("actions either finish (once) or loop, as intended", () => {
     const once: AnimationName[] = [
       ...["happy", "startled", "laugh", "grabCursor", "peek", "fall", "land", "glitchOut", "gone", "glitchIn", "chaosSpin"],
-      ...["crouch", "splat", "dizzy", "peekEdge", "lookAround", "build", "malfunction"],
+      ...["crouch", "splat", "dizzy", "peekEdge", "lookAround", "build", "malfunction", "wave"],
     ] as AnimationName[];
     const loops: AnimationName[] = [
       ...["idle", "walk", "think", "ask", "sleep", "carryCursor", "dragWindow", "pushWindow", "dangle", "napRock"],
-      ...["cling", "climb", "run", "airUp", "airDown", "tumble", "flail", "sitEdge", "held", "heldKick", "listen"],
+      ...["cling", "climb", "run", "airUp", "airDown", "tumble", "flail", "sitEdge", "held", "heldKick", "listen", "talk"],
     ] as AnimationName[];
     // These hand over to a loop that isn't idle.
     const special: Partial<Record<AnimationName, AnimationName>> = { lookBack: "cling", yawn: "sleep" };

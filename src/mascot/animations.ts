@@ -66,9 +66,10 @@ export interface Animation {
 /** Hard cap so no animation can ever burn CPU, whatever its keys say. */
 export const MAX_FPS = 20;
 export const MIN_KEY_MS = Math.ceil(1000 / MAX_FPS);
-/** Walk keys: 15 fps poses (the window itself moves at 30 Hz, see creature.ts). */
-const WALK_MS = 67;
-const RUN_MS = 55;
+/** Walk keys: 12 fps drawn frames (the window itself moves at 30 Hz, see creature.ts). */
+const WALK_MS = 83;
+/** Run keys: ~14 fps. */
+const RUN_MS = 70;
 
 const k = (frame: string, ms: number, o: Omit<Keyframe, "frame" | "ms"> = {}): Keyframe => ({ frame, ms, ...o });
 const sum = (keys: Keyframe[]) => keys.reduce((t, key) => t + key.ms, 0);
@@ -112,20 +113,19 @@ function hop(frame: string, height = 8, o: Omit<Keyframe, "frame" | "ms"> = {}):
   ];
 }
 
-/** One walk stride (4 keys = 268 ms): contact squash, push-off stretch, airborne. */
+/** Extra key fields per walk frame (e.g. a carried prop that bobs with the body). */
 type Extra = (dy: number, frame: string) => Omit<Keyframe, "frame" | "ms">;
 
-function stride(lean: number, extra: Extra = () => ({})): Keyframe[] {
-  return [
-    k("walk0", WALK_MS, { sx: 1.04, sy: 0.96, rot: lean * 0.4, fx: "trail", ...extra(0, "walk0") }),
-    k("walk0", WALK_MS, { dy: -1, rot: lean * 0.7, fx: "trail", ...extra(-1, "walk0") }),
-    k("walk1", WALK_MS, { dy: -3, sx: 0.97, sy: 1.04, rot: lean, fx: "trail", ...extra(-3, "walk1") }),
-    k("walk1", WALK_MS, { dy: -2, rot: lean * 0.7, fx: "trail", ...extra(-2, "walk1") }),
-  ];
-}
+/** Body bob of the 8 drawn walk frames (contact, down, passing, up x2), for props. */
+const WALK_BOB = [0, 1, -1, -2, 0, 1, -1, -2];
 
-function walkCycle(rand: () => number, lean = 3, extra?: Extra): Keyframe[] {
-  const keys = [...stride(lean, extra), ...stride(lean, extra)];
+/**
+ * The drawn 8-frame walk cycle (walk0-7: contact, down, passing, up for
+ * each foot) at 12 fps. The frames carry the bob, arm swing and tail; one
+ * cycle (667 ms) covers ~47 CSS px at the walking speed (70 px/s).
+ */
+function walkCycle(rand: () => number, _lean = 0, extra?: Extra): Keyframe[] {
+  const keys = WALK_BOB.map((dy, i) => k(`walk${i}`, WALK_MS, extra ? extra(dy * 1.5, `walk${i}`) : {}));
   // Now and then a stride glitches out for a key.
   if (rand() < 0.3) keys[5] = { ...keys[5], glitch: 0.35 };
   return keys;
@@ -161,17 +161,54 @@ function idleKeys(rand: () => number): Keyframe[] {
   const fidgetAt = rand() < 0.65 ? until * (0.25 + 0.5 * rand()) : Infinity;
   let t = 0;
   let fidgeted = false;
+  let nextBlink = 2000 + rand() * 4000;
   while (t < until) {
-    const rest = Math.min(until - t, 4500 + rand() * 2500);
-    keys.push(k("idle0", rest));
-    t += rest;
-    if (t >= until) break;
-    const extra = !fidgeted && t >= fidgetAt ? fidget(rand) : [k("idle0", 650, { sx: 0.99, sy: 1.02 })]; // breathe in
-    fidgeted ||= t >= fidgetAt;
-    keys.push(...extra);
-    t += sum(extra);
+    // Breathing: out (idle0, long hold), in (idle1). Two repaints per breath keeps idle under budget.
+    const breath = [k("idle0", 4300 + rand() * 1500), k("idle1", 1700 + rand() * 300)];
+    keys.push(...breath);
+    t += sum(breath);
+    if (t >= nextBlink) {
+      // Blink: half, closed, half (eye lids drawn in idle4-6).
+      const blink = [k("idle4", 60), k("idle5", 90), k("idle6", 60)];
+      if (rand() < 0.12) blink.push(k("idle0", 140), k("idle4", 60), k("idle5", 80), k("idle6", 60)); // double blink
+      keys.push(...blink);
+      t += sum(blink);
+      nextBlink = t + 6000 + rand() * 5000;
+    } else if (rand() < 0.1) {
+      // Ear twitch (idle2): flick, back, flick.
+      const ear = [k("idle2", 120), k("idle0", 90), k("idle2", 110)];
+      keys.push(...ear);
+      t += sum(ear);
+    }
+    if (!fidgeted && t >= fidgetAt) {
+      fidgeted = true;
+      const extra = fidget(rand);
+      keys.push(...extra);
+      t += sum(extra);
+    }
   }
   return [...keys, ...burst(rand)];
+}
+
+/** Talking (replying in the chat): the drawn mouth shapes in a varied order, ~9 fps, with pauses. */
+function talkKeys(rand: () => number): Keyframe[] {
+  const keys: Keyframe[] = [];
+  for (let word = 0; word < 4; word++) {
+    const n = 3 + Math.floor(rand() * 4);
+    for (let i = 0; i < n; i++) keys.push(k(`talk${1 + Math.floor(rand() * 6)}`, 90 + rand() * 50));
+    keys.push(k("talk0", 160 + rand() * 260)); // between words, mouth shut
+  }
+  if (rand() < 0.3) keys.push(k("idle4", 60), k("idle5", 90), k("idle6", 60));
+  return keys;
+}
+
+/** A proper wave: arm up (anticipation), swings with the paw flopping, eased down. */
+function waveKeys(rand: () => number): Keyframe[] {
+  const swings = 2 + Math.floor(rand() * 2);
+  const keys = [k("wave0", 120), k("wave1", 90), k("wave2", 90)];
+  for (let i = 0; i < swings; i++) keys.push(k("wave3", 110), k("wave4", 120, { fx: "sparkle" }), k("wave5", 110), k("wave4", 100));
+  keys.push(k("wave6", 120), k("wave7", 160), k("idle0", 200));
+  return keys;
 }
 
 function thinkKeys(rand: () => number): Keyframe[] {
@@ -191,16 +228,7 @@ function askKeys(rand: () => number): Keyframe[] {
 
 function happyKeys(rand: () => number): Keyframe[] {
   if (rand() < 0.35) return laughKeys(rand);
-  const s = { fx: "sparkle" as const };
-  return [
-    ...hop("wave", 10),
-    k("happy", 300, s),
-    k("wave", 300, s),
-    k("happy", 300, { ...s, dy: -1 }),
-    k("wave", 300, s),
-    k("happy", 250, { ...s, glitch: 0.2 }),
-    k("wave", 400),
-  ];
+  return [...hop("idle0", 8), ...waveKeys(rand)];
 }
 
 function laughKeys(rand: () => number): Keyframe[] {
@@ -412,24 +440,14 @@ function climbKeys(rand: () => number): Keyframe[] {
 
 /** Running: faster strides, deep lean, big bob, dust and glitch pixels flying. */
 function runKeys(rand: () => number): Keyframe[] {
-  const s = (o: Omit<Keyframe, "frame" | "ms">) => ({ fx: "trail" as const, ...o });
-  const keys = [
-    k("walk0", RUN_MS, s({ sx: 1.07, sy: 0.92, rot: 6 })),
-    k("walk1", RUN_MS, s({ dy: -5, sx: 0.95, sy: 1.07, rot: 9 })),
-    k("walk1", RUN_MS, s({ dy: -6, rot: 8 })),
-    k("walk0", RUN_MS, s({ dy: -2, rot: 7 })),
-  ];
-  const all = [...keys, ...keys];
-  if (rand() < 0.35) all[5] = { ...all[5], glitch: 0.4 };
+  // The drawn 6-frame run (with its flight phase), pixels trailing behind.
+  const all = [0, 1, 2, 3, 4, 5].map((i) => k(`run${i}`, RUN_MS, { fx: "trail" }));
+  if (rand() < 0.35) all[4] = { ...all[4], glitch: 0.4 };
   return all;
 }
 
-/** Anticipation before a jump: sink down, coil, a spark in the eye. */
-const CROUCH: Keyframe[] = [
-  k("walk0", 60, { sx: 1.05, sy: 0.93 }),
-  k("walk0", 80, { sx: 1.12, sy: 0.85, rot: -3 }),
-  k("walk0", 90, { sx: 1.15, sy: 0.8, rot: -4, glitch: 0.2, fx: "eye" }),
-];
+/** Anticipation before a jump: the drawn crouch, held, a spark in the eye. */
+const CROUCH: Keyframe[] = [k("jump0", 70), k("jump1", 110), k("jump1", 90, { glitch: 0.2, fx: "eye" })];
 
 /** Thrown and spinning: the purple swirl pose, crackling. */
 function tumbleKeys(rand: () => number): Keyframe[] {
@@ -657,7 +675,9 @@ export type AnimationName =
   | "yawn"
   | "held"
   | "heldKick"
-  | "listen";
+  | "listen"
+  | "talk"
+  | "wave";
 
 export const ANIMATIONS: Record<AnimationName, Animation> = {
   // moods
@@ -687,12 +707,7 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
     next: "land",
   },
   land: {
-    keys: [
-      k("idle0", 90, { sx: 1.15, sy: 0.84, glitch: 0.35, fx: "dust" }),
-      k("idle0", 90, { sx: 1.06, sy: 0.93, fx: "dust" }),
-      k("idle0", 80, { sx: 0.97, sy: 1.03, fx: "dust" }),
-      k("idle0", 150, { fx: "dust" }),
-    ],
+    keys: [k("jump6", 90, { glitch: 0.35, fx: "dust" }), k("jump6", 90, { fx: "dust" }), k("jump7", 110, { fx: "dust" }), k("idle0", 150)],
     once: true,
   },
   glitchOut: { keys: glitchOutKeys, once: true, next: "gone" },
@@ -707,8 +722,11 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   run: { keys: runKeys },
   crouch: { keys: CROUCH, once: true },
   // Single still keys: the window flight repaints them (with spin, stretch, trail).
-  airUp: { keys: [k("walk1", 1000, { sx: 0.92, sy: 1.1 })] },
-  airDown: { keys: [k("idle0", 1000, { sx: 0.94, sy: 1.08 })] },
+  // Launch stretch then the tuck, held while the window flies (it repaints them with spin, stretch, trail).
+  airUp: { keys: [k("jump2", 120), k("jump3", 1000)] },
+  airDown: { keys: [k("jump4", 120), k("jump5", 1000)] },
+  talk: { keys: talkKeys },
+  wave: { keys: waveKeys, once: true },
   tumble: { keys: tumbleKeys },
   flail: { keys: flailKeys },
   splat: { keys: splatKeys, once: true, next: "dizzy" },

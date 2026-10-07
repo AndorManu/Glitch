@@ -5,3 +5,5 @@ node_modules/
 *.log
 src-tauri/gen/
 dev/ollama-check/report.json
+dev/out/
+art/frames/

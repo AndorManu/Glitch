@@ -67,8 +67,8 @@ export interface View {
   render(pose: Pose, tick: number): void;
 }
 
-export type Mood = "thinking" | "happy" | "asking" | "idle" | "listening";
-const MOODS: readonly string[] = ["thinking", "happy", "asking", "idle", "listening"];
+export type Mood = "thinking" | "happy" | "asking" | "idle" | "listening" | "talking";
+const MOODS: readonly string[] = ["thinking", "happy", "asking", "idle", "listening", "talking"];
 
 type Mode = "stand" | "corner" | "air" | "held";
 
@@ -774,7 +774,7 @@ export class Creature {
   }
 
   private busy(): boolean {
-    return this.mood === "thinking" || this.mood === "asking" || this.mood === "listening";
+    return this.mood === "thinking" || this.mood === "asking" || this.mood === "listening" || this.mood === "talking";
   }
 
   private canAct(): boolean {
@@ -787,6 +787,7 @@ export class Creature {
     if (this.mood === "thinking") return "think";
     if (this.mood === "asking") return "ask";
     if (this.mood === "listening") return "listen";
+    if (this.mood === "talking") return "talk";
     return isStanding(this.surface) || this.mode !== "stand" ? "idle" : "cling";
   }
 
@@ -1031,7 +1032,7 @@ export class Creature {
       return;
     }
     if (this.mode === "stand" && !this.plan) {
-      if (["think", "ask", "listen"].includes(this.animator.animation)) this.animator.play(this.restAnim());
+      if (["think", "ask", "listen", "talk"].includes(this.animator.animation)) this.animator.play(this.restAnim());
       this.scheduleBrain(3000 + this.rand() * 4000);
     }
   }
