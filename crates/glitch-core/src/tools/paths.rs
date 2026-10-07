@@ -360,15 +360,46 @@ mod tests {
         }
     }
 
+    /// Absolute paths that point outside the user's folders, per OS. On Windows
+    /// `/net/host/...` is not absolute at all (no drive or UNC prefix), so the
+    /// dangerous shapes there are UNC shares, device paths and other drives.
+    #[cfg(windows)]
+    const FOREIGN: &[&str] = &[
+        r"\\attacker.example\share\a.jpg",
+        r"\\?\UNC\attacker.example\share\a.jpg",
+        r"\\.\pipe\evil",
+        r"\\localhost\C$\Windows\win.ini",
+        r"C:\Windows\System32\drivers\etc\hosts",
+        r"Z:\stick\a.jpg",
+    ];
+    #[cfg(not(windows))]
+    const FOREIGN: &[&str] = &["/net/attacker.example/s/a.jpg", "/Volumes/stick/a.jpg", "/etc/hosts"];
+
     #[test]
     fn network_and_foreign_paths_are_refused_without_touching_them() {
         let h = home();
-        for p in ["/net/attacker.example/s/a.jpg", "/Volumes/stick/a.jpg", "/etc/hosts"] {
+        for p in FOREIGN {
             assert!(validate(p, &h.platform).unwrap_err().0.contains("your own user folders"), "{p}");
         }
+        // Unix-style absolute paths are never accepted on Windows either.
+        #[cfg(windows)]
+        for p in ["/net/attacker.example/s/a.jpg", "/etc/hosts", r"\Windows\win.ini"] {
+            assert!(validate(p, &h.platform).is_err(), "{p}");
+        }
         // `..` is resolved lexically before the check.
-        let sneaky = format!("{}/Downloads/../../../etc/hosts", h.root.display());
-        assert!(validate(&sneaky, &h.platform).is_err());
+        let sneaky = h.root.join("Downloads").join("..").join("..").join("..").join("etc").join("hosts");
+        assert!(validate(sneaky.to_str().unwrap(), &h.platform).is_err());
+    }
+
+    /// A verbatim (`\\?\C:\...`) spelling of a path inside home is a different
+    /// prefix component, so it is refused rather than accidentally trusted.
+    #[cfg(windows)]
+    #[test]
+    fn verbatim_spelling_of_home_is_not_a_bypass() {
+        let h = home();
+        std::fs::write(h.root.join("Pictures/dog.jpg"), b"").unwrap();
+        let verbatim = format!(r"\\?\{}", h.root.join("Pictures").join("dog.jpg").display());
+        assert!(validate(&verbatim, &h.platform).is_err());
     }
 
     #[test]

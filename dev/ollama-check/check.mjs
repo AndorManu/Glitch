@@ -64,6 +64,32 @@ async function chat(model, caps, messages, { tools = true, system = true } = {})
   return { msg: r.message ?? {}, ms: Date.now() - t0 };
 }
 
+// Mirrors of `grounded` / `is_placeholder_fact` in crates/glitch-core/src/memory.rs.
+const FILLER = new Set(
+  ("the a an user users glitch is are was were be been has have had their they them theirs he she his her him it its and or but of " +
+    "to in on at for with by from as who that this these those very really named called name likes like loves love enjoys enjoy prefers prefer " +
+    "does do not also about some one own owns how what when where why which you your i me my we our can could would will just so if then " +
+    "there here all any more most other only too now today ask asks asked say says said tell tells told want wants wanted doing going get gets got " +
+    "hi hello hey thanks thank please ok okay yes no well good great").split(" "),
+);
+const words = (s) => s.toLowerCase().split(/[^\p{L}\p{N}']+/u).map((w) => w.replace(/^'+|'+$/g, "").replace(/'s$/, "")).filter((w) => [...w].length >= 2);
+function grounded(fact, said) {
+  const s = words(said);
+  const stem = (w) => [...w].slice(0, 4).join("");
+  return words(fact).filter((w) => !FILLER.has(w)).some((w) => s.some((x) => x === w || (x.length >= 4 && w.length >= 4 && stem(x) === stem(w))));
+}
+function placeholderFact(f) {
+  const l = f.toLowerCase();
+  const w = l.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  return !w.length || /^[(<[]/.test(f) || w.some((x) => ["none", "unknown", "n", "na", "nothing", "unspecified"].includes(x)) || /not provided|not mentioned|not shared|no lasting/.test(l);
+}
+
+const COMPACTION_CASES = [
+  ["dog", /rex/i, "User: hi, I'm Andor\nGlitch: Hi Andor!\nUser: my dog Rex loves the park\nGlitch: Rex sounds fun!\nUser: open youtube\n(Glitch used open_url {\"url\":\"https://www.youtube.com\"})\n"],
+  ["habit", /tea/i, "User: ugh, long day at work\nGlitch: Oh no! Want a break?\nUser: yeah. by the way I really love green tea, I drink it every morning\nGlitch: Green tea is lovely!\nUser: open the weather\n(Glitch used open_url {\"url\":\"https://weather.com\"})\nGlitch: Here you go!\n"],
+  ["nothing to keep", null, "User: hi\nGlitch: Hi there!\nUser: open youtube\n(Glitch used open_url {\"url\":\"https://www.youtube.com\"})\nGlitch: Done!\n"],
+];
+
 const calls = (msg) => (msg.tool_calls ?? []).map((c) => ({ name: c.function?.name, args: c.function?.arguments ?? {} }));
 const sentences = (t) => (t.match(/[.!?]+(\s|$)/g) ?? []).length;
 
@@ -97,14 +123,25 @@ const SCENARIOS = [
   {
     name: "small talk (no tools)",
     say: "hi! how are you today?",
-    check: (m) => [calls(m).length === 0 && !!m.content?.trim() && sentences(m.content) <= 4, `"${(m.content ?? "").slice(0, 120)}"`],
+    check: (m) => {
+      const c = calls(m);
+      // Glitch refuses a `remember` that isn't about anything the user said
+      // (agent.rs) and the model then just answers, so that one is tolerated.
+      const invented = c.filter((x) => x.name === "remember" && !grounded(String(x.args.fact ?? ""), "hi! how are you today?"));
+      if (c.length && invented.length === c.length) return [true, `remember refused by Glitch: ${JSON.stringify(invented[0].args)}`];
+      return [c.length === 0 && !!m.content?.trim() && sentences(m.content) <= 4, c.length ? `tools: ${JSON.stringify(c)}` : `"${(m.content ?? "").slice(0, 120)}"`];
+    },
   },
   {
     name: "remember a fact",
     say: "remember that my dog is called Rex",
     check: (m) => {
       const c = calls(m).find((c) => c.name === "remember");
-      return [!!c && /rex/i.test(c.args.fact ?? ""), c ? `remember ${JSON.stringify(c.args)}` : `no remember; got ${JSON.stringify(calls(m))}`];
+      if (c) return [/rex/i.test(c.args.fact ?? ""), `remember ${JSON.stringify(c.args)}`];
+      // No tool call: Glitch stores an explicit "remember that ..." itself
+      // (agent.rs remember_fallback), as long as the model didn't do something else.
+      const other = calls(m);
+      return [other.length === 0, other.length ? `no remember; got ${JSON.stringify(other)}` : `no remember call; stored by Glitch's fallback ("${(m.content ?? "").slice(0, 60)}")`];
     },
   },
   {
@@ -149,23 +186,37 @@ async function checkModel(model) {
   } catch (e) {
     record(model, "reply after tool result", false, String(e.message));
   }
-  // Memory compaction prompt.
-  try {
-    const transcript = "User: hi, I'm Andor\nGlitch: Hi Andor!\nUser: my dog Rex loves the park\nGlitch: Rex sounds fun!\nUser: open youtube\n(Glitch used open_url {\"url\":\"https://www.youtube.com\"})\n";
-    const { msg, ms } = await chat(
-      model,
-      caps,
-      [
-        { role: "system", content: T.compaction_system },
-        { role: "user", content: `Running summary:\n(nothing yet)\n\nNew conversation:\n${transcript}` },
-      ],
-      { tools: false, system: false },
-    );
-    const text = msg.content ?? "";
-    const facts = text.split("\n").filter((l) => /^\W*fact:/i.test(l.trim()));
-    record(model, "memory compaction", facts.some((f) => /rex/i.test(f)) && text.replace(/fact:.*$/gim, "").trim().length > 10, JSON.stringify(text.slice(0, 200)), ms);
-  } catch (e) {
-    record(model, "memory compaction", false, String(e.message));
+  // Memory compaction prompt: must find the obvious facts, and must not
+  // invent any when there are none (after the same filtering Glitch does in
+  // memory.rs: placeholder FACT lines dropped, facts grounded in user text).
+  for (const [label, want, transcript] of COMPACTION_CASES) {
+    try {
+      const { msg, ms } = await chat(
+        model,
+        caps,
+        [
+          { role: "system", content: T.compaction_system },
+          { role: "user", content: `Running summary:\n(nothing yet)\n\nNew conversation:\n${transcript}` },
+        ],
+        { tools: false, system: false },
+      );
+      const text = msg.content ?? "";
+      // Like memory::user_said: short commands answered with a tool don't count.
+      const lines = transcript.split("\n");
+      const said = lines
+        .filter((l, i) => l.startsWith("User:") && !(lines[i + 1]?.startsWith("(Glitch used") && l.split(/\s+/).length - 1 <= 6))
+        .join("\n");
+      const facts = text
+        .split("\n")
+        .filter((l) => /^\W*fact:/i.test(l.trim()))
+        .map((l) => l.replace(/^\W*fact:\W*/i, "").trim())
+        .filter((f) => f && !placeholderFact(f) && grounded(f, said));
+      const summary = text.replace(/^\W*fact:.*$/gim, "").replace(/^\W*summary:\W*/i, "").trim();
+      const ok = (want ? facts.some((f) => want.test(f)) : facts.length === 0) && summary.length > 10;
+      record(model, `memory compaction (${label})`, ok, `${JSON.stringify(facts)} ${JSON.stringify(summary.slice(0, 90))}`, ms);
+    } catch (e) {
+      record(model, `memory compaction (${label})`, false, String(e.message));
+    }
   }
   // Loaded while in use, freed on request.
   try {
@@ -185,6 +236,62 @@ async function checkModel(model) {
   } catch (e) {
     record(model, "unload", false, String(e.message));
   }
+}
+
+// Streams /api/pull (NDJSON progress lines). A non-streaming pull sends no
+// headers until the whole download is done, which trips fetch's 300 s
+// header timeout (UND_ERR_HEADERS_TIMEOUT) on any real model.
+async function pull(model) {
+  console.log(`      pulling ${model} ...`);
+  const res = await fetch(BASE + "/api/pull", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, stream: true }),
+  });
+  if (!res.ok || !res.body) throw new Error(`/api/pull -> HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const decoder = new TextDecoder();
+  let buf = "";
+  let success = false;
+  let lastShown = "";
+  const handle = (line) => {
+    if (!line.trim()) return;
+    const p = JSON.parse(line);
+    if (p.error) throw new Error(`pull ${model}: ${p.error}`);
+    if (p.status === "success") success = true;
+    const pct = p.total ? ` ${Math.floor(((p.completed ?? 0) * 100) / p.total)}%` : "";
+    const shown = `${p.status}${pct}`;
+    if (shown !== lastShown) {
+      lastShown = shown;
+      process.stdout.write(`\r      ${shown.padEnd(60)}`);
+    }
+  };
+  // No data for 3 minutes = stalled (verifying a big blob is silent for a while).
+  const reader = res.body.getReader();
+  try {
+    for (;;) {
+      let timer;
+      const stall = new Promise((_, rej) => {
+        timer = setTimeout(() => rej(new Error(`pull ${model}: no progress for 180 s`)), 180_000);
+      });
+      const { value, done } = await Promise.race([reader.read(), stall]).finally(() => clearTimeout(timer));
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n")) >= 0) {
+        handle(buf.slice(0, i));
+        buf = buf.slice(i + 1);
+      }
+    }
+    handle(buf + decoder.decode());
+  } catch (e) {
+    // Close the stream before exiting (an open fetch body at process.exit
+    // trips a libuv assertion on Windows).
+    await reader.cancel().catch(() => {});
+    throw e;
+  } finally {
+    process.stdout.write("\n");
+  }
+  if (!success) throw new Error(`pull ${model}: download ended before it finished`);
 }
 
 async function main() {
@@ -207,8 +314,13 @@ async function main() {
         record(m, "installed", false, `not downloaded; run with --pull or: ollama pull ${m}`);
         continue;
       }
-      console.log(`      pulling ${m} ...`);
-      await api("/api/pull", { model: m, stream: false });
+      try {
+        await pull(m);
+        record(m, "pulled", true, "downloaded");
+      } catch (e) {
+        record(m, "pulled", false, String(e.message));
+        continue;
+      }
     }
     await checkModel(m);
   }
@@ -222,7 +334,9 @@ function finish(version) {
     JSON.stringify({ when: new Date().toISOString(), os: osName, ram_gb: +(os.totalmem() / 1024 ** 3).toFixed(1), ollama: version ?? null, results }, null, 2),
   );
   console.log(`\n${results.length - failed.length}/${results.length} passed. Report: dev/ollama-check/report.json`);
-  process.exit(failed.length ? 1 : 0);
+  // exitCode, not exit(): exiting with fetch sockets still open trips a libuv
+  // assertion on Windows. Node exits by itself once they close.
+  process.exitCode = failed.length ? 1 : 0;
 }
 
 main().catch((e) => {

@@ -24,8 +24,9 @@ pub const COMPACT_AT: usize = 14;
 pub const KEEP_RECENT: usize = 6;
 
 pub const MEMORY_PROMPT: &str = "You have a memory. Use the remember tool for lasting facts the user tells you \
-    (their name, pets, preferences, projects) or when they ask you to remember something, and the forget tool \
-    when they ask you to forget. Never remember passwords, codes or card numbers. Use what you remember \
+    about themselves (their name, family, pets, likes, projects) and always when they ask you to remember \
+    something. Greetings, moods and requests like opening a website are not facts. Use the forget tool when \
+    they ask you to forget. Never remember passwords, codes or card numbers. Use what you remember \
     naturally; don't recite it.";
 
 /// What the UI should show after a step.
@@ -57,7 +58,12 @@ pub struct Agent {
     actions: Vec<String>,
     /// `None` when the user turned memory off.
     memory: Option<MemoryStore>,
+    /// The `remember` tool stored something during the current user turn.
+    remembered_this_turn: bool,
 }
+
+/// How many recent user messages a `remember` call may be based on.
+const REMEMBER_LOOKBACK: usize = 3;
 
 pub fn system_prompt(os: Os) -> String {
     let os_name = match os {
@@ -90,6 +96,7 @@ impl Agent {
             model_calls: 0,
             actions: Vec::new(),
             memory: None,
+            remembered_this_turn: false,
         }
     }
 
@@ -161,9 +168,10 @@ impl Agent {
             return Ok(Vec::new());
         }
         let request = memory::compaction_request(&memory.data.summary, &self.history[..cut]);
+        let said = memory::user_said(&self.history[..cut]);
         let reply = self.provider.chat(ChatRequest { model, messages: &request, tools: &[] }).await?;
         let memory = self.memory.as_mut().expect("checked above");
-        let added = memory.apply_compaction(&reply.content, &memory::today());
+        let added = memory.apply_compaction(&reply.content, &memory::today(), &said);
         self.history.drain(..cut);
         self.save_memory();
         Ok(added.into_iter().map(|f| f.text).collect())
@@ -201,7 +209,38 @@ impl Agent {
         self.trim_history();
         self.model_calls = 0;
         self.actions.clear();
-        self.run(model).await
+        self.remembered_this_turn = false;
+        let step = self.run(model).await?;
+        Ok(self.remember_fallback(text, step))
+    }
+
+    /// Small models sometimes answer "remember that my dog is called Rex"
+    /// with a cheerful "Got it!" but no `remember` call. An explicit request
+    /// is stored anyway (same safety rules as the tool).
+    fn remember_fallback(&mut self, user_text: &str, step: Step) -> Step {
+        let Step::Reply { text, mut actions } = step else { return step };
+        if !self.remembered_this_turn {
+            if let (Some(m), Some(fact)) = (&mut self.memory, memory::explicit_remember_request(user_text)) {
+                if let Ok(Remembered::Added(f) | Remembered::Updated(f)) = m.remember(&fact, &memory::today()) {
+                    actions.push(format!("Remembered: {}", f.text));
+                    self.save_memory();
+                }
+            }
+        }
+        Step::Reply { text, actions }
+    }
+
+    /// The user's last few messages (what a `remember` call may be about).
+    fn recent_user_text(&self) -> String {
+        let recent: Vec<&str> = self
+            .history
+            .iter()
+            .rev()
+            .filter(|m| m.role == Role::User)
+            .take(REMEMBER_LOOKBACK)
+            .map(|m| m.content.as_str())
+            .collect();
+        recent.join("\n")
     }
 
     pub async fn confirm(&mut self, model: &str, id: &str, approved: bool) -> Result<Step, AgentError> {
@@ -233,13 +272,24 @@ impl Agent {
 
     fn execute_memory(&mut self, action: Action) {
         let tool = action.tool_name();
+        let said = self.recent_user_text();
         let (for_model, summary) = match (&mut self.memory, &action) {
             (None, _) => (json!({"ok": false, "error": "memory is turned off"}), None),
+            // Small models sometimes "remember" a greeting or their own guess.
+            (Some(_), Action::Remember { fact }) if !memory::grounded(fact, &said) => (
+                json!({"ok": false, "error": "not saved: only remember lasting things the user told you about \
+                    themselves, using their words. Just answer the user normally."}),
+                None,
+            ),
             (Some(m), Action::Remember { fact }) => match m.remember(fact, &memory::today()) {
                 Ok(Remembered::Added(f) | Remembered::Updated(f)) => {
+                    self.remembered_this_turn = true;
                     (json!({"ok": true, "remembered": f.text}), Some(format!("Remembered: {}", f.text)))
                 }
-                Ok(Remembered::AlreadyKnown(f)) => (json!({"ok": true, "already_known": f.text}), None),
+                Ok(Remembered::AlreadyKnown(f)) => {
+                    self.remembered_this_turn = true;
+                    (json!({"ok": true, "already_known": f.text}), None)
+                }
                 Err(e) => (json!({"ok": false, "error": e.0}), None),
             },
             (Some(m), Action::Forget { about }) => {
@@ -625,13 +675,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn explicit_remember_requests_are_kept_even_without_a_tool_call() {
+        let model = ScriptedModel::new(vec![Message::assistant("Got it, Rex!"), Message::assistant("Sure!")]);
+        let mut a = with_memory(model);
+        let step = a.send("m", "remember that my dog is called Rex").await.unwrap();
+        assert_eq!(
+            step,
+            Step::Reply {
+                text: "Got it, Rex!".into(),
+                actions: vec!["Remembered: The user's dog is called Rex".into()]
+            }
+        );
+        // Not for normal chat or questions.
+        let Step::Reply { actions, .. } = a.send("m", "do you remember my dog?").await.unwrap() else { panic!() };
+        assert!(actions.is_empty());
+        assert_eq!(a.memory().unwrap().data.facts.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn invented_facts_are_not_remembered() {
+        let model = ScriptedModel::new(vec![
+            calls("remember", json!({"fact": "The user is greeting Glitch warmly."})),
+            Message::assistant("I'm great, thanks!"),
+        ]);
+        let mut a = with_memory(model.clone());
+        let step = a.send("m", "hi! how are you today?").await.unwrap();
+        assert_eq!(step, Step::Reply { text: "I'm great, thanks!".into(), actions: vec![] });
+        assert!(a.memory().unwrap().data.facts.is_empty());
+        assert!(model.seen.lock().unwrap()[1].last().unwrap().content.contains("not saved"));
+    }
+
+    #[tokio::test]
     async fn long_chats_are_compacted_into_memory() {
         let mut replies: Vec<Message> = (0..8).map(|i| Message::assistant(format!("r{i}"))).collect();
         replies.push(Message::assistant("Summary: They chatted about cats.\nFACT: The user likes cats"));
         let model = ScriptedModel::new(replies);
         let mut a = with_memory(model.clone());
         for i in 0..8 {
-            a.send("m", &format!("u{i}")).await.unwrap();
+            a.send("m", &format!("u{i}: I like cats")).await.unwrap();
         }
         assert!(a.needs_compaction());
         let added = a.compact("m", false).await.unwrap();

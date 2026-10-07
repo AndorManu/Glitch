@@ -248,6 +248,10 @@ function onHidden(): void {
 
 function hide(): void {
   if (hideTimer) return;
+  // With a close animation: call bubbleClosing() when it starts and
+  // hideBubble() when it ends (Rust ignores the hide if Glitch was clicked
+  // meanwhile and the bubble reopened; "bubble-shown" fires then).
+  void api.bubbleClosing().catch(() => {});
   onHidden();
   const calm = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
   hideTimer = setTimeout(

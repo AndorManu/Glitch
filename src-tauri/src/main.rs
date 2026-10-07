@@ -98,6 +98,7 @@ fn main() {
             commands::mascot_clicked,
             commands::show_bubble,
             commands::hide_bubble,
+            commands::bubble_closing,
             commands::resize_bubble,
             commands::show_panel,
             commands::panel_view,

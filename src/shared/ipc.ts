@@ -153,6 +153,9 @@ export const api = {
   mascotClicked: () => invoke<void>("mascot_clicked"),
   showBubble: () => invoke<void>("show_bubble"),
   hideBubble: () => invoke<void>("hide_bubble"),
+  /** Call when a close animation starts (before `hideBubble`): a click on
+   *  Glitch meanwhile reopens the bubble, and "bubble-shown" fires. */
+  bubbleClosing: () => invoke<void>("bubble_closing"),
   /** Report the bubble's content height in CSS px; returns where the tail goes. */
   resizeBubble: (height: number) => invoke<BubbleLayout | null>("resize_bubble", { height }),
   /** Open the panel on "setup" or "settings" (default: by setup state). */
