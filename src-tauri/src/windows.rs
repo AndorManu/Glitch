@@ -56,8 +56,17 @@ fn is_visible(app: &AppHandle, label: &str) -> bool {
 
 /// Tell the mascot whether any chat UI is open (it stops wandering then).
 /// Event name kept from milestone 1: "panel-visibility" = bubble or panel open.
+/// Is the chat bubble or the settings panel open?
+pub fn chat_open(app: &AppHandle) -> bool {
+    is_visible(app, BUBBLE) || is_visible(app, PANEL)
+}
+
 fn emit_chat_visibility(app: &AppHandle) {
-    let open = is_visible(app, BUBBLE) || is_visible(app, PANEL);
+    let open = chat_open(app);
+    if open {
+        // Chaos stops the moment the chat opens.
+        crate::chaos::stop_all(app);
+    }
     let _ = app.emit("panel-visibility", open);
 }
 

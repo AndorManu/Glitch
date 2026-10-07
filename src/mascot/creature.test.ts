@@ -259,7 +259,8 @@ describe("creature: the world changes", () => {
     t.c.setPanelOpen(true);
     const x0 = t.c.body.x;
     t.setWorld({ area, scale: 1, ledges: [{ ...top, x: top.x - 100, y: top.y - 30 }] });
-    await t.fc.run(LEDGE_WATCH_MS + 100);
+    // The window then eases after the body over ~0.1-0.2 s (no jump).
+    await t.fc.run(LEDGE_WATCH_MS + 500);
     expect(t.c.surface.kind).toBe("ledge");
     expect(t.c.body.x).toBe(x0 - 100);
     expect(t.c.body.y + HALF).toBe(670);

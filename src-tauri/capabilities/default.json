@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "What the Glitch windows may do. App commands (chat, settings, ...) are defined in src-tauri/src/commands.rs.",
-  "windows": ["mascot", "bubble", "panel"],
+  "windows": ["mascot", "bubble", "panel", "note", "pawprints"],
   "permissions": [
     "core:default",
     "core:window:allow-set-position",

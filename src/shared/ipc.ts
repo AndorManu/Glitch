@@ -5,6 +5,8 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 export interface Settings {
   model: string | null;
   movement_enabled: boolean;
+  /** Chaos mode (window mischief, cursor play, paw prints, notes). Missing from old builds: on. */
+  chaos_enabled?: boolean;
   onboarding_done: boolean;
   ollama_url: string;
   keep_alive: string;
@@ -104,6 +106,31 @@ export interface WorldSnapshot {
   scale: number;
   /** Window tops to stand on (empty on Linux or if unavailable). */
   ledges: Ledge[];
+  /** Whole frames of the windows those ledges belong to (missing from older builds / fakes). */
+  frames?: WindowFrame[];
+}
+
+/** Another app's window frame, physical px (`id` matches its ledges). */
+export interface WindowFrame {
+  id: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Sent as "ledge-event" while Glitch stands on another app's window. */
+export interface LedgeEvent {
+  id: number;
+  /** move: it is now at `frame`; grab: the user took hold of it; gone: closed/hidden/minimised; front: another window came to the front. */
+  kind: "move" | "grab" | "gone" | "front";
+  frame: ScreenRect | null;
+}
+
+export interface LedgeWatchInfo {
+  /** true: "ledge-event" events arrive; false: poll ledgeFrame. */
+  events: boolean;
+  frame: ScreenRect | null;
 }
 
 /** Window-local CSS px. */
@@ -153,7 +180,7 @@ export const api = {
   confirmAction: (id: string, approved: boolean) => invoke<Step>("confirm_action", { id, approved }),
   resetChat: () => invoke<void>("reset_chat"),
   getSettings: () => invoke<Settings>("get_settings"),
-  updateSettings: (patch: Partial<Pick<Settings, "model" | "movement_enabled" | "onboarding_done" | "memory_enabled">>) =>
+  updateSettings: (patch: Partial<Pick<Settings, "model" | "movement_enabled" | "chaos_enabled" | "onboarding_done" | "memory_enabled">>) =>
     invoke<Settings>("update_settings", { patch }),
   /** Click on Glitch: toggles the chat bubble (or opens setup on first run). */
   mascotClicked: () => invoke<void>("mascot_clicked"),
@@ -186,6 +213,10 @@ export const api = {
    * Rust emits "mascot-hover" (boolean) when the cursor enters/leaves it.
    */
   setHitbox: (rect: LocalRect | null) => invoke<void>("set_hitbox", { rect }),
+  /** Watch the window Glitch stands on (null: stop). Events arrive as "ledge-event". */
+  ledgeWatch: (id: number | null) => invoke<LedgeWatchInfo>("ledge_watch", { id }),
+  /** Where that window is now (null: gone). For platforms without events. */
+  ledgeFrame: (id: number) => invoke<ScreenRect | null>("ledge_frame", { id }),
 };
 
 // ------------------------------------------------------------------ voice
@@ -272,4 +303,60 @@ export const voiceApi = {
   cancelDownload: () => invoke<void>("voice_cancel_download"),
   deleteModel: (model: string) => invoke<void>("voice_delete_model", { model }),
   openMicSettings: () => invoke<void>("voice_open_mic_settings"),
+};
+
+// ------------------------------------------------------------------ chaos
+// Chaos mode (src-tauri/src/chaos.rs). Everything that touches other apps'
+// windows or the cursor is checked again in Rust: chaos + movement on, chat
+// closed, user not busy, rate limits, travel limits, on-screen clamping.
+
+export type ChaosRefusal = "disabled" | "cooling_down" | "user_active" | "fullscreen" | "not_found" | "ineligible" | "in_use" | "busy";
+
+export interface ChaosStatus {
+  /** Other apps' windows / the cursor can be touched on this OS (Windows). */
+  available: boolean;
+  enabled: boolean;
+  /** Why not right now (null = go ahead). */
+  blocked: ChaosRefusal | null;
+  /** ms since the last keyboard/mouse input (0 if unknown). */
+  idle_ms: number;
+  window_ready: boolean;
+  cursor_ready: boolean;
+}
+
+export interface ChaosWindow {
+  /** Same id as the window's ledges. */
+  id: number;
+  /** Visible frame, physical px. */
+  frame: ScreenRect;
+}
+
+/** Physical screen px; `angle` in degrees. */
+export interface PawStamp {
+  x: number;
+  y: number;
+  angle: number;
+  left: boolean;
+}
+
+export const chaosApi = {
+  status: () => invoke<ChaosStatus>("chaos_status"),
+  /** Windows Glitch may drag right now (empty when not allowed). */
+  windows: () => invoke<ChaosWindow[]>("chaos_windows"),
+  /** Start a grab: resolves to the frame, rejects with a ChaosRefusal. */
+  grabWindow: (id: number) => invoke<ScreenRect>("chaos_grab_window", { id }),
+  /** Move it by (dx, dy) from where it was grabbed: the applied offset, or null = let go. */
+  dragWindow: (dx: number, dy: number) => invoke<[number, number] | null>("chaos_drag_window", { dx, dy }),
+  releaseWindow: () => invoke<void>("chaos_release_window"),
+  grabCursor: () => invoke<[number, number] | null>("chaos_grab_cursor"),
+  /** false = let go (the user pulled, time up). */
+  dragCursor: (x: number, y: number) => invoke<boolean>("chaos_drag_cursor", { x, y }),
+  releaseCursor: () => invoke<void>("chaos_release_cursor"),
+  paws: (paws: PawStamp[]) => invoke<void>("chaos_paws", { paws }),
+  pawsIdle: () => invoke<void>("chaos_paws_idle"),
+  /** Open the sticky note with line `line` at (x, y) physical px: its size in physical px. */
+  noteOpen: (line: number, x: number, y: number) => invoke<{ w: number; h: number } | null>("chaos_note_open", { line, x, y }),
+  noteMove: (x: number, y: number) => invoke<boolean>("chaos_note_move", { x, y }),
+  noteClose: () => invoke<void>("chaos_note_close"),
+  noteIsOpen: () => invoke<boolean>("chaos_note_open_now"),
 };
