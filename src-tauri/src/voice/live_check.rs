@@ -205,7 +205,9 @@ fn one_command(model: &stt::Keeper<stt::Model>, path: &Path, wav: &Path, mode: M
         |samples| {
             let t = Instant::now();
             let m = model.get(path, stt::load)?;
-            let r = stt::transcribe(&m, samples, Some("en"), ctl.abort.clone());
+            // The app's default language setting is "auto" (detect).
+            let lang = std::env::var("GLITCH_VOICE_LANGUAGE").unwrap_or_else(|_| "auto".into());
+            let r = stt::transcribe(&m, samples, glitch_core::voice::whisper_language(&lang), ctl.abort.clone());
             eprintln!(
                 "    whisper: {:.1} s of audio in {} ms",
                 samples.len() as f32 / 16_000.0,
