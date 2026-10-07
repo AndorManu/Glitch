@@ -10,3 +10,7 @@ dev/ollama-check/report.json
 .claude/worktrees/
 dev/out/
 art/frames/
+art/generated/log-*.txt
+art/generated/review*.png
+art/generated/*-bad.png
+art/generated/preview/
