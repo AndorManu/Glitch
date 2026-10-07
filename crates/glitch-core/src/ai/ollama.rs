@@ -83,13 +83,8 @@ impl OllamaClient {
         struct V {
             version: String,
         }
-        let resp = self
-            .http
-            .get(self.url("/api/version"))
-            .timeout(QUICK_TIMEOUT)
-            .send()
-            .await
-            .map_err(transport_error)?;
+        let resp =
+            self.http.get(self.url("/api/version")).timeout(QUICK_TIMEOUT).send().await.map_err(transport_error)?;
         let v: V = parse_json(resp, None).await?;
         Ok(v.version)
     }
@@ -114,13 +109,7 @@ impl OllamaClient {
             #[serde(default)]
             parameter_size: String,
         }
-        let resp = self
-            .http
-            .get(self.url("/api/tags"))
-            .timeout(QUICK_TIMEOUT)
-            .send()
-            .await
-            .map_err(transport_error)?;
+        let resp = self.http.get(self.url("/api/tags")).timeout(QUICK_TIMEOUT).send().await.map_err(transport_error)?;
         let tags: Tags = parse_json(resp, None).await?;
         Ok(tags
             .models
@@ -157,11 +146,7 @@ impl OllamaClient {
     }
 
     /// `POST /api/pull` (streaming). Calls `on_progress` for every status line.
-    pub async fn pull(
-        &self,
-        model: &str,
-        mut on_progress: impl FnMut(PullProgress) + Send,
-    ) -> Result<(), AiError> {
+    pub async fn pull(&self, model: &str, mut on_progress: impl FnMut(PullProgress) + Send) -> Result<(), AiError> {
         #[derive(Deserialize)]
         struct Line {
             #[serde(default)]
@@ -185,8 +170,7 @@ impl OllamaClient {
             if line.iter().all(u8::is_ascii_whitespace) {
                 return Ok(false);
             }
-            let l: Line = serde_json::from_slice(line)
-                .map_err(|e| AiError::InvalidResponse(e.to_string()))?;
+            let l: Line = serde_json::from_slice(line).map_err(|e| AiError::InvalidResponse(e.to_string()))?;
             if let Some(err) = l.error {
                 return Err(AiError::Api { status: 200, message: err });
             }
@@ -268,11 +252,7 @@ impl AiProvider for OllamaClient {
     async fn chat(&self, req: ChatRequest<'_>) -> Result<Message, AiError> {
         // Only send `think` to models that support it. If /api/show fails we
         // just leave it out rather than failing the whole chat.
-        let thinking = self
-            .capabilities(req.model)
-            .await
-            .map(|c| c.iter().any(|c| c == "thinking"))
-            .unwrap_or(false);
+        let thinking = self.capabilities(req.model).await.map(|c| c.iter().any(|c| c == "thinking")).unwrap_or(false);
         let body = self.chat_body(&req, thinking);
         let resp = self
             .http
@@ -390,10 +370,7 @@ async fn error_from_response(resp: reqwest::Response, model: Option<&str>) -> Ai
     }
 }
 
-async fn parse_json<T: for<'de> Deserialize<'de>>(
-    resp: reqwest::Response,
-    model: Option<&str>,
-) -> Result<T, AiError> {
+async fn parse_json<T: for<'de> Deserialize<'de>>(resp: reqwest::Response, model: Option<&str>) -> Result<T, AiError> {
     if !resp.status().is_success() {
         return Err(error_from_response(resp, model).await);
     }

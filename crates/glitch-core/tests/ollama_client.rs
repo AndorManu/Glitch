@@ -83,7 +83,9 @@ async fn chat_sends_keep_alive_tools_and_no_streaming() {
 
 #[tokio::test]
 async fn think_false_only_for_thinking_models() {
-    for (caps, expect_think) in [(json!(["completion", "tools", "thinking"]), true), (json!(["completion", "tools"]), false)] {
+    for (caps, expect_think) in
+        [(json!(["completion", "tools", "thinking"]), true), (json!(["completion", "tools"]), false)]
+    {
         let server = MockServer::start().await;
         mock_show(&server, caps).await;
         Mock::given(method("POST"))
@@ -187,7 +189,9 @@ async fn api_errors_carry_the_documented_error_message() {
     mock_show(&server, json!([])).await;
     Mock::given(method("POST"))
         .and(path("/api/chat"))
-        .respond_with(ResponseTemplate::new(500).set_body_json(json!({"error": "the model failed to generate a response"})))
+        .respond_with(
+            ResponseTemplate::new(500).set_body_json(json!({"error": "the model failed to generate a response"})),
+        )
         .mount(&server)
         .await;
     let client = OllamaClient::new(&server.uri(), "2m");
@@ -265,7 +269,11 @@ async fn pull_streams_progress_until_success() {
 #[tokio::test]
 async fn pull_reports_mid_stream_errors() {
     let server = MockServer::start().await;
-    let ndjson = format!("{}\n{}\n", json!({"status": "pulling manifest"}), json!({"error": "pull model manifest: file does not exist"}));
+    let ndjson = format!(
+        "{}\n{}\n",
+        json!({"status": "pulling manifest"}),
+        json!({"error": "pull model manifest: file does not exist"})
+    );
     Mock::given(method("POST"))
         .and(path("/api/pull"))
         .respond_with(ResponseTemplate::new(200).set_body_raw(ndjson, "application/x-ndjson"))

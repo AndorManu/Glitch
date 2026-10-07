@@ -32,7 +32,8 @@ pub struct Recommendation {
 struct Tier {
     /// Applies when total RAM is *below* this many GiB (`None` = no upper limit).
     below_gib: Option<u64>,
-    /// RAM of a typical machine in this tier (used to sanity-check sizes).
+    /// RAM of a typical machine in this tier (used to sanity-check sizes in tests).
+    #[cfg_attr(not(test), allow(dead_code))]
     typical_gib: u64,
     name: &'static str,
     primary: ModelChoice,

@@ -38,10 +38,7 @@ impl Settings {
     /// Load settings; a missing or unreadable file gives defaults rather than
     /// an error, so a corrupted file can never stop Glitch from starting.
     pub fn load(path: &Path) -> Self {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
     }
 
     /// Write atomically (temp file + rename) so a crash can't leave half a file.
@@ -72,7 +69,12 @@ mod tests {
     fn round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sub/settings.json");
-        let s = Settings { model: Some("qwen3.5:2b".into()), movement_enabled: false, onboarding_done: true, ..Default::default() };
+        let s = Settings {
+            model: Some("qwen3.5:2b".into()),
+            movement_enabled: false,
+            onboarding_done: true,
+            ..Default::default()
+        };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);
         assert!(!path.with_extension("json.tmp").exists());
