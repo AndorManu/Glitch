@@ -95,7 +95,9 @@ async function renderSettings(): Promise<void> {
     updateWarning();
     s.model = select.value;
     shownKey = settingsKey(s);
-    await api.updateSettings({ model: select.value });
+    // On failure, redraw from what Rust actually has (and don't leave an
+    // unhandled rejection or a key that hides the next real change).
+    await api.updateSettings({ model: select.value }).catch(() => renderSettings());
   });
 
   const ollama = ollamaSummary(status);
@@ -120,7 +122,7 @@ async function renderSettings(): Promise<void> {
         toggleSwitch("Let Glitch walk around", "Off: Glitch stays where you put it.", s.movement_enabled, (on) => {
           s.movement_enabled = on;
           shownKey = settingsKey(s);
-          void api.updateSettings({ movement_enabled: on });
+          void api.updateSettings({ movement_enabled: on }).catch(() => renderSettings());
         }),
         h(
           "div",
