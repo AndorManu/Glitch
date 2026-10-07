@@ -12,8 +12,8 @@
 // While moving, a repaint happens only when the picture changes (a new key,
 // a new angle); the window move alone carries a walking sprite.
 
-import { ANIMATIONS, type AnimationName, Animator, type Clock, isAnimationName, type Keyframe, landKeys, type Pose } from "./animations";
-import { familyOf, turnKeys } from "./transitions";
+import { ANIMATIONS, type AnimationName, Animator, type Clock, isAnimationName, type Keyframe, landKeys, type Pose, samePose } from "./animations";
+import { familyOf, has, turnKeys } from "./transitions";
 import { ANIM_BITES, ANIM_FRAME_H, ANIM_FRAME_W, ANIM_GRIPS } from "../sprites/anim";
 import { ART_SCALE } from "../sprites/glitch-anim";
 import { type BehaviourName, Brain, type BrainContext, type Haul, isBehaviourName, type Plan, type Gait } from "./brain";
@@ -102,6 +102,36 @@ const ATTACH_MS = 80;
 /** Thrown faster than this (CSS px/s): he spins; slower, he falls upright. */
 const HARD_THROW = 900;
 /** Biting: he runs over first when the cursor is further than this (CSS px) sideways. */
+/** Gaze: he follows the cursor with his eyes within this distance (CSS px x scale). */
+const GAZE_NEAR = 320;
+/** Cursor reads while resting: every 250 ms when it is near, every 700 ms when far. */
+const GAZE_ASK_MS = 250;
+const GAZE_ASK_FAR_MS = 700;
+/** The eyes hold a direction at least this long. */
+const GAZE_HOLD_MS = 300;
+/** Petting: rubbing his head this long (and this far, CSS px) starts it; a pause this long ends it. */
+const PET_MS = 700;
+const PET_DIST = 50;
+const PET_GAP_MS = 400;
+const PET_STOP_MS = 700;
+/** A click this soon after he fell asleep makes him jump (jump_scare) instead of waking slowly. */
+const SCARE_AFTER_SLEEP_MS = 20_000;
+
+/**
+ * look_dirs index for a direction `a` (degrees, 0 = right, 90 = up on
+ * screen): up, up-right, right, down-right, down, down-left, left, up-left.
+ * Keeps `current` until `a` is 8 deg past its sector edge (no flicker).
+ */
+export function gazeSector(a: number, current: number | null): number {
+  const sector = (x: number) => (((Math.round((90 - x) / 45) % 8) + 8) % 8);
+  if (current !== null) {
+    const centre = 90 - current * 45;
+    const off = ((((a - centre) % 360) + 540) % 360) - 180;
+    if (Math.abs(off) <= 22.5 + 8) return current;
+  }
+  return sector(a);
+}
+
 const BITE_REACH = 220;
 /** Biting: the lunge (ease from where he stands to the cursor), ms. */
 const BITE_LUNGE_MS = 240;
@@ -290,7 +320,7 @@ export class Creature {
   private hangDrop = 0;
   private flight: Flight | null = null;
   private hold: Hold | null = null;
-  private press: { local: Vec } | null = null;
+  private press: { local: Vec; t0: number } | null = null;
   private platform: Platform | null = null;
   private teleportTo: { surface: Surface; s: number } | null = null;
   private waiting: { name: AnimationName; fn: () => void } | null = null;
@@ -322,9 +352,12 @@ export class Creature {
     this.rand = opts.random ?? Math.random;
     this.brain = new Brain(this.rand);
     this.animator = new Animator(
-      (pose, tick) => {
-        this.pose = pose;
+      (drawn, tick) => {
+        // His eyes on the cursor while he rests (look_dirs), else the drawn pose.
+        const pose = this.gazePose(drawn);
         this.poseTick = tick;
+        if (pose !== drawn && samePose(this.pose, pose)) return; // still looking the same way: no repaint
+        this.pose = pose;
         this.dirty = true;
         // While the window moves, the motion tick paints (once per tick).
         // (Also while a motion tick runs: it paints at its end.)
@@ -408,7 +441,8 @@ export class Creature {
   /** Stop every timer (tests, page unload). */
   dispose(): void {
     this.animator.stop();
-    for (const t of [this.annoyTimer, this.clingTimer, ...this.biteTimers]) if (t !== null) this.clock.clearTimeout(t);
+    for (const t of [this.annoyTimer, this.clingTimer, this.petTimer, ...this.biteTimers]) if (t !== null) this.clock.clearTimeout(t);
+    this.petTimer = null;
     this.biteTimers = [];
     this.annoyTimer = this.clingTimer = null;
     for (const t of [this.motionTimer, this.brainTimer, this.pollTimer, this.actionTimer, this.talkTimer, this.watchTimer]) if (t !== null) this.clock.clearTimeout(t);
@@ -416,6 +450,111 @@ export class Creature {
   }
 
   private talkTimer: unknown = null;
+
+  // ------------------------------------------------------------ gaze
+  // Resting, he looks at the cursor when it is near (look_dirs: up, up-right,
+  // right, down-right, down, down-left, left, up-left on screen). The cursor
+  // is read only on his own idle repaints (no timer of its own), at most every
+  // GAZE_ASK_MS (slower while it is far away); the eyes change direction at
+  // most every GAZE_HOLD_MS, with hysteresis at the sector edges: no jitter.
+
+  /** Direction he looks (look_dirs index) or null (at you, the normal idle). */
+  private gaze: number | null = null;
+  private gazeChangedAt = -1e9;
+  private gazeAskedAt = -1e9;
+  private gazeFar = true;
+
+  private canGaze(): boolean {
+    return (
+      this.mode === "stand" && isStanding(this.surface) && !this.asleep && !this.hold && !this.press && this.animator.animation === "idle" && this.petting === false && has("look_dirs")
+    );
+  }
+
+  private gazePose(pose: Pose): Pose {
+    // Only over the resting frames (tail loop, blinks, breaths) and his own glances.
+    if (!/^(idle_tail(_in|_ear|_blink_[abc])?|look_dirs)\d+$/.test(pose.frame) || !this.canGaze()) {
+      if (this.gaze !== null && !this.canGaze()) this.gaze = null;
+      return pose;
+    }
+    const now = this.now;
+    if (now - this.gazeAskedAt >= (this.gazeFar && this.gaze === null ? GAZE_ASK_FAR_MS : GAZE_ASK_MS)) {
+      this.gazeAskedAt = now;
+      void Promise.resolve(this.host.cursor()).then(
+        (c) => this.gazeAt(c),
+        () => {},
+      );
+    }
+    return this.gaze === null ? pose : { ...pose, frame: `look_dirs${this.gaze}`, glitch: pose.glitch, fx: pose.fx };
+  }
+
+  private gazeAt(c: Vec): void {
+    if (!this.canGaze()) return;
+    const u = this.u;
+    // From his eyes (a bit above the body centre).
+    const dx = c.x - this.body.x;
+    const dy = c.y - (this.body.y - 18 * u);
+    const d = Math.hypot(dx, dy);
+    this.gazeFar = d > GAZE_NEAR * u * 1.5;
+    let want: number | null = null;
+    if (d <= GAZE_NEAR * u && d >= 24 * u) {
+      const a = (Math.atan2(-dy, dx) * 180) / Math.PI; // 0 = right, 90 = up
+      want = gazeSector(a, this.gaze);
+    }
+    if (want === this.gaze || this.now - this.gazeChangedAt < GAZE_HOLD_MS) return;
+    this.gaze = want;
+    this.gazeChangedAt = this.now;
+  }
+
+  // ------------------------------------------------------------ petting
+  // Small mouse movements over his head for ~0.7 s (no button) = petting:
+  // bliss, hearts, tail wag (the petted loop) for as long as you keep going,
+  // and it calms him down (the annoyance meter drops).
+
+  private pet: { t0: number; at: number; last: Vec; dist: number } | null = null;
+  private petting = false;
+  private petTimer: unknown = null;
+
+  private rub(local: Vec): void {
+    if (this.mode !== "stand" || !isStanding(this.surface) || this.asleep || this.hold || !this.world || !has("petted")) return;
+    const r = this.view.bodyRect;
+    if (!r) return;
+    const onHead = local.x >= r.x && local.x <= r.x + r.w && local.y >= r.y - 10 && local.y <= r.y + r.h * 0.5;
+    const now = this.now;
+    if (!onHead) {
+      this.pet = null;
+      return;
+    }
+    let p = this.pet;
+    if (!p || now - p.at > PET_GAP_MS) p = this.pet = { t0: now, at: now, last: local, dist: 0 };
+    const dt = now - p.at;
+    p.dist += Math.hypot(local.x - p.last.x, local.y - p.last.y);
+    p.last = local;
+    p.at = now;
+    if (!this.petting && now - p.t0 >= PET_MS && p.dist >= PET_DIST) {
+      this.petting = true;
+      this.gaze = null;
+      this.interaction();
+      this.interrupt();
+      this.animator.play("petted");
+      this.event("petted");
+    }
+    if (!this.petting) return;
+    // Calms him down: about one annoyance level per second of petting.
+    this.annoyRaw = Math.max(0, this.annoyance - dt / 1000);
+    this.annoyAt = now;
+    if (this.sulking && this.annoyance < ANNOY_MEDIUM) this.sulkUntil = now;
+    if (this.petTimer !== null) this.clock.clearTimeout(this.petTimer);
+    this.petTimer = this.clock.setTimeout(() => {
+      this.petTimer = null;
+      this.petting = false;
+      this.pet = null;
+      if (this.animator.animation === "petted") this.animator.play(this.restAnim());
+      if (!this.plan) this.scheduleBrain(4000 + this.rand() * 4000);
+    }, PET_STOP_MS);
+  }
+
+  /** When he fell asleep (a click soon after makes him jump out of his skin). */
+  private asleepAt = -1e9;
 
   // ------------------------------------------------------------ annoyance
   // Picking him up, throwing him and poking him annoys him. The meter rises
@@ -1881,6 +2020,7 @@ export class Creature {
 
   private enterSleep(): void {
     this.asleep = true;
+    this.asleepAt = this.now;
     this.plan = null;
     this.waiting = null;
     for (const t of [this.brainTimer, this.pollTimer]) if (t !== null) this.clock.clearTimeout(t);
@@ -2071,9 +2211,17 @@ export class Creature {
     this.interaction();
     if (this.hold) return;
     if (this.mode === "air") return this.startHold(local); // caught mid-air!
-    this.press = { local };
+    this.press = { local, t0: this.now };
     this.updateHitbox(); // whole window while a drag could start
-    if (this.asleep) this.wake();
+    if (this.asleep && this.now - this.asleepAt < SCARE_AFTER_SLEEP_MS && this.mode === "stand" && isStanding(this.surface) && has("jump_scare")) {
+      // Only just dozed off: he jumps out of his skin.
+      this.asleep = false;
+      this.interaction();
+      this.interrupt();
+      this.animator.play("jump_scare", this.restAnim());
+      this.armLedgeWatch();
+      this.event("jump-scare");
+    } else if (this.asleep) this.wake();
     if (this.loco || this.corner) {
       this.interrupt();
       this.animator.play(this.restAnim());
@@ -2084,6 +2232,7 @@ export class Creature {
 
   pointerMove(local: Vec): void {
     const p = this.press;
+    if (!p && !this.hold) return this.rub(local);
     if (!p || this.hold) return;
     if (Math.hypot(local.x - p.local.x, local.y - p.local.y) > DRAG_THRESHOLD) this.startHold(p.local);
   }
@@ -2092,15 +2241,28 @@ export class Creature {
     if (this.hold?.bite) return;
     if (this.hold) return this.release();
     if (!this.press) return;
+    const press = this.press;
     this.press = null;
     this.host.clicked();
-    this.annoy(0.4);
+    // A quick tap while he's in a good mood: a high five (always on the paw
+    // he raises for it, up on his right; elsewhere now and then).
+    const calm = this.annoyance < 1 && !this.sulking;
+    const r = this.view.bodyRect;
+    const onPaw = !!r && press.local.x > r.x + r.w * 0.55 && press.local.y < r.y + r.h * 0.6;
+    const highFive = calm && this.mode === "stand" && isStanding(this.surface) && this.now - press.t0 < 250 && has("high_five") && (onPaw || this.rand() < 0.3);
+    if (!highFive) this.annoy(0.4);
     if (this.sulking) {
       // Ignores you (a glance back over the shoulder at most).
       this.updateHitbox();
       return;
     }
-    if (this.mode === "stand") {
+    if (this.animator.animation === "jump_scare") {
+      // Already jumped out of his skin on the press.
+    } else if (highFive) {
+      this.interrupt();
+      this.animator.play("high_five", this.restAnim());
+      this.event("high-five");
+    } else if (this.mode === "stand") {
       this.interrupt();
       this.animator.play("startled", this.restAnim());
     }
