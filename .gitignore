@@ -5,6 +5,7 @@ node_modules/
 *.log
 src-tauri/gen/
 dev/ollama-check/report.json
+dev/ollama-check/eval-report.json
 
 # local agent worktrees
 .claude/worktrees/
