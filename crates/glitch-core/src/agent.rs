@@ -102,6 +102,8 @@ pub struct Agent {
     steps: usize,
     looks: usize,
     private_turn: bool,
+    /// Side effects already done (or asked for) this message, see `side_effect_key`.
+    done_this_turn: Vec<String>,
 }
 
 /// How many recent user messages a `remember` call may be based on.
@@ -119,7 +121,7 @@ pub fn system_prompt(os: Os, screen: bool) -> String {
     };
     let look = if screen {
         "- look_at_screen: ALWAYS when the user talks about something they can see (\"this\", \"my screen\", an \
-         error, a page, a button, a document). Never guess what is on the screen. target \"window\" for errors, \
+         error, a page, a button, a document). Never guess what is on the screen and never ask the user to show you: look. target \"window\" for errors, \
          web pages, documents and code; \"screen\" for \"what's on my screen\"; \"cursor\" for \"this button\" or \
          \"under my mouse\".\n"
     } else {
@@ -136,6 +138,7 @@ pub fn system_prompt(os: Os, screen: bool) -> String {
          - Plain text only. No markdown: no **bold**, no # headings, no tables, no ``` code blocks (your speech \
          bubble can't show them). Write code inline, like prices[i].\n\
          - A bit of raccoon flavour is welcome, but the useful part comes first.\n\
+         - Translating: translate every word, greetings too, and give just the translation.\n\
          - Never make up results or what you saw. If a tool fails, say so simply and suggest what to try.\n\n\
          Tools: call them yourself instead of telling the user to do it. Call one tool, read its result, then \
          call the next one if needed (up to six steps), and finish with a short answer. Greetings and chit-chat \
@@ -156,16 +159,17 @@ pub fn system_prompt(os: Os, screen: bool) -> String {
          ask again.\n\n\
          When you look at a screenshot:\n\
          1. Quote the key text word for word: the error line with its name or code (like \"TypeError: x is not \
-         a function\" or \"0x80070005\"), titles, numbers, file names.\n\
+         a function\" or \"Error 1603\"), titles, numbers, file names.\n\
          2. Say where it is (\"the red dialog in the middle\", \"line 4 of the editor\").\n\
          3. Answer the question: what it means and the concrete fix or the next thing to click.\n\
          Only describe what is really there. If the text is too small to read, say so.\n\n\
          Examples (\"->\" is a tool call and its result):\n\
          User: what does this error mean?\n\
-         -> look_at_screen {{\"target\":\"window\"}} gives a dialog \"Error 0x80070005: Access is denied\" over \
-         an installer\n\
-         Glitch: The installer says \"Error 0x80070005: Access is denied\", so Windows blocked it from changing \
-         protected files. Close it, right-click the installer and pick \"Run as administrator\".\n\
+         -> look_at_screen {{\"target\":\"window\"}} gives a dialog \"Error 1603: Fatal error during \
+         installation\" over an installer\n\
+         Glitch: The installer says \"Error 1603: Fatal error during installation\", which usually means an old \
+         copy is in the way or it lacks rights. Uninstall the old version in Settings > Apps, then right-click \
+         the installer and pick \"Run as administrator\".\n\
          User: why is my script broken?\n\
          -> look_at_screen {{\"target\":\"window\"}} gives an editor with a terminal showing \"TypeError: Cannot \
          read properties of undefined (reading 'name') at app.js:12\"\n\
@@ -178,7 +182,7 @@ pub fn system_prompt(os: Os, screen: bool) -> String {
          User: find my holiday photos and open the newest one\n\
          -> search_files {{\"query\":\"holiday\",\"kind\":\"image\"}} gives results, newest first\n\
          -> open_path {{\"path\":\"<path of the first result>\"}}\n\
-         Glitch: Opened your newest holiday photo!\n\
+         Glitch: Opened <the file name from the results>, your newest holiday photo!\n\
          User: remind me to stretch in 20 minutes\n\
          -> set_timer {{\"minutes\":20,\"message\":\"Time to stretch!\"}}\n\
          Glitch: Deal! I'll pop up in 20 minutes.\n\
@@ -239,6 +243,8 @@ const LOOK_WINDOW: &[&str] = &[
     "whats wrong here",
     "what is wrong here",
     "fix this",
+    "my code",
+    "my error",
 ];
 const LOOK_CURSOR: &[&str] =
     &["this button", "under my mouse", "under the mouse", "under my cursor", "where my mouse", "near my cursor"];
@@ -303,6 +309,7 @@ impl Agent {
             steps: 0,
             looks: 0,
             private_turn: false,
+            done_this_turn: Vec::new(),
         }
     }
 
@@ -450,6 +457,7 @@ impl Agent {
         self.steps = 0;
         self.looks = 0;
         self.private_turn = false;
+        self.done_this_turn.clear();
         if let Some(step) = self.prefetch(model, text).await {
             return Ok(step);
         }
@@ -682,6 +690,19 @@ impl Agent {
                     if let Action::TakeNote { trusted, .. } = &mut action {
                         *trusted = self.notes_trusted;
                     }
+                    // Small models sometimes repeat a call they already made
+                    // (two identical timers). Once per message is enough.
+                    if let Some(key) = side_effect_key(&action) {
+                        if self.done_this_turn.contains(&key) {
+                            self.history.push(Message::tool_result(
+                                &call.name,
+                                json!({"ok": false, "note": "already handled a moment ago (done, or the user said no); don't repeat it, just answer"})
+                                    .to_string(),
+                            ));
+                            continue;
+                        }
+                        self.done_this_turn.push(key);
+                    }
                     // Once outside content (screen, clipboard, selection) is in
                     // the context, it could be steering the model: gate it all.
                     match approval_in_turn(&action, self.private_turn) {
@@ -783,6 +804,20 @@ impl Agent {
         }
         self.history.drain(..start);
     }
+}
+
+/// What makes a side effect "the same one again" within one message.
+fn side_effect_key(a: &Action) -> Option<String> {
+    Some(match a {
+        Action::OpenUrl { url } | Action::WebSearch { url, .. } => format!("url {url}"),
+        Action::OpenApp { app } => format!("app {}", app.name),
+        Action::OpenPath { path, .. } => format!("path {}", path.display()),
+        Action::WriteClipboard { text } => format!("clip {text}"),
+        Action::TakeNote { text, .. } => format!("note {text}"),
+        // Two timers for the same moment in one message are a repeat.
+        Action::SetTimer { seconds, .. } => format!("timer {seconds}"),
+        _ => return None,
+    })
 }
 
 /// The speech bubble shows plain text: drop the markdown small models add
@@ -1125,6 +1160,7 @@ mod tests {
         assert_eq!(screen_trigger("what does this error mean"), Some(CaptureTarget::Window));
         assert_eq!(screen_trigger("summarise this page"), Some(CaptureTarget::Window));
         assert_eq!(screen_trigger("help me with this"), Some(CaptureTarget::Window));
+        assert_eq!(screen_trigger("why does my code crash?"), Some(CaptureTarget::Window));
         assert_eq!(screen_trigger("what does this button do?"), Some(CaptureTarget::Cursor));
         assert_eq!(screen_trigger("open youtube"), None);
         assert_eq!(screen_trigger("hi glitch"), None);
@@ -1300,6 +1336,24 @@ mod tests {
         assert_eq!(actions, ["Noted: call Mila"]);
         let notes = std::fs::read_to_string(dir.path().join("notes.md")).unwrap();
         assert!(notes.contains("buy oat milk") && notes.contains("call Mila"));
+    }
+
+    #[tokio::test]
+    async fn repeated_side_effects_run_once_per_message() {
+        let desktop = Arc::new(FakeDesktop::default());
+        let model = ScriptedModel::new(vec![
+            calls("set_timer", json!({"minutes": 10, "message": "water"})),
+            calls("set_timer", json!({"minutes": 10, "message": "water!!"})),
+            Message::assistant("Done!"),
+            calls("set_timer", json!({"minutes": 10, "message": "water"})),
+            Message::assistant("Another one!"),
+        ]);
+        let (mut a, _) = seeing(model, desktop.clone());
+        a.send("m", "remind me to drink water in 10 minutes").await.unwrap();
+        assert_eq!(desktop.timers.lock().unwrap().len(), 1);
+        // A new message may set the same timer again.
+        a.send("m", "and another one").await.unwrap();
+        assert_eq!(desktop.timers.lock().unwrap().len(), 2);
     }
 
     #[tokio::test]

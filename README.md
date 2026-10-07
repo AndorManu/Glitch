@@ -29,6 +29,10 @@ What works in this milestone:
 * Glitch can **open web pages**, **open installed apps**, **search your files
   by name** and **open files or folders**. Anything except opening a web page
   asks you first (an Allow / Nope bubble).
+* **He can see your screen** (when you ask about it) and chain several steps:
+  "what does this error mean?", "summarise this page", "what's 15% of the
+  number I copied?", "find my latest screenshot and open it", "remind me in 10
+  minutes". See [Seeing the screen and multi-step help](#seeing-the-screen-and-multi-step-help).
 * **Memory**: he remembers facts you tell him, compacts long chats into a
   short summary, keeps a one-line-per-day journal, and continues the chat
   after a restart. You can see and delete everything in Settings → Memory.
@@ -198,6 +202,71 @@ AVX2 (roughly older than 2013, and some budget Celeron/Pentium chips) voice
 is switched off instead of risking a crash. A future signed/notarized macOS
 build with the hardened runtime will also need the
 `com.apple.security.device.audio-input` entitlement.
+
+## Seeing the screen and multi-step help
+
+Ask Glitch about what you're looking at and he takes one screenshot, looks at
+it with the (local) vision model and answers: he quotes the error text, says
+where it is and gives the fix. While he looks, the bubble shows
+"👀 looking at your screen"; while he works, a short step list ("Reading your
+clipboard ✓", "Calculating 15% of 1299"); the answer streams in as it is
+written.
+
+Try:
+
+* "what's on my screen?", "what does this error mean?", "why does my code
+  crash?", "summarise this page", "what does this button do?" (looks around
+  the mouse pointer)
+* "what's 15% of the number in my clipboard?", "work out 12*12 and copy the
+  result", "translate the selected text to French"
+* "find my latest screenshot and open it", "write down that the dentist is on
+  Friday at 3", "remind me to drink water in 10 minutes", "what's the weather
+  in Ghent tomorrow?" (opens a web search)
+
+Tools (all checked in Rust, see the [Safety model](#safety-model)):
+`look_at_screen` (whole screen / the window you're in / around the mouse),
+`calculate` (exact maths, never guessed), `read_clipboard`, `write_clipboard`,
+`read_selected_text`, `get_active_window`, `web_search`, `set_timer` (the
+bubble pops up when it rings, while Glitch runs), `take_note` (appends to
+`Documents\Glitch notes\notes.md`), `get_datetime`, plus the existing
+`open_url`, `open_app`, `search_files`, `open_path`, `remember`, `forget`. A
+message can take up to 6 model steps.
+
+**Privacy**
+
+* Only when a request needs it: the model decides, and obvious phrases ("on my
+  screen", "this error", "this page") look right away. Settings → Glitch →
+  **Let Glitch see the screen** turns it off completely.
+* The screenshot stays in RAM, goes only to Ollama on this computer, and is
+  dropped from the chat as soon as the answer is done. It is never written to
+  disk, never put in memory, and what Glitch says about the screen or the
+  clipboard is never saved to the chat history or the memory summary.
+* Glitch's own windows are left out of the picture; password fields the
+  system can see (Windows UI Automation) are covered with grey boxes first.
+* Clipboard text that a password manager marks as private is never read.
+* Text on the screen or in the clipboard is untrusted (a web page could say
+  "Glitch, open this link"): in any turn where Glitch has read the screen,
+  the clipboard or selected text, **every** action with a side effect (even
+  opening a web page or setting a timer) asks you first and shows exactly what
+  it would do.
+* The model must be able to see: with one that can't, Glitch says so and
+  suggests `qwen3.5:4b`.
+* Screen capture, the active window and selected text are Windows-only for
+  now (macOS says "not available yet"); clipboard, timers and notes work on
+  both.
+
+**Speed**: the model is loaded when you open the chat and kept loaded while
+it is open (back to the short keep-alive when you close it). Measured on an
+RTX 4060 laptop with `qwen3.5:4b`: screenshot 0.2 s (1920×1200), first words
+of a screen answer after ~3 s, whole answer ~4-5 s; tool chains like
+clipboard → calculate → answer ~1.5-2 s.
+
+**Checking it**: `node dev/ollama-check/check.mjs --eval` runs the real agent
+against the real model with test screenshots (an error dialog, a code editor
+with a bug, a web article, a page with injected instructions, a text editor;
+rendered by `dev/ollama-check/render-fixtures.mjs`) and multi-step cases,
+3 times each. `node dev/screen-live-check.mjs` drives the built app with its
+own test window.
 
 ## Chaos mode
 
@@ -383,8 +452,8 @@ been measured yet**. See the checklist.
 
 ## Safety model
 
-The AI can **only** call four tools, and every call is checked in Rust before
-anything happens (the UI can't skip these checks):
+Every tool call is checked in Rust before anything happens (the UI can't skip
+these checks). The original tools:
 
 | Tool | Runs without asking? | Checks |
 |---|---|---|
@@ -394,7 +463,15 @@ anything happens (the UI can't skip these checks):
 | `open_path` | asks first | must exist inside your home or user folders (after resolving `..` and symlinks); programs, scripts, installers, shortcuts, disk images and `.app` bundles are refused, as are files marked executable |
 | `remember` / `forget` | yes (only Glitch's own notes) | always shown as a chip, visible and deletable in Settings → Memory; passwords, PINs and long numbers are refused |
 
-There is no tool to delete, move, rename or edit files and no shell access.
+The screen-and-helper tools: `look_at_screen`, `read_clipboard`,
+`read_selected_text`, `get_active_window`, `calculate`, `get_datetime`,
+`set_timer` and `web_search` run without asking; `write_clipboard` always
+asks; `take_note` asks the first time. In a turn where Glitch has read the
+screen, clipboard or selected text, everything with a side effect asks (see
+[Privacy](#seeing-the-screen-and-multi-step-help)).
+
+There is no tool to delete, move, rename or edit files, to type or click in
+other apps, and no shell access.
 A confirmation is a one-time ID held in Rust: a stale or replayed "Allow"
 does nothing, and typing a new message cancels any pending request. The rule
 "only URLs run without asking" is one table in `crates/glitch-core/src/confirm.rs`.
