@@ -1390,6 +1390,8 @@ dependencies = [
 name = "glitch"
 version = "0.1.0"
 dependencies = [
+ "core-foundation",
+ "core-graphics",
  "glitch-core",
  "serde",
  "serde_json",
@@ -1397,6 +1399,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-single-instance",
  "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

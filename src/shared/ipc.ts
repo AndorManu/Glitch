@@ -73,6 +73,45 @@ export type Mood = "thinking" | "happy" | "asking" | "idle";
 
 export type PanelView = "setup" | "settings";
 
+/** Physical-pixel rectangle (screen coordinates, y grows downwards). */
+export interface ScreenRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * A surface Glitch can stand on: the visible part of the top edge of another
+ * app's window. Physical px; `y` is where his feet go. Already excludes
+ * Glitch's own windows, minimised/hidden windows, parts covered by windows in
+ * front, and edges with less than ~200 px of room above them.
+ */
+export interface Ledge {
+  /** Stable while the window exists (use it to notice moved/closed windows). */
+  id: number;
+  x: number;
+  y: number;
+  w: number;
+}
+
+export interface WorldSnapshot {
+  /** Work area of the monitor Glitch is on (excludes taskbar / menu bar). */
+  area: ScreenRect;
+  /** Physical px per CSS px of the mascot window. */
+  scale: number;
+  /** Window tops to stand on (empty on Linux or if unavailable). */
+  ledges: Ledge[];
+}
+
+/** Window-local CSS px. */
+export interface LocalRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 /** Also sent as the "bubble-layout" event whenever the bubble moves. */
 export interface BubbleLayout {
   /** true: bubble is below Glitch, tail points up. */
@@ -121,4 +160,13 @@ export const api = {
   /** Forget everything, including the saved chat. */
   clearMemory: () => invoke<void>("clear_memory"),
   quit: () => invoke<void>("quit"),
+  /** Screen edges + other windows' tops, for walking/climbing/jumping. Cheap (a few ms); poll every ~1.5 s at most. */
+  world: () => invoke<WorldSnapshot>("world_snapshot"),
+  /**
+   * The part of the mascot window that should catch the mouse (Glitch's body),
+   * in window-local CSS px. Everything else clicks through to what's below.
+   * `null` = the whole window catches the mouse (use while dragging).
+   * Rust emits "mascot-hover" (boolean) when the cursor enters/leaves it.
+   */
+  setHitbox: (rect: LocalRect | null) => invoke<void>("set_hitbox", { rect }),
 };

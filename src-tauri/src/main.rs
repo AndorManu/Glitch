@@ -2,10 +2,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod hover;
 mod layout;
 mod os;
 mod state;
 mod windows;
+mod world_native;
 
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -59,6 +61,8 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| commands::open_chat(app, false)))
         .setup(|app| {
             app.manage(AppState::new(app.path().app_config_dir()?));
+            app.manage(hover::Hitbox::default());
+            hover::start(app.handle().clone());
             os::configure(app);
             build_tray(app.handle())?;
             // The mascot page shows itself once drawn, and opens the setup
@@ -88,6 +92,8 @@ fn main() {
             commands::get_memory,
             commands::forget_memory,
             commands::clear_memory,
+            commands::world_snapshot,
+            commands::set_hitbox,
             commands::quit,
         ])
         .run(tauri::generate_context!())

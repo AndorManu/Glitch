@@ -10,6 +10,7 @@ use glitch_core::memory::{Fact, JournalEntry, MemoryStore};
 use glitch_core::models::{self, Recommendation};
 use glitch_core::platform::{self, Os, Platform};
 use glitch_core::settings::Settings;
+use glitch_core::world::{self, Ledge, ScreenRect};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -427,6 +428,41 @@ pub async fn quit_app(app: &AppHandle) {
         let _ = tokio::time::timeout(Duration::from_millis(1500), state.ollama.unload(&model)).await;
     }
     app.exit(0);
+}
+
+#[derive(Serialize)]
+pub struct WorldSnapshot {
+    area: ScreenRect,
+    scale: f64,
+    ledges: Vec<Ledge>,
+}
+
+/// Screen edges + other apps' window tops (see glitch_core::world).
+#[tauri::command]
+pub async fn world_snapshot(app: AppHandle) -> Result<WorldSnapshot, UiError> {
+    let mascot =
+        app.get_webview_window(windows::MASCOT).ok_or_else(|| UiError::new("no_window", "mascot window missing"))?;
+    let scale = mascot.scale_factor().unwrap_or(1.0);
+    let area = windows::work_area_of(&mascot).ok_or_else(|| UiError::new("no_monitor", "no monitor found"))?;
+    let area = ScreenRect { x: area.x, y: area.y, w: area.w, h: area.h };
+    // Room above an edge for Glitch to stand (his body is ~90 CSS px tall).
+    let headroom = (120.0 * scale) as i32;
+    let min_width = (90.0 * scale) as i32;
+    let windows =
+        tauri::async_runtime::spawn_blocking(move || crate::world_native::app_windows(scale)).await.unwrap_or_default();
+    Ok(WorldSnapshot { area, scale, ledges: world::ledges(&windows, area, headroom, min_width) })
+}
+
+/// Which part of the mascot window is Glitch's body (CSS px); `None` = all.
+#[tauri::command]
+pub fn set_hitbox(app: AppHandle, hitbox: State<'_, crate::hover::Hitbox>, rect: Option<crate::hover::LocalRect>) {
+    *hitbox.0.lock().unwrap() = rect;
+    if rect.is_none() {
+        // Dragging starts now: catch the mouse immediately, don't wait for the poller.
+        if let Some(w) = app.get_webview_window(windows::MASCOT) {
+            let _ = w.set_ignore_cursor_events(false);
+        }
+    }
 }
 
 #[cfg(test)]

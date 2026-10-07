@@ -19,7 +19,7 @@ pub const BUBBLE: &str = "bubble";
 pub const PANEL: &str = "panel";
 /// Must match the mascot size in tauri.conf.json and src/mascot/main.ts.
 const MASCOT_W: f64 = 160.0;
-const MASCOT_H: f64 = 110.0;
+const MASCOT_H: f64 = 160.0;
 /// Bubble width is fixed; its height follows its content (see `resize_bubble`).
 pub const BUBBLE_W: f64 = 300.0;
 const BUBBLE_MIN_H: f64 = 56.0;
@@ -29,6 +29,10 @@ const BUBBLE_MAX_H: f64 = 420.0;
 const BUBBLE_OVERLAP: f64 = 14.0;
 const PANEL_W: f64 = 380.0;
 const PANEL_H: f64 = 560.0;
+
+pub fn work_area_of(win: &WebviewWindow) -> Option<Rect> {
+    work_area(win)
+}
 
 fn work_area(win: &WebviewWindow) -> Option<Rect> {
     let monitor = win.current_monitor().ok().flatten().or_else(|| win.primary_monitor().ok().flatten())?;
@@ -111,7 +115,8 @@ pub fn place_bubble(app: &AppHandle) -> Option<BubbleLayout> {
     let bubble = app.get_webview_window(BUBBLE)?;
     let mascot = app.get_webview_window(MASCOT)?;
     let area = work_area(&mascot)?;
-    let m = window_rect(&mascot, (MASCOT_W, MASCOT_H))?;
+    // Point at Glitch's body if the page told us where it is in his window.
+    let m = crate::hover::body_rect(app).or_else(|| window_rect(&mascot, (MASCOT_W, MASCOT_H)))?;
     let b = window_rect(&bubble, (BUBBLE_W, 120.0))?;
     let scale = bubble.scale_factor().unwrap_or(1.0);
     let p = layout::bubble_position(m, b.w, b.h, area, (BUBBLE_OVERLAP * scale) as i32);
