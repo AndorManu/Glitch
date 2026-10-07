@@ -90,6 +90,8 @@ pub struct MockApp {
     pub dialog_on_type: Option<(String, Vec<MockEl>)>,
     /// The title follows what's playing (Spotify does).
     pub title_shows_playing: bool,
+    /// Enter in a filled search box (or a search link) shows matching list items.
+    pub searchable: bool,
 }
 
 impl MockApp {
@@ -112,6 +114,7 @@ impl MockApp {
             dialog: None,
             dialog_on_type: None,
             title_shows_playing: false,
+            searchable: false,
         }
     }
     pub fn already_open(mut self) -> Self {
@@ -230,6 +233,35 @@ impl MockHands {
         }
         let (si, j) = ((key >> 16) as usize, (key & 0xffff) as usize);
         a.screens.get_mut(si).and_then(|(_, els)| els.get_mut(j))
+    }
+
+    /// Show a "search" screen with the list items whose names match `q`.
+    fn search(a: &mut MockApp, q: &str) {
+        let words: Vec<String> =
+            q.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.len() >= 3).map(String::from).collect();
+        let mut hits: Vec<MockEl> = Vec::new();
+        for (_, els) in &a.screens {
+            for e in els {
+                let n = e.name.to_lowercase();
+                if e.role == "list item"
+                    && words.iter().any(|w| n.contains(w.as_str()))
+                    && !hits.iter().any(|h| h.name == e.name)
+                {
+                    let mut h = e.clone();
+                    h.below_fold = false;
+                    hits.push(h);
+                }
+            }
+        }
+        let mut screen =
+            vec![el("button", "Home").on_click(Effect::Goto("home")), el("edit", "What do you want to play?")];
+        screen[1].value = Some(q.to_string());
+        screen.push(el("text", if hits.is_empty() { "No results found" } else { "Top results" }));
+        screen.extend(hits);
+        a.screens.retain(|(n, _)| *n != "search");
+        a.screens.push(("search", screen));
+        a.screen = "search";
+        a.scrolled = false;
     }
 
     fn apply(s: &mut MockState, i: usize, effect: Effect) {
@@ -427,6 +459,17 @@ impl Hands for MockHands {
             if key == Key::Escape {
                 s.apps[i].dialog = None;
             }
+            if key == Key::Enter && s.apps[i].searchable && s.apps[i].dialog.is_none() {
+                let a = &s.apps[i];
+                let q = a
+                    .screens
+                    .iter()
+                    .find(|(n, _)| *n == a.screen)
+                    .and_then(|(_, els)| els.iter().find(|e| e.role == "edit").and_then(|e| e.value.clone()));
+                if let Some(q) = q.filter(|q| !q.trim().is_empty()) {
+                    Self::search(&mut s.apps[i], &q);
+                }
+            }
             let app = s.apps[i].app;
             s.log.push(format!("press {app} {}", key.label()));
         } else {
@@ -471,6 +514,13 @@ impl Hands for MockHands {
         self.state.lock().unwrap().log.push(format!("link {uri}"));
         if uri.starts_with("spotify:") {
             self.launch("Spotify");
+            if let Some(q) = uri.strip_prefix("spotify:search:") {
+                let q = q.replace("%20", " ").replace('+', " ");
+                let mut s = self.state.lock().unwrap();
+                if let Some(a) = s.apps.iter_mut().find(|a| a.app == "Spotify") {
+                    Self::search(a, &q);
+                }
+            }
         }
         Ok(())
     }
@@ -568,6 +618,7 @@ pub fn spotify(scroll_needed: bool) -> MockApp {
     a.appear_after = 5;
     a.empty_reads = 1;
     a.title_shows_playing = true;
+    a.searchable = true;
     a
 }
 

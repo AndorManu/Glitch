@@ -33,6 +33,12 @@ pub struct Settings {
     pub notes_trusted: bool,
     /// Voice commands (push-to-talk). Missing in older files → defaults.
     pub voice: VoiceSettings,
+    /// Feature "Let Glitch control apps" (multi-step app tasks: click, type,
+    /// play). Off by default; missing in older files → off.
+    pub hands_enabled: bool,
+    /// "Smarter brain for app control": a bigger model used only for app
+    /// tasks (`None`: the normal brain).
+    pub hands_model: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -68,6 +74,8 @@ impl Default for Settings {
             screen_enabled: true,
             notes_trusted: false,
             voice: VoiceSettings::default(),
+            hands_enabled: false,
+            hands_model: None,
         }
     }
 }
@@ -110,6 +118,7 @@ mod tests {
         assert!(s.chaos_enabled);
         assert!(s.screen_enabled && !s.notes_trusted);
         assert_eq!(s.keep_alive, "2m");
+        assert!(!s.hands_enabled && s.hands_model.is_none(), "app control is off by default");
     }
 
     #[test]

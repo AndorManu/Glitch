@@ -314,3 +314,18 @@ fn secrets_split_over_calls_and_address_bars_are_refused() {
     assert!(v["error"].as_str().unwrap().contains("open_url"), "{v}");
     assert_eq!(run(&d, UI_PRESS, json!({"key": "ctrl+l", "target": "chrome"}))["refused"], true);
 }
+
+#[test]
+fn searching_finds_hidden_playlists_too() {
+    let mut sp = mock::spotify(true).already_open();
+    sp.empty_reads = 0;
+    let (d, m) = driver(vec![sp]);
+    d.grant("Spotify");
+    let r = run(&d, READ_UI, json!({"target": "Spotify", "query": "search"}));
+    let field = id_of(&r, "What do you want to play?");
+    run(&d, UI_SET_TEXT, json!({"id": field, "text": "classical", "replace": true}));
+    let v = run(&d, UI_PRESS, json!({"key": "enter", "target": "Spotify"}));
+    let c = run(&d, UI_CLICK, json!({"id": id_of(&v, "Classical Essentials")}));
+    run(&d, UI_CLICK, json!({"id": id_of(&c, "Play Classical Essentials")}));
+    assert_eq!(m.playing().unwrap().1, "Classical Essentials");
+}
