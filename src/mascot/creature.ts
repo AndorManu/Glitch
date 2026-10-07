@@ -4,7 +4,7 @@
 // a fake desktop in dev/stage.html.
 //
 // Timers (never requestAnimationFrame):
-// - the Animator's one keyframe timer (under 2/s while idle, see IDLE_BUDGET);
+// - the Animator's one keyframe timer (under 2.5/s while idle, see IDLE_BUDGET);
 // - the brain timer: one pending at most (rest, or the current step's wait);
 // - the motion timer, ONLY while the window actually moves: 30 Hz walking,
 //   climbing and settling, 60 Hz in the air or while held;
@@ -162,7 +162,15 @@ export class Creature {
   panelOpen = false;
   mood: Mood = "idle";
   hovered = false;
-  facingLeft = false;
+  private facingLeftValue = false;
+  /** Which way he faces; the animator's transition clips need it too (see transitions.ts toSide). */
+  get facingLeft(): boolean {
+    return this.facingLeftValue;
+  }
+  set facingLeft(left: boolean) {
+    this.facingLeftValue = left;
+    if (this.animator) this.animator.mem.facingLeft = left;
+  }
   /** Called when something worth logging happens (dev stage). */
   onEvent: ((what: string) => void) | null = null;
 
@@ -595,6 +603,8 @@ export class Creature {
     const prevV = L.v;
     const accel = ACCEL * u;
     L.v = Math.min(SPEED[L.gait] * u, L.v + accel * dt, Math.sqrt(2 * accel * Math.abs(dist)) + 12 * u);
+    // The drawn cycle is keyed for the gait's full speed: play it at the speed he actually goes.
+    this.animator.rate = Math.min(1.5, Math.max(0.45, L.v / (SPEED[L.gait] * u)));
     const step = Math.sign(dist) * L.v * dt;
     let arrived = false;
     if (Math.abs(step) >= Math.abs(dist)) {
@@ -841,6 +851,8 @@ export class Creature {
   /** What he does when he's doing nothing. */
   restAnim(): AnimationName {
     if (this.asleep) return "sleep";
+    // On a wall or the ceiling the front-facing mood poses would lie sideways: hold on instead.
+    if (this.mode === "stand" && !isStanding(this.surface)) return "cling";
     if (this.mood === "thinking") return "think";
     if (this.mood === "asking") return "ask";
     if (this.mood === "listening") return "listen";
@@ -1092,7 +1104,7 @@ export class Creature {
     }
     if (mood === "happy") {
       this.excitedUntil = this.now + 60_000;
-      if (this.mode !== "stand" || this.hold) return;
+      if (this.mode !== "stand" || this.hold || !isStanding(this.surface)) return;
       this.interrupt();
       if (this.world && !this.panelOpen && this.movement) {
         const p = this.brain.plan("celebrate", this.context(this.world));
@@ -1176,6 +1188,14 @@ export class Creature {
     if (isBehaviourName(name) && this.force(name)) return true;
     if (isAnimationName(name)) {
       if (this.mode === "held") return false;
+      // On a wall or the ceiling he is turned with the surface: a front-facing
+      // emote would look like waving lying down. Only wall/air poses there.
+      if (!isStanding(this.surface) && this.mode === "stand") {
+        const keys = ANIMATIONS[name].keys;
+        const first = (typeof keys === "function" ? keys(() => 0.5, {}) : keys)[0]?.frame ?? "";
+        const fam = familyOf(first);
+        if (fam !== "wall" && fam !== "any") return false;
+      }
       this.interaction();
       this.interrupt();
       if (this.actionTimer !== null) this.clock.clearTimeout(this.actionTimer);

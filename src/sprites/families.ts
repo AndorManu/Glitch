@@ -46,7 +46,7 @@ const CLIPS: Record<string, [Family, Family, number]> = {
 };
 
 /** Frames that belong to no family (effects, being held): never bridged from or to. */
-const NEUTRAL = ["turn_around", "dangle", "spin", "teleport", "land", "peek", "pose_glitch", "pose_chaos"];
+const NEUTRAL = ["turn_around", "tail_copter", "glide", "fall_flail", "hang_ledge", "pull_up", "slide_down", "bounce", "wall_jump", "sit_edge_swing", "fish", "dangle", "spin", "teleport", "land", "peek", "pose_glitch", "pose_chaos"];
 
 const cache = new Map<string, Family>();
 
@@ -97,18 +97,25 @@ const FRONTAL: Record<string, true | number[]> = {
   // Drawn turning from facing right to facing left: always shown as drawn
   // (the turn's direction is chosen by playing it forwards or backwards).
   turn_around: true,
+  tail_copter: true,
+  glide: true,
+  fall_flail: true,
+  hang_ledge: true,
+  pull_up: true,
+  bounce: true,
+  sit_edge_swing: true,
   turn_to_back: true,
   turn_front_to_side: [0, 1],
   turn_side_to_front: [4, 5],
   walk_start: [0, 1],
-  lie_down: [0, 1, 2, 3],
-  get_up: [6, 7],
+  lie_down: true,
+  get_up: true,
 };
 
-/** May this frame be mirrored when he faces left? Only side-on frames. */
+/** May this frame be mirrored when he faces left? Only side-on frames (curled up asleep he has no facing either). */
 export function mirrorable(frame: string): boolean {
   const fam = familyOf(frame);
-  if (fam === "front" || fam === "sit" || fam === "back") return false;
+  if (fam === "front" || fam === "sit" || fam === "back" || fam === "curled") return false;
   const [base, i] = splitName(frame);
   const fr = FRONTAL[base];
   if (fr === true) return false;

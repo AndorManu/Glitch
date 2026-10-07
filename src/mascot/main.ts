@@ -3,7 +3,7 @@
 // windows (api.world), the click-through hitbox, the mouse, and the events
 // from Rust (moods, chat open, settings, actions).
 //
-// CPU budget: no requestAnimationFrame. Resting = under two repaints and two
+// CPU budget: no requestAnimationFrame. Resting = under 2.5 repaints and 2.5
 // timer wakeups per second (IDLE_BUDGET); asleep = one per 2.4 s and no polling at all.
 // The window only moves while he walks/climbs (30 Hz) or flies / is carried
 // (60 Hz); otherwise no movement timer runs. See creature.ts.

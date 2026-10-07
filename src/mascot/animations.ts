@@ -7,7 +7,7 @@
 // sx/sy scale around the feet (or `pivot`). glitch 0..1 drives render.ts.
 
 import type { GridPropName } from "./props";
-import { bridge, clip, edges, familyOf, has, pickVariant } from "./transitions";
+import { bridge, clip, edges, familyOf, glanceFrames, has, pickVariant, toFront, toSide } from "./transitions";
 
 /** Animations that are a way of moving along: walking hands over to these without stopping first. */
 const GAITS = ["walk", "run", "climb", "carryCursor", "dragWindow", "pushWindow", "cling"];
@@ -83,11 +83,12 @@ export const MAX_FPS = 20;
 export const MIN_KEY_MS = Math.ceil(1000 / MAX_FPS);
 /**
  * Average repaints (and timer wakeups) per second allowed while resting.
- * Raised from 1.5 to 2 for the drawn idle fidgets (sneeze, scratch, groom,
+ * Raised from 1.5 to 2.5 for the drawn idle life (blinks every 2.5-6 s, ear
+ * twitches, one or two drawn fidgets per loop: sneeze, scratch, groom,
  * sitting down and standing up again...): still a tiny cost, one 160x160
  * canvas drawImage per repaint.
  */
-export const IDLE_BUDGET = 2;
+export const IDLE_BUDGET = 2.5;
 /** Walk keys: 12 fps drawn frames (the window itself moves at 30 Hz, see creature.ts). */
 const WALK_MS = 83;
 /** Run keys: ~14 fps. */
@@ -189,7 +190,7 @@ function sitBreak(rand: () => number, mem: Memory): Keyframe[] | null {
   const u = pickVariant(up, rand, last["sit>front"]);
   last["front>sit"] = d.id;
   last["sit>front"] = u.id;
-  return [...d.keys(rand), ...sitLoop(rand), ...u.keys(rand), k("idle0", 200)];
+  return [...d.keys(rand, mem), ...sitLoop(rand), ...u.keys(rand, mem), k("idle0", 200)];
 }
 
 export const FIDGETS: Fidget[] = [
@@ -210,9 +211,9 @@ export const FIDGETS: Fidget[] = [
     weight: 1.5,
     cooldown: 3,
     // A side-on stretch: turns side-on, stretches, turns back to you.
-    make: () =>
+    make: (_r, mem) =>
       has("stretch") && has("turn_front_to_side") && has("turn_side_to_front")
-        ? [...clip("turn_front_to_side", 80, { ease: 1 }), ...clip("stretch", 130, { ease: 2, hold: 500 }), ...clip("turn_side_to_front", 80, { ease: 1 }), k("idle0", 200)]
+        ? [...toSide(mem), ...clip("stretch", 130, { ease: 2, hold: 500 }), ...toFront(mem), k("idle0", 200)]
         : null,
   },
   { id: "shake_off", weight: 1, cooldown: 3, make: () => (has("shake_off") ? sheetFidget("shake_off", 80) : null) },
@@ -224,9 +225,9 @@ export const FIDGETS: Fidget[] = [
     weight: 2,
     cooldown: 1,
     // Turns his head to the side (the first half of the turn), looks, turns back.
-    make: (r) => {
-      if (!has("turn_front_to_side")) return [k("side", 1400 + r() * 900)];
-      const half = clip("turn_front_to_side", 90, { ease: 1, pick: [0, 1, 2] });
+    make: (r, mem) => {
+      if (!has("turn_front_to_side")) return [k("idle1", 1400 + r() * 900)];
+      const half = glanceFrames(mem).slice(0, 3);
       return [...half, k(half[half.length - 1].frame, 900 + r() * 700), ...[...half].reverse(), k("idle0", 200)];
     },
   },
@@ -263,38 +264,41 @@ function fidget(rand: () => number, mem: Memory = {}): Keyframe[] {
  * 8-25 s, so bursts come at random intervals.
  */
 function idleKeys(rand: () => number, mem: Memory = {}): Keyframe[] {
+  // One loop: 7-16 s of breathing with blinks every 2.5-6 s and ear twitches,
+  // one or two fidgets (weighted, cooldowns, never the same twice running),
+  // and now and then a glitch burst. Varied enough that no two minutes look alike.
   const keys: Keyframe[] = [];
-  const until = 8000 + rand() * 17000;
-  const fidgetAt = rand() < 0.65 ? until * (0.25 + 0.5 * rand()) : Infinity;
+  const until = 7000 + rand() * 9000;
+  const fidgets = rand() < 0.85 ? (rand() < 0.35 ? 2 : 1) : 0;
+  const fidgetAt = Array.from({ length: fidgets }, (_, i) => until * ((i + 0.3 + 0.5 * rand()) / Math.max(1, fidgets)));
   let t = 0;
-  let fidgeted = false;
-  let nextBlink = 2000 + rand() * 4000;
+  let nextBlink = 1500 + rand() * 3000;
   while (t < until) {
-    // Breathing: out (idle0, long hold), in (idle1). Two repaints per breath keeps idle under budget.
-    const breath = [k("idle0", 4800 + rand() * 1500), k("idle1", 1800 + rand() * 300)];
+    // Breathing: out (idle0, a long hold), in (idle1).
+    const breath = [k("idle0", 2600 + rand() * 1600), k("idle1", 1300 + rand() * 400)];
     keys.push(...breath);
     t += sum(breath);
     if (t >= nextBlink) {
-      // Blink: half, closed, half (eye lids drawn in idle4-6).
+      // Blink: half, closed, half (eye lids drawn in idle4-6), sometimes twice.
       const blink = [k("idle4", 60), k("idle5", 90), k("idle6", 60)];
-      if (rand() < 0.12) blink.push(k("idle0", 140), k("idle4", 60), k("idle5", 80), k("idle6", 60)); // double blink
+      if (rand() < 0.15) blink.push(k("idle0", 140), k("idle4", 60), k("idle5", 80), k("idle6", 60));
       keys.push(...blink);
       t += sum(blink);
-      nextBlink = t + 6000 + rand() * 5000;
-    } else if (rand() < 0.1) {
+      nextBlink = t + 2500 + rand() * 3500;
+    } else if (rand() < 0.3) {
       // Ear twitch (idle2): flick, back, flick.
       const ear = [k("idle2", 120), k("idle0", 90), k("idle2", 110)];
       keys.push(...ear);
       t += sum(ear);
     }
-    if (!fidgeted && t >= fidgetAt) {
-      fidgeted = true;
+    if (fidgetAt.length && t >= fidgetAt[0]) {
+      fidgetAt.shift();
       const extra = fidget(rand, mem);
       keys.push(...extra);
       t += sum(extra);
     }
   }
-  return [...keys, ...burst(rand)];
+  return rand() < 0.6 ? [...keys, ...burst(rand)] : keys;
 }
 
 /** Talking (replying in the chat): the drawn mouth shapes in a varied order, ~9 fps, with pauses. */
@@ -533,14 +537,13 @@ function clingKeys(rand: () => number): Keyframe[] {
     keys.push(...extra);
     t += sum(extra);
   }
-  return [...keys, ...burst(rand, { frame: "climb0" })];
+  return keys;
 }
 
 /** Climbing (walls) and crawling (ceiling): the drawn 8-frame wall crawl, alternating paws, ~10 fps. */
 function climbKeys(rand: () => number): Keyframe[] {
-  const keys = cycle("climb", [0, 1, 2, 3, 4, 5, 6, 7], 100);
-  if (rand() < 0.25) keys[6] = { ...keys[6], glitch: 0.35, fx: "eye" };
-  return keys;
+  void rand;
+  return cycle("climb", [0, 1, 2, 3, 4, 5, 6, 7], 100);
 }
 
 /** Running: faster strides, deep lean, big bob, dust and glitch pixels flying. */
@@ -559,10 +562,11 @@ function tumbleKeys(rand: () => number): Keyframe[] {
   return cycle("spin", [0, 1, 2, 3, 4, 5, 6, 7], 70, { pivot: 0.45 }).map((key, i) => (i % 3 === 0 ? { ...key, glitch: 0.2 + 0.3 * rand(), fx: "eye" as const } : key));
 }
 
-/** Falling in a panic: the drawn kicking (dangle frames, played fast), the eye sparking. */
+/** Falling in a panic: the drawn flailing fall, the eye sparking now and then. */
 function flailKeys(rand: () => number): Keyframe[] {
-  const keys = cycle("dangle", [0, 2, 4, 6], 70, { pivot: 0.5 });
-  keys[3] = { ...keys[3], glitch: rand() < 0.35 ? 0.45 : 0, fx: "eye" };
+  if (!has("fall_flail")) return cycle("dangle", [0, 2, 4, 6], 70);
+  const keys = clip("fall_flail", 75, { ease: 0 });
+  if (rand() < 0.35) keys[2] = { ...keys[2], glitch: 0.45, fx: "eye" };
   return keys;
 }
 
@@ -602,50 +606,91 @@ export function landKeys(impact: number, base: Omit<Keyframe, "ms"> = { frame: "
   ];
 }
 
-/** Sitting on the very edge of a window, legs over the side, swinging. */
+/** Sitting on the very edge of a window, legs over the side, swinging (the drawn swing). */
 function sitEdgeKeys(rand: () => number): Keyframe[] {
+  // Lowered so he sits on the edge with his legs hanging over it.
+  const over = { dy: 24 };
+  if (!has("sit_edge_swing")) return [k("sit0", 1500, { dy: 14 })];
   const keys: Keyframe[] = [];
-  const over = { dy: 14 };
-  for (let i = 0; i < 6; i++) {
-    keys.push(k("sit0", 700 + rand() * 500, { ...over, rot: i % 2 ? 2 : -1, pivot: 0.3 }));
-    if (rand() < 0.25) keys.push(k("sit0", 1400, { ...over, rot: 7, pivot: 0.1 })); // look down
-    if (rand() < 0.15) keys.push(k("side", 1200, { dy: 10, flip: rand() < 0.5 }));
-  }
-  return [...keys, ...burst(rand, { frame: "sit0", ...over })];
+  for (let i = 0; i < 3; i++) keys.push(...cycle("sit_edge_swing", [0, 1, 2, 3, 4, 5, 6, 7], 150 + rand() * 60, over));
+  keys.push(k("sit_edge_swing0", 1200 + rand() * 800, over));
+  return keys;
+}
+
+/** Ramp a clip's dy from a to b (CSS px). */
+const slideDy = (keys: Keyframe[], a: number, b: number): Keyframe[] => keys.map((key, i) => ({ ...key, dy: a + ((b - a) * i) / Math.max(1, keys.length - 1) }));
+
+/** Onto the edge: sits down (the drawn sit_down) and slides over the edge into the swing. */
+function edgeSitDown(_rand: () => number, mem: Memory): Keyframe[] {
+  const fam = familyOf(String(mem.fromFrame ?? ""));
+  if (fam !== "front" || !has("sit_down")) return [];
+  return slideDy(clip("sit_down", 95, { ease: 2 }), 0, 24);
+}
+
+/** Off the edge: back up onto it and stand (one of the drawn stand-ups). */
+function edgeStandUp(rand: () => number, mem: Memory): Keyframe[] {
+  const up = edges()["sit>front"];
+  if (!up) return [];
+  const last = ((mem.lastClip as Record<string, string>) ??= {});
+  const v = pickVariant(up, rand, last["sit>front"]);
+  last["sit>front"] = v.id;
+  return slideDy(v.keys(rand, mem), 24, 0);
 }
 
 /** At a window's edge: lean right over it to look down, eye flickering. */
 function peekEdgeKeys(): Keyframe[] {
-  // The feet stay put; the body shifts back a little so the leaning head stays inside the window.
+  // Side-on (the turn's last frame, with the glitch eye); the feet stay put, the body shifts back so the head stays inside the window.
+  const f = "turn_front_to_side5";
   return [
-    k("side", 300),
-    k("side", 120, { rot: 10, dx: -6, sx: 1.02, sy: 0.98 }),
-    k("side", 900, { rot: 27, dx: -20, dy: 3 }),
-    k("side", 60, { rot: 29, dx: -20, dy: 3, glitch: 0.45, fx: "eye" }),
-    k("side", 700, { rot: 29, dx: -20, dy: 3, fx: "eye" }),
-    k("side", 500, { rot: 24, dx: -18, dy: 2 }),
-    k("side", 110, { rot: 8, dx: -5 }),
-    k("idle0", 200, { sx: 1.03, sy: 0.97 }),
+    k(f, 300),
+    k(f, 120, { rot: 10, dx: -6 }),
+    k(f, 900, { rot: 27, dx: -20, dy: 3 }),
+    k(f, 60, { rot: 29, dx: -20, dy: 3, glitch: 0.45, fx: "eye" }),
+    k(f, 700, { rot: 29, dx: -20, dy: 3, fx: "eye" }),
+    k(f, 500, { rot: 24, dx: -18, dy: 2 }),
+    k(f, 110, { rot: 8, dx: -5 }),
+    k(f, 200),
   ];
 }
 
-/** A look around, ending with turning his back to stare at your screen (the drawn turn, held, turned back). */
-function lookAroundKeys(rand: () => number): Keyframe[] {
-  if (!has("turn_to_back")) return [k("idle0", 1500)];
-  const glance = has("turn_front_to_side") ? clip("turn_front_to_side", 90, { ease: 1, pick: [0, 1, 2] }) : [];
-  const toBack = clip("turn_to_back", 90, { ease: 1 });
-  const back = toBack[toBack.length - 1].frame;
-  return [
-    ...glance,
-    k(glance.at(-1)?.frame ?? "idle0", 800 + rand() * 400),
-    ...[...glance].reverse(),
-    ...toBack,
-    k(back, 1500 + rand() * 800),
-    k(back, 60, { glitch: 0.35, fx: "eye" }),
-    k(back, 500),
-    ...[...toBack].reverse(),
-    k("idle0", 200),
+/**
+ * A look around: one of several drawn ways (turning his back to stare at
+ * your screen, looking over his shoulder, a glance to the side, sitting down
+ * for a look), never the same one twice in a row.
+ */
+function lookAroundKeys(rand: () => number, mem: Memory = {}): Keyframe[] {
+  const ways: [string, () => Keyframe[] | null][] = [
+    [
+      "back",
+      () => {
+        if (!has("turn_to_back")) return null;
+        const toBack = clip("turn_to_back", 90, { ease: 1 });
+        const back = toBack[toBack.length - 1].frame;
+        return [...toBack, k(back, 1500 + rand() * 800), k(back, 60, { glitch: 0.35, fx: "eye" }), k(back, 500), ...[...toBack].reverse(), k("idle0", 200)];
+      },
+    ],
+    ["shoulder", () => (has("look_back") ? [...clip("look_back", 120, { ease: 2, hold: 900 }), k("idle0", 300)] : null)],
+    [
+      "glance",
+      () => {
+        if (!has("turn_front_to_side")) return null;
+        const half = glanceFrames(mem);
+        const look = half[half.length - 1].frame;
+        return [...half, k(look, 900 + rand() * 700), ...[...half].reverse(), k("idle0", 600), ...half, k(look, 700), ...[...half].reverse(), k("idle0", 200)];
+      },
+    ],
+    ["sit", () => sitBreak(rand, mem)],
   ];
+  const pool = ways.filter(([id]) => id !== mem.lastLook);
+  for (let tries = 0; tries < 6; tries++) {
+    const [id, make] = pool[Math.floor(rand() * pool.length)];
+    const keys = make();
+    if (keys && keys.length) {
+      mem.lastLook = id;
+      return keys;
+    }
+  }
+  return [k("idle0", 1500)];
 }
 
 /** On a wall: stop and look back down at where he came from. */
@@ -673,7 +718,7 @@ export function stutter(rand: () => number, base: Omit<Keyframe, "ms"> = { frame
   for (let i = 0; i < jumps.length; i++) {
     keys.push({
       ...base,
-      frame: rand() < 0.25 ? "glitch" : base.frame,
+      ...(rand() < 0.25 ? { dissolve: 0.25 } : {}),
       ms: MIN_KEY_MS,
       dx: (base.dx ?? 0) + jumps[i],
       dy: (base.dy ?? 0) + (rand() < 0.3 ? -3 : 0),
@@ -698,7 +743,7 @@ const YAWN: Keyframe[] = [
   k("wake3", 300),
   k("wake2", 400),
   k("wake1", 700),
-  k("wake0", 60, { glitch: 0.2, fx: "eye" }),
+  k("wake0", 500),
   k("sleep0", 1500),
 ];
 
@@ -727,14 +772,9 @@ function listenKeys(rand: () => number): Keyframe[] {
 
 /** Held up by the cursor: hanging limp, stretched by his own weight (the swing itself is physics, in creature.ts). */
 function heldKeys(rand: () => number): Keyframe[] {
-  const keys = [
-    k("idle0", 700 + rand() * 500, { sx: 0.93, sy: 1.1 }),
-    k("idle0", 500, { sx: 0.92, sy: 1.12 }),
-    k("idle0", 60, { sx: 0.92, sy: 1.12, glitch: 0.3, fx: "eye" }),
-    k("idle0", 600 + rand() * 400, { sx: 0.93, sy: 1.1, fx: "eye" }),
-  ];
-  // Looks around, a bit worried.
-  if (rand() < 0.5) keys.push(k("side", 700, { sx: 0.93, sy: 1.1, flip: rand() < 0.5 }));
+  const keys = [k("dangle0", 700 + rand() * 500), k("dangle1", 500), k("dangle1", 60, { glitch: 0.3, fx: "eye" }), k("dangle0", 600 + rand() * 400, { fx: "eye" })];
+  // Looks around, a bit worried (the drawn dangle, a kick or two).
+  if (rand() < 0.5) keys.push(...cycle("dangle", [0, 1, 2, 3], 140));
   return keys;
 }
 
@@ -797,6 +837,16 @@ export type AnimationName =
   | "dance"
   | "eat"
   | "celebrate"
+  | "tail_copter"
+  | "glide"
+  | "fall_flail"
+  | "hang_ledge"
+  | "pull_up"
+  | "slide_down"
+  | "sit_edge_swing"
+  | "fish"
+  | "bounce"
+  | "wall_jump"
   | "point"
   | "typing"
   | "sit";
@@ -807,7 +857,8 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   walk: {
     keys: (r) => walkCycle(r),
     // From standing facing you: the drawn first steps (turns side-on as he sets off).
-    intro: (_r, mem) => (familyOf(String(mem.fromFrame ?? "")) === "front" && has("walk_start") ? clip("walk_start", 85, { ease: 1 }) : []),
+    // Facing left the drawn turn to the left comes first (front frames never mirror, see transitions.ts toSide).
+    intro: (_r, mem) => (familyOf(String(mem.fromFrame ?? "")) !== "front" ? [] : mem.facingLeft ? toSide(mem, 85) : has("walk_start") ? clip("walk_start", 85, { ease: 1 }) : []),
     // Stopping (unless he goes straight into another gait): the drawn stop, settling side-on.
     outro: (_r, mem) => (has("walk_stop") && !GAITS.includes(String(mem.next)) ? clip("walk_stop", 90, { ease: 1, hold: 200 }) : []),
   },
@@ -824,6 +875,19 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   dance: { keys: () => [...cycle("dance", [0, 1, 2, 3, 4, 5, 6, 7], 120, { fx: "sparkle" })] },
   eat: { keys: () => [...sheetOnce("eat", 140, 500)], once: true },
   celebrate: { keys: celebrateKeys, once: true },
+  // Air and ledge behaviours (started by the physics: never bridged).
+  tail_copter: { keys: () => clip("tail_copter", 70, { ease: 0 }), bridge: false },
+  glide: { keys: () => clip("glide", 110, { ease: 0 }), bridge: false },
+  fall_flail: { keys: (r) => flailKeys(r), bridge: false },
+  hang_ledge: { keys: (r) => [...clip("hang_ledge", 160, { ease: 0 }), k("hang_ledge0", 600 + r() * 600)], bridge: false },
+  pull_up: { keys: () => clip("pull_up", 95, { ease: 1, hold: 200 }), once: true, bridge: false },
+  slide_down: { keys: () => clip("slide_down", 90, { ease: 0 }), bridge: false },
+  sit_edge_swing: { keys: sitEdgeKeys, intro: (r, mem) => edgeSitDown(r, mem), outro: (r, mem) => edgeStandUp(r, mem) },
+  // Fishing off a window edge: casts (skipping the first frame, its line encloses
+  // some sheet background), waits, a bite, catches one.
+  fish: { keys: (r) => [k("fish1", 300), k("fish2", 1500 + r() * 1500), k("fish3", 1800 + r() * 2000), k("fish4", 260), k("fish5", 260), k("fish6", 500), k("fish7", 900), k("fish6", 400)] },
+  bounce: { keys: () => clip("bounce", 85, { ease: 1, hold: 150 }), once: true, bridge: false },
+  wall_jump: { keys: () => clip("wall_jump", 80, { ease: 0 }), once: true, bridge: false },
   // "There you go!" when he opened a website or an app.
   point: { keys: () => [...cycle("point", [0, 1, 2], 90), k("point3", 140), k("point4", 500, { fx: "sparkle" }), k("point5", 300), k("point6", 200), k("point7", 250)], once: true },
   typing: { keys: () => cycle("typing", [0, 1, 2, 3, 4, 5, 6, 7], 220) },
@@ -840,15 +904,14 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   fall: {
     keys: [
       // The drawn fall (arms up) dropping in, then the landing.
-      k("jump5", 60, { dy: -18 }),
-      k("jump5", 60, { dy: -9 }),
-      k("jump5", 50, { dy: -2 }),
+      k("jump5", 170),
     ],
     once: true,
     next: "land",
   },
   land: {
-    keys: [k("jump6", 90, { glitch: 0.35, fx: "dust" }), k("jump6", 90, { fx: "dust" }), k("jump7", 110, { fx: "dust" }), k("idle0", 150)],
+    // Landing squash and recover (side-on); the turn back to facing you is the bridge into what follows.
+    keys: [k("jump6", 90, { fx: "dust" }), k("jump6", 90, { fx: "dust" }), k("jump7", 110, { fx: "dust" }), k("jump7", 120)],
     once: true,
   },
   glitchOut: { keys: glitchOutKeys, once: true, next: "gone" },
@@ -856,7 +919,8 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   gone: { keys: [k("idle0", 900, { dissolve: 1 })], once: true, next: "glitchIn" },
   glitchIn: { keys: glitchInKeys, once: true },
   chaosSpin: { keys: chaosSpinKeys, once: true },
-  napRock: { keys: [k("nap_rock", 2400, { sx: 1.01, sy: 0.98 }), k("nap_rock", 2400)] },
+  // Dozing off sitting up (the end of the drawn sit-down: eyes closing), sat into and stood out of through the clips.
+  napRock: { keys: [k("sit_down7", 2400), k("sit_down6", 2400)] },
   // living in the world (creature.ts)
   cling: { keys: clingKeys },
   climb: { keys: climbKeys },
@@ -872,7 +936,7 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   flail: { keys: flailKeys },
   splat: { keys: splatKeys, once: true, next: "dizzy" },
   dizzy: { keys: dizzyKeys, once: true },
-  sitEdge: { keys: sitEdgeKeys },
+  sitEdge: { keys: sitEdgeKeys, intro: (r, mem) => edgeSitDown(r, mem), outro: (r, mem) => edgeStandUp(r, mem) },
   peekEdge: { keys: peekEdgeKeys, once: true },
   lookAround: { keys: lookAroundKeys, once: true },
   lookBack: { keys: LOOK_BACK, once: true, next: "cling" },
@@ -969,6 +1033,12 @@ export class Animator {
   private tick = 0;
   /** Memory for key makers and transition variants (per animator, so runs stay reproducible). */
   readonly mem: Memory = {};
+  /**
+   * Playback speed of the current animation (1 = as keyed). The creature sets
+   * it from the ground speed while walking, so the drawn stride matches the
+   * distance covered. Reset to 1 by play().
+   */
+  rate = 1;
   /** Called after every switch of animation (also when a one-shot hands over to its follow-up). */
   onChange: ((name: AnimationName) => void) | null = null;
 
@@ -1015,6 +1085,7 @@ export class Animator {
     this.keys = [...outro, ...lead, ...glue, ...body];
     this.index = 0;
     this.lastPose = null; // always draw the first key of a new animation
+    this.rate = 1;
     this.step();
     // Last, so a handler that switches again sees a consistent animator.
     if (this.current === name) this.onChange?.(name);
@@ -1071,6 +1142,7 @@ export class Animator {
     }
     this.index = next;
     const still = typeof anim.keys !== "function" && this.keys.length === 1 && !anim.once && !live;
-    if (!still) this.timer = this.clock.setTimeout(this.step, Math.max(MIN_KEY_MS, Math.round(ms)));
+    // `rate` speeds walking cycles up or down with the actual ground speed (no foot sliding).
+    if (!still) this.timer = this.clock.setTimeout(this.step, Math.max(MIN_KEY_MS, Math.round(ms / this.rate)));
   };
 }

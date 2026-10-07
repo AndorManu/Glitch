@@ -46,7 +46,7 @@ export function clip(name: string, ms = 90, o: { reverse?: boolean; ease?: numbe
 export interface Variant {
   id: string;
   weight: number;
-  keys: (rand: () => number) => Keyframe[];
+  keys: (rand: () => number, mem?: TurnMemory) => Keyframe[];
 }
 
 type Edge = `${Family}>${Family}`;
@@ -54,7 +54,7 @@ type Edge = `${Family}>${Family}`;
 /** The transition graph: only clips whose frames exist. */
 function buildEdges(): Partial<Record<Edge, Variant[]>> {
   const E: Partial<Record<Edge, Variant[]>> = {};
-  const add = (edge: Edge, id: string, weight: number, keys: (rand: () => number) => Keyframe[], needs: string[]) => {
+  const add = (edge: Edge, id: string, weight: number, keys: (rand: () => number, mem?: TurnMemory) => Keyframe[], needs: string[]) => {
     if (!needs.every(has)) return;
     (E[edge] ??= []).push({ id, weight, keys });
   };
@@ -64,8 +64,8 @@ function buildEdges(): Partial<Record<Edge, Variant[]>> {
   add("sit>front", "stand_up_hop", 2, () => clip("stand_up_hop", 85, { ease: 1 }), ["stand_up_hop"]);
   add("sit>front", "stand_up_glitch", 1, () => clip("stand_up_glitch", 70, { ease: 1 }).map((k, i, a) => (i > 0 && i < a.length - 2 ? { ...k, glitch: 0.4, fx: "eye" as const } : k)), ["stand_up_glitch"]);
   // Turning between front and side view.
-  add("front>side", "turn_front_to_side", 1, () => clip("turn_front_to_side", 80, { ease: 1 }), ["turn_front_to_side"]);
-  add("side>front", "turn_side_to_front", 1, () => clip("turn_side_to_front", 80, { ease: 1 }), ["turn_side_to_front"]);
+  add("front>side", "turn_front_to_side", 1, (_r, mem) => toSide(mem), ["turn_front_to_side"]);
+  add("side>front", "turn_side_to_front", 1, (_r, mem) => toFront(mem), ["turn_side_to_front"]);
   add("front>back", "turn_to_back", 1, () => clip("turn_to_back", 85, { ease: 1 }), ["turn_to_back"]);
   add("back>front", "turn_from_back", 1, () => clip("turn_to_back", 85, { ease: 1, reverse: true }), ["turn_to_back"]);
   // Lying down to sleep / getting up.
@@ -110,6 +110,35 @@ export function path(a: Family, b: Family): Edge[] | null {
     }
   }
   return null;
+}
+
+/** What the transition clips need to know about him: which way he faces (set by the creature). */
+export interface TurnMemory {
+  facingLeft?: unknown;
+}
+
+/**
+ * Front-facing frames never mirror, side-on ones do. Facing right, the drawn
+ * turn_front_to_side / turn_side_to_front connect the two. Facing left, the
+ * front view and the mirrored side view differ by more than a mirror (the
+ * tail swaps sides), so the turn is the drawn turn_around (right -> front ->
+ * left, never mirrored): its second half turns from facing you to facing left.
+ */
+export function toSide(mem?: TurnMemory, ms = 80): Keyframe[] {
+  if (mem?.facingLeft && has("turn_around")) return clip("turn_around", ms, { ease: 1, pick: [2, 3, 4, 5, 6, 7] });
+  return clip("turn_front_to_side", ms, { ease: 1 });
+}
+
+/** From side-on back to facing you (see toSide). */
+export function toFront(mem?: TurnMemory, ms = 80): Keyframe[] {
+  if (mem?.facingLeft && has("turn_around")) return clip("turn_around", ms, { ease: 1, pick: [7, 6, 5, 4, 3, 2] });
+  return clip("turn_side_to_front", ms, { ease: 1 });
+}
+
+/** A turn of the head to the side and back (the first frames of toSide). */
+export function glanceFrames(mem?: TurnMemory, ms = 90): Keyframe[] {
+  if (mem?.facingLeft && has("turn_around")) return clip("turn_around", ms, { ease: 1, pick: [2, 3, 4, 5] });
+  return clip("turn_front_to_side", ms, { ease: 1, pick: [0, 1, 2, 3] });
 }
 
 /** Weighted pick, avoiding the variant used last time on this edge when there is a choice. */
@@ -171,7 +200,7 @@ export function glitchCut(frame: string): Keyframe[] {
  * plays next): transition clips, a glitch cut, or nothing (same family, or
  * either side is neutral). `mem.last` remembers the variant per edge.
  */
-export function bridge(fromFrame: string | null, next: string, rand: () => number, mem: { lastClip?: Record<string, string> }): Keyframe[] {
+export function bridge(fromFrame: string | null, next: string, rand: () => number, mem: TurnMemory & { lastClip?: Record<string, string> }): Keyframe[] {
   if (!fromFrame) return [];
   const a = familyOf(fromFrame);
   const b = familyOf(next);
@@ -183,7 +212,7 @@ export function bridge(fromFrame: string | null, next: string, rand: () => numbe
   for (const e of p) {
     const v = pickVariant(edges()[e]!, rand, last[e]);
     last[e] = v.id;
-    out.push(...v.keys(rand));
+    out.push(...v.keys(rand, mem));
   }
   return out;
 }

@@ -38,6 +38,10 @@ const STEP = 50;
 /** Which drawn "family" a frame belongs to: a change of family needs in-between frames. */
 export function family(frame) {
   const f = frame.replace(/\d+$/, "");
+  // Drawn transition clips and in-between sheets: they ARE the in-betweens, so
+  // they connect to the families on either side (pose pops inside them still
+  // show up as iou/jump findings).
+  if (/^(sit_down|stand_up_|turn_|walk_start|walk_stop|lie_down|get_up|wake|stretch|look_back|sit_idle_look|sit_edge_swing|pull_up|hang_ledge|slide_down|bounce|wall_jump|tail_copter|glide|fall_flail)/.test(f)) return "clip";
   if (["walk", "run", "pose_walk", "side", "pose_side", "push", "grab_tab", "climb", "nap_rock", "pose_push"].includes(f)) return "side";
   if (["back", "pose_back"].includes(f)) return "back";
   if (["sit", "pose_sit"].includes(f)) return "sit";
@@ -117,6 +121,7 @@ const PAGE_QA = () => {
       glitch: p.glitch,
       dissolve: p.dissolve,
       facing: view.facingLeft !== !!p.flip ? "L" : "R",
+      mirrorable: view.sprites?.mirrorable?.(p.frame) !== false,
       angle: Math.round(view.placement.angle),
       mode: cr.mode,
       anim: cr.animation,
@@ -229,9 +234,10 @@ function session(page, name) {
     }
     if (a.count > 200 && b.count > 200 && a.frame !== b.frame) {
       const fa = family(a.frame), fb = family(b.frame);
-      if (fa !== fb && !OK_PAIRS.has(`${fa}>${fb}`) && b.angle === a.angle) flag(i, "family", `${fa} -> ${fb}`);
+      if (fa !== fb && fa !== "clip" && fb !== "clip" && !OK_PAIRS.has(`${fa}>${fb}`) && b.angle === a.angle) flag(i, "family", `${fa} -> ${fb}`);
     }
-    if (a.count > 200 && b.count > 200 && a.facing !== b.facing && a.angle === b.angle) flag(i, "flip", `facing ${a.facing} -> ${b.facing} on ${b.frame}`);
+    // A mirror flip only shows between two side-on (mirrorable) frames; front-facing ones never mirror.
+    if (a.count > 200 && b.count > 200 && a.facing !== b.facing && a.angle === b.angle && a.mirrorable && b.mirrorable) flag(i, "flip", `facing ${a.facing} -> ${b.facing} on ${b.frame}`);
     // blip: x A x  (one sample of another family)
     const c = s[i - 2];
     if (c && a.count > 200 && family(c.frame) === family(b.frame) && family(a.frame) !== family(b.frame) && a.glitch < 0.3)
