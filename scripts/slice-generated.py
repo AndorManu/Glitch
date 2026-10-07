@@ -68,7 +68,28 @@ def remove_background(rgb: np.ndarray, tol: int = 40) -> np.ndarray:
             if 0 <= yy < h and 0 <= xx < w and not bg[yy, xx] and whiteish[yy, xx]:
                 bg[yy, xx] = True
                 q.append((yy, xx))
+    # The white fill stops at the first non-white pixel, leaving a band of
+    # fur/white blend pixels outside the dark outline: a grey halo on dark
+    # desktops. Keep eating inward through anything that isn't outline-dark
+    # or glitch-coloured, but at most FRINGE_DEPTH px, so a gap in the outline
+    # can't leak into the body.
+    v = rgb.astype(int)
+    lum = v[..., 0] * 0.3 + v[..., 1] * 0.59 + v[..., 2] * 0.11
+    glitchy = ((v[..., 0] > 140) & (v[..., 2] > 140) & (v[..., 1] < 120)) | (
+        (v[..., 2] > 150) & (v[..., 1] > 150) & (v[..., 0] < 120)
+    )
+    passable = (lum > OUTLINE_LUM) & ~glitchy
+    for _ in range(FRINGE_DEPTH):
+        p = np.pad(bg, 1)
+        grow = (p[:-2, 1:-1] | p[2:, 1:-1] | p[1:-1, :-2] | p[1:-1, 2:]) & passable & ~bg
+        if not grow.any():
+            break
+        bg |= grow
     return ~bg
+
+
+OUTLINE_LUM = 70  # darker than this = the character's outline
+FRINGE_DEPTH = 3  # source px (the art pixel is ~5-6 source px, so this is under one art pixel)
 
 
 def segments(mask: np.ndarray, min_gap: int = 4) -> list[tuple[int, int]]:

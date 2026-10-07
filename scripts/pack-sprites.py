@@ -105,6 +105,13 @@ def main():
     ]
     INDEX.write_text("\n".join(lines), encoding="utf-8")
     print(f"wrote {SHEET.relative_to(ROOT)} ({len(imgs)} frames) and {INDEX.relative_to(ROOT)}")
+    # Strip the white-background halo and close the dark outline (see clean-edges.py).
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("clean_edges", Path(__file__).with_name("clean-edges.py"))
+    ce = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ce)
+    ce.clean(SHEET)
 
 
 if __name__ == "__main__":
