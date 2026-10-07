@@ -35,6 +35,7 @@ impl From<AiError> for UiError {
     fn from(e: AiError) -> Self {
         let code = match &e {
             AiError::Unreachable(_) => "ollama_unreachable",
+            AiError::TimedOut => "ai_timeout",
             AiError::ModelNotFound(_) => "model_missing",
             AiError::Api { .. } | AiError::InvalidResponse(_) => "ai_error",
         };
@@ -116,13 +117,13 @@ pub async fn setup_status(state: State<'_, AppState>) -> Result<SetupStatus, UiE
 }
 
 #[tauri::command]
-pub fn start_ollama() -> Result<(), UiError> {
+pub async fn start_ollama() -> Result<(), UiError> {
     let install = platform::find_ollama().ok_or_else(|| UiError::new("ollama_missing", "Ollama isn't installed"))?;
     platform::start_ollama(&install).map_err(|e| UiError::new("start_failed", e.to_string()))
 }
 
 #[tauri::command]
-pub fn open_ollama_download(state: State<'_, AppState>) -> Result<(), UiError> {
+pub async fn open_ollama_download(state: State<'_, AppState>) -> Result<(), UiError> {
     state.platform.open_url(platform::ollama_download_url()).map_err(|e| UiError::new("open_failed", e.to_string()))
 }
 
@@ -167,6 +168,11 @@ pub async fn send_message(app: AppHandle, state: State<'_, AppState>, text: Stri
     let text = text.trim();
     if text.is_empty() {
         return Err(UiError::new("empty", "Type something first!"));
+    }
+    // Keep the small model's context (and the agent lock) sane.
+    const MAX_INPUT_CHARS: usize = 4000;
+    if text.chars().count() > MAX_INPUT_CHARS {
+        return Err(UiError::new("too_long", "That's a lot of text! Could you make it shorter?"));
     }
     let model = state.settings().model.ok_or_else(|| UiError::new("no_model", "Pick a model in settings first"))?;
     let _ = app.emit("mood", "thinking");
@@ -230,7 +236,13 @@ pub async fn reset_chat(app: AppHandle, state: State<'_, AppState>) -> Result<()
     let model = state.settings().model;
     let mut agent = state.agent.lock().await;
     if let (Some(model), true) = (model, agent.memory().is_some() && !agent.history().is_empty()) {
-        let _ = tokio::time::timeout(Duration::from_secs(60), agent.compact(&model, true)).await;
+        // Only if the model is still in RAM: never load gigabytes just to
+        // summarise. Otherwise the chat is kept as carry-over instead.
+        if state.ollama.is_loaded(&model).await {
+            let _ = tokio::time::timeout(Duration::from_secs(60), agent.compact(&model, true)).await;
+        } else {
+            agent.persist();
+        }
     }
     agent.reset();
     agent.persist();
@@ -359,13 +371,17 @@ pub fn show_panel_view(app: &AppHandle, view: &str) {
     windows::show_panel(app, view);
 }
 
+// The commands below can create a window. They are `async` because on
+// Windows creating a webview window from a sync command deadlocks (see the
+// WebviewWindowBuilder docs / wry#583).
+
 #[tauri::command]
-pub fn mascot_clicked(app: AppHandle) {
+pub async fn mascot_clicked(app: AppHandle) {
     open_chat(&app, true);
 }
 
 #[tauri::command]
-pub fn show_bubble(app: AppHandle) {
+pub async fn show_bubble(app: AppHandle) {
     open_chat(&app, false);
 }
 
@@ -384,11 +400,12 @@ pub fn resize_bubble(app: AppHandle, height: f64) -> Option<windows::BubbleLayou
 /// Open the panel. `view`: "setup" or "settings"; default depends on whether
 /// setup is finished.
 #[tauri::command]
-pub fn show_panel(app: AppHandle, state: State<'_, AppState>, view: Option<String>) {
+pub async fn show_panel(app: AppHandle, view: Option<String>) {
+    let onboarded = app.state::<AppState>().settings().onboarding_done;
     let view = match view.as_deref() {
         Some("setup") => "setup",
         Some("settings") => "settings",
-        _ if state.settings().onboarding_done => "settings",
+        _ if onboarded => "settings",
         _ => "setup",
     };
     show_panel_view(&app, view);
@@ -407,7 +424,7 @@ pub fn hide_panel(app: AppHandle) {
 
 /// Setup wizard finished: close it and say hi from the bubble.
 #[tauri::command]
-pub fn finish_setup(app: AppHandle) {
+pub async fn finish_setup(app: AppHandle) {
     windows::hide_panel(&app);
     windows::show_bubble(&app);
 }
@@ -456,7 +473,7 @@ pub async fn world_snapshot(app: AppHandle) -> Result<WorldSnapshot, UiError> {
 /// Which part of the mascot window is Glitch's body (CSS px); `None` = all.
 #[tauri::command]
 pub fn set_hitbox(app: AppHandle, hitbox: State<'_, crate::hover::Hitbox>, rect: Option<crate::hover::LocalRect>) {
-    *hitbox.0.lock().unwrap() = rect;
+    *hitbox.body.lock().unwrap() = rect;
     if rect.is_none() {
         // Dragging starts now: catch the mouse immediately, don't wait for the poller.
         if let Some(w) = app.get_webview_window(windows::MASCOT) {

@@ -85,7 +85,7 @@ export interface ScreenRect {
  * A surface Glitch can stand on: the visible part of the top edge of another
  * app's window. Physical px; `y` is where his feet go. Already excludes
  * Glitch's own windows, minimised/hidden windows, parts covered by windows in
- * front, and edges with less than ~200 px of room above them.
+ * front, and edges with less than ~120 CSS px of room above them.
  */
 export interface Ledge {
   /** Stable while the window exists (use it to notice moved/closed windows). */

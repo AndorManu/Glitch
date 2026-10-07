@@ -26,6 +26,7 @@ pub const DEFAULT_NUM_CTX: u32 = 4096;
 const QUICK_TIMEOUT: Duration = Duration::from_secs(3);
 /// First message may need to load the model from disk; slow PCs need time.
 const CHAT_TIMEOUT: Duration = Duration::from_secs(300);
+const PULL_STALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct OllamaClient {
     base_url: String,
@@ -179,7 +180,12 @@ impl OllamaClient {
             Ok(done)
         };
         let mut success = false;
-        while let Some(chunk) = resp.chunk().await.map_err(transport_error)? {
+        // A stalled download must not hang forever: no data for a minute = error.
+        while let Some(chunk) = tokio::time::timeout(PULL_STALL_TIMEOUT, resp.chunk())
+            .await
+            .map_err(|_| AiError::TimedOut)?
+            .map_err(transport_error)?
+        {
             buf.extend_from_slice(&chunk);
             while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
                 let line: Vec<u8> = buf.drain(..=pos).collect();
@@ -191,6 +197,28 @@ impl OllamaClient {
             Ok(())
         } else {
             Err(AiError::InvalidResponse("download ended before it finished".into()))
+        }
+    }
+
+    /// Is the model currently loaded in RAM (`GET /api/ps`)? `false` on errors.
+    pub async fn is_loaded(&self, model: &str) -> bool {
+        #[derive(Deserialize)]
+        struct Ps {
+            #[serde(default)]
+            models: Vec<PsModel>,
+        }
+        #[derive(Deserialize)]
+        struct PsModel {
+            #[serde(default)]
+            name: String,
+            #[serde(default)]
+            model: String,
+        }
+        let Ok(resp) = self.http.get(self.url("/api/ps")).timeout(QUICK_TIMEOUT).send().await else { return false };
+        let full = if model.contains(':') { model.to_string() } else { format!("{model}:latest") };
+        match parse_json::<Ps>(resp, None).await {
+            Ok(ps) => ps.models.iter().any(|m| [&m.name, &m.model].iter().any(|n| **n == model || **n == full)),
+            Err(_) => false,
         }
     }
 
@@ -356,8 +384,8 @@ fn strip_think_tags(s: &str) -> String {
 fn transport_error(e: reqwest::Error) -> AiError {
     if e.is_decode() {
         AiError::InvalidResponse(e.to_string())
-    } else if e.is_timeout() {
-        AiError::Unreachable("timed out waiting for the AI service".into())
+    } else if e.is_timeout() && !e.is_connect() {
+        AiError::TimedOut
     } else {
         AiError::Unreachable(e.to_string())
     }

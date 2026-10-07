@@ -75,6 +75,9 @@ pub enum AiError {
     /// The provider could not be reached at all (e.g. Ollama is not running).
     #[error("could not reach the AI service: {0}")]
     Unreachable(String),
+    /// Reachable but too slow (e.g. a big model still loading from disk).
+    #[error("the AI service is taking too long to answer")]
+    TimedOut,
     #[error("the model \"{0}\" is not installed")]
     ModelNotFound(String),
     #[error("the AI service returned an error ({status}): {message}")]

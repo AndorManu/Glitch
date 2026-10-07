@@ -41,7 +41,14 @@ impl Settings {
     /// Load settings; a missing or unreadable file gives defaults rather than
     /// an error, so a corrupted file can never stop Glitch from starting.
     pub fn load(path: &Path) -> Self {
-        std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+        match std::fs::read_to_string(path) {
+            Err(_) => Self::default(),
+            Ok(s) => serde_json::from_str(&s).unwrap_or_else(|_| {
+                // Keep the broken file for inspection instead of overwriting it.
+                let _ = std::fs::rename(path, path.with_extension("corrupt.json"));
+                Self::default()
+            }),
+        }
     }
 
     /// Write atomically (temp file + rename) so a crash can't leave half a file.

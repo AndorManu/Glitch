@@ -29,8 +29,25 @@ const BLOCKED: &[&str] = &[
 
 fn is_blocked(name: &str) -> bool {
     let n = normalise_name(name);
+    const CONTAINS: &[&str] = &[
+        "powershell",
+        "commandprompt",
+        "terminal",
+        "iterm",
+        "anacondaprompt",
+        "gitbash",
+        "gitcmd",
+        "wezterm",
+        "alacritty",
+        "ghostty",
+        "diskutility",
+    ];
+    const PREFIX: &[&str] = &["python", "idlepython", "nodejs", "wsl", "kitty", "hyper", "tabby"];
+    const EXACT: &[&str] = &["idle", "node", "run", "ubuntu", "debian", "kali", "opensuse", "fedora"];
     BLOCKED.iter().any(|b| n == *b)
-        || ["powershell", "commandprompt", "terminal", "iterm"].iter().any(|w| n.contains(w))
+        || CONTAINS.iter().any(|w| n.contains(w))
+        || PREFIX.iter().any(|p| n.starts_with(p))
+        || EXACT.contains(&n.as_str())
 }
 
 /// Score how well an installed app name matches what was asked for.
@@ -122,7 +139,21 @@ mod tests {
 
     #[test]
     fn shells_and_terminals_are_never_opened() {
-        let a = apps(&["Terminal", "Windows PowerShell", "Command Prompt", "iTerm", "Registry Editor", "Notes"]);
+        let a = apps(&[
+            "Terminal",
+            "Windows PowerShell",
+            "Command Prompt",
+            "iTerm",
+            "Registry Editor",
+            "Notes",
+            "Git CMD",
+            "Python 3.12 (64-bit)",
+            "IDLE (Python 3.12 64-bit)",
+            "Ubuntu",
+            "Run",
+            "WezTerm",
+            "Disk Utility",
+        ]);
         for q in [
             "terminal",
             "powershell",

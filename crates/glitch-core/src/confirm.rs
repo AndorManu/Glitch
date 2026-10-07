@@ -22,6 +22,9 @@ pub enum Approval {
 /// The single policy table. Change it here and nowhere else.
 pub fn approval_for(action: &Action) -> Approval {
     match action {
+        // Web pages open straight away, except local-network ones (router
+        // pages, dev servers): those could change settings via a link.
+        Action::OpenUrl { url } if crate::tools::urls::is_private_host(url) => Approval::AskUser,
         Action::OpenUrl { .. } | Action::Remember { .. } | Action::Forget { .. } => Approval::Automatic,
         Action::OpenApp { .. } | Action::SearchFiles { .. } | Action::OpenPath { .. } => Approval::AskUser,
     }
@@ -98,6 +101,7 @@ mod tests {
     #[test]
     fn only_urls_skip_confirmation() {
         assert_eq!(approval_for(&Action::OpenUrl { url: "https://a.b/".into() }), Approval::Automatic);
+        assert_eq!(approval_for(&Action::OpenUrl { url: "http://192.168.1.1/".into() }), Approval::AskUser);
         assert_eq!(approval_for(&app()), Approval::AskUser);
         assert_eq!(
             approval_for(&Action::SearchFiles { query: Query::new("dog", Kind::Any).unwrap() }),

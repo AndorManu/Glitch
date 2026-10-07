@@ -4,6 +4,8 @@
 //! time, so a search can never hog the disk/CPU for long. It only looks at
 //! file *names*; it cannot see what is inside a photo or document.
 
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -55,6 +57,11 @@ impl Kind {
             Kind::Audio => &["mp3", "m4a", "wav", "flac", "aac", "ogg", "opus", "wma", "aiff", "aif"],
             Kind::Any | Kind::Folder => &[],
         }
+    }
+
+    /// `ext` must be lower-case.
+    pub fn has_extension(self, ext: &str) -> bool {
+        self.extensions().contains(&ext)
     }
 
     fn matches(self, path: &Path, is_dir: bool) -> bool {
@@ -193,13 +200,26 @@ fn skip_dir(name: &str) -> bool {
         || [".app", ".photoslibrary", ".musiclibrary", ".bundle", ".framework"].iter().any(|s| name.ends_with(s))
 }
 
+/// Drop roots that are inside another root (e.g. Desktop inside a
+/// OneDrive-redirected Documents), so nothing is walked twice.
+fn distinct_roots(roots: &[PathBuf]) -> Vec<&PathBuf> {
+    roots
+        .iter()
+        .enumerate()
+        .filter(|(i, r)| !roots.iter().enumerate().any(|(j, o)| j != *i && r.starts_with(o) && (o != *r || j < *i)))
+        .map(|(_, r)| r)
+        .collect()
+}
+
 pub fn search(query: &Query, roots: &[PathBuf], limits: &Limits) -> SearchResult {
     let started = Instant::now();
     let mut visited = 0usize;
     let mut truncated = false;
-    let mut hits: Vec<Hit> = Vec::new();
+    // Min-heap of the newest `max_results` hits: memory stays tiny and
+    // nothing is sorted until the end, however many files match.
+    let mut best: BinaryHeap<Reverse<(u64, Reverse<PathBuf>, bool)>> = BinaryHeap::new();
 
-    'roots: for root in roots {
+    'roots: for root in distinct_roots(roots) {
         let walker = WalkDir::new(root)
             .min_depth(1)
             .max_depth(limits.max_depth)
@@ -208,7 +228,7 @@ pub fn search(query: &Query, roots: &[PathBuf], limits: &Limits) -> SearchResult
             .filter_entry(|e| !(e.file_type().is_dir() && e.file_name().to_str().is_some_and(skip_dir)));
         for entry in walker.filter_map(Result::ok) {
             visited += 1;
-            if visited > limits.max_visited || started.elapsed() > limits.time_budget {
+            if visited > limits.max_visited || (visited.is_multiple_of(256) && started.elapsed() > limits.time_budget) {
                 truncated = true;
                 break 'roots;
             }
@@ -216,25 +236,28 @@ pub fn search(query: &Query, roots: &[PathBuf], limits: &Limits) -> SearchResult
             if !query.matches(entry.path(), is_dir) {
                 continue;
             }
-            if hits.iter().any(|h| h.path == entry.path()) {
-                continue; // roots can overlap (e.g. Desktop inside Documents)
-            }
             let modified = entry
                 .metadata()
                 .ok()
                 .and_then(|m| m.modified().ok())
                 .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
                 .map_or(0, |d| d.as_secs());
-            hits.push(Hit {
-                path: entry.path().to_path_buf(),
-                name: entry.file_name().to_string_lossy().into_owned(),
-                is_folder: is_dir,
-                modified,
-            });
+            best.push(Reverse((modified, Reverse(entry.path().to_path_buf()), is_dir)));
+            if best.len() > limits.max_results {
+                best.pop(); // drop the oldest
+            }
         }
     }
+    let mut hits: Vec<Hit> = best
+        .into_iter()
+        .map(|Reverse((modified, Reverse(path), is_folder))| Hit {
+            name: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            path,
+            is_folder,
+            modified,
+        })
+        .collect();
     hits.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| a.path.cmp(&b.path)));
-    hits.truncate(limits.max_results);
     SearchResult { hits, truncated }
 }
 
@@ -341,6 +364,30 @@ mod tests {
         let r = search(&Query::new("dog", Kind::Image).unwrap(), &roots, &Limits::default());
         let got: Vec<_> = r.hits.iter().map(|h| h.name.as_str()).collect();
         assert_eq!(got, ["new_dog.png", "old_dog.png"]);
+    }
+
+    #[test]
+    fn many_matches_stay_fast_and_keep_the_newest() {
+        let d = tempfile::tempdir().unwrap();
+        for i in 0..3000 {
+            std::fs::write(d.path().join(format!("img{i:04}.png")), b"").unwrap();
+        }
+        let newest = d.path().join("img2999.png");
+        let f = std::fs::File::options().write(true).open(&newest).unwrap();
+        f.set_modified(SystemTime::now() + Duration::from_secs(3600)).unwrap();
+        let t = Instant::now();
+        let r = search(&Query::new("", Kind::Image).unwrap(), &[d.path().into()], &Limits::default());
+        assert!(t.elapsed() < Duration::from_secs(2), "took {:?}", t.elapsed());
+        assert_eq!(r.hits.len(), Limits::default().max_results);
+        assert_eq!(r.hits[0].name, "img2999.png");
+    }
+
+    #[test]
+    fn nested_roots_are_walked_once() {
+        let roots = [PathBuf::from("/h/Documents"), PathBuf::from("/h/Documents/Desktop"), PathBuf::from("/h/Music")];
+        assert_eq!(distinct_roots(&roots), [&roots[0], &roots[2]]);
+        let dup = [PathBuf::from("/a"), PathBuf::from("/a")];
+        assert_eq!(distinct_roots(&dup).len(), 1);
     }
 
     #[test]

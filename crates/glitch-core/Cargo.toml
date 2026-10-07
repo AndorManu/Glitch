@@ -7,10 +7,13 @@ license.workspace = true
 
 [dependencies]
 async-trait = "0.1"
+# Local dates for the memory journal (already in Tauri's dependency tree).
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "6"
 # canonicalize without Windows `\\?\` verbatim prefixes (paths stay openable).
 dunce = "1"
-open = "5"
+# ShellExecuteW on Windows instead of spawning a hidden PowerShell per open.
+open = { version = "5", features = ["shellexecute-on-windows"] }
 # Ollama runs on localhost over plain HTTP, so no TLS stack is needed.
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
 serde = { version = "1", features = ["derive"] }
@@ -18,7 +21,7 @@ serde_json = "1"
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 thiserror = "2"
 # Only for spawn_blocking (file search must not stall the async runtime).
-tokio = { version = "1", features = ["rt"] }
+tokio = { version = "1", features = ["rt", "time"] }
 url = "2"
 walkdir = "2"
 

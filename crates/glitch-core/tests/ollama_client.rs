@@ -47,8 +47,9 @@ async fn version_ok_when_running() {
 
 #[tokio::test]
 async fn unreachable_when_nothing_listens() {
-    // Port 9 (discard) on localhost: nothing should be listening there.
-    let client = OllamaClient::new("http://127.0.0.1:9", "2m");
+    // Grab a free port, then close it: nothing listens there (fast on every OS).
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let client = OllamaClient::new(&format!("http://127.0.0.1:{port}"), "2m");
     assert!(matches!(client.version().await, Err(AiError::Unreachable(_))));
 }
 
@@ -315,4 +316,22 @@ async fn tools_are_left_out_for_models_without_tool_support() {
     let chat = reqs.iter().find(|r| r.url.path() == "/api/chat").unwrap();
     let body: Value = serde_json::from_slice(&chat.body).unwrap();
     assert!(body.get("tools").is_none(), "body: {body}");
+}
+
+#[tokio::test]
+async fn is_loaded_reads_api_ps() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/ps"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "models": [{"name": "mistral:latest", "model": "mistral:latest", "size": 5137025024u64,
+                        "expires_at": "2024-06-04T14:38:31.83753-07:00", "size_vram": 5137025024u64}]
+        })))
+        .mount(&server)
+        .await;
+    let client = OllamaClient::new(&server.uri(), "2m");
+    assert!(client.is_loaded("mistral").await);
+    assert!(client.is_loaded("mistral:latest").await);
+    assert!(!client.is_loaded("qwen3.5:2b").await);
+    assert!(!OllamaClient::new("http://127.0.0.1:1", "2m").is_loaded("x").await);
 }

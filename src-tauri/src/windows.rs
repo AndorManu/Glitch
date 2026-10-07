@@ -72,12 +72,17 @@ pub fn place_mascot(app: &AppHandle) {
     let _ = m.set_position(PhysicalPosition::new(x, y));
     // Keep the bubble attached when Glitch is dragged around.
     let handle = app.clone();
-    m.on_window_event(move |e| {
-        if let WindowEvent::Moved(_) = e {
+    let win = m.clone();
+    m.on_window_event(move |e| match e {
+        WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
+            crate::hover::refresh_geometry(&handle, &win);
             if is_visible(&handle, BUBBLE) {
                 place_bubble(&handle);
             }
         }
+        // Alt+F4 on Glitch must not kill him (quit lives in the tray/settings).
+        WindowEvent::CloseRequested { api, .. } => api.prevent_close(),
+        _ => {}
     });
 }
 
@@ -93,7 +98,7 @@ pub struct BubbleLayout {
 }
 
 fn create_bubble(app: &AppHandle) -> tauri::Result<WebviewWindow> {
-    WebviewWindowBuilder::new(app, BUBBLE, WebviewUrl::App("bubble.html".into()))
+    let bubble = WebviewWindowBuilder::new(app, BUBBLE, WebviewUrl::App("bubble.html".into()))
         .title("Glitch")
         .inner_size(BUBBLE_W, 120.0)
         .transparent(true)
@@ -107,7 +112,16 @@ fn create_bubble(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .visible_on_all_workspaces(true)
         .accept_first_mouse(true)
         .visible(false)
-        .build()
+        .build()?;
+    let handle = app.clone();
+    bubble.on_window_event(move |e| {
+        if let WindowEvent::CloseRequested { api, .. } = e {
+            // Alt+F4 hides it like Esc does (keeps state, updates the mascot).
+            api.prevent_close();
+            hide_bubble(&handle);
+        }
+    });
+    Ok(bubble)
 }
 
 /// Position the bubble next to Glitch and tell the page where its tail goes.

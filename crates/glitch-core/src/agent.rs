@@ -274,7 +274,12 @@ impl Agent {
     async fn run(&mut self, model: &str) -> Result<Step, AgentError> {
         loop {
             while let Some(call) = self.queue.pop_front() {
-                match tools::prepare(&call, &*self.platform) {
+                // Validation can touch the disk (path checks, app discovery).
+                let (platform, c) = (self.platform.clone(), call.clone());
+                let prepared = tokio::task::spawn_blocking(move || tools::prepare(&c, &*platform))
+                    .await
+                    .unwrap_or_else(|e| Err(tools::ToolError(e.to_string())));
+                match prepared {
                     Err(e) => self
                         .history
                         .push(Message::tool_result(&call.name, json!({"ok": false, "error": e.0}).to_string())),

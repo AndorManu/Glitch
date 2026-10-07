@@ -186,9 +186,14 @@ mod tests {
     #[test]
     fn known_models_are_unique() {
         let all = all_known_models();
-        let mut dedup = all.clone();
-        dedup.dedup();
-        assert_eq!(all.len(), dedup.len());
+        let unique: std::collections::HashSet<_> = all.iter().collect();
+        assert_eq!(all.len(), unique.len());
+        // Every tier's models are listed.
+        let raw: std::collections::HashSet<_> = TIERS
+            .iter()
+            .flat_map(|t| std::iter::once(t.primary.name).chain(t.alternatives.iter().map(|m| m.name)))
+            .collect();
+        assert_eq!(raw.len(), unique.len());
         assert!(all.contains(&"llama3.2:3b"));
     }
 }

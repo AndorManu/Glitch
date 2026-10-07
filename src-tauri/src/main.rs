@@ -35,8 +35,15 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let mut tray =
         TrayIconBuilder::with_id("glitch").tooltip("Glitch").menu(&menu).show_menu_on_left_click(true).on_menu_event(
             |app, event| match event.id().as_ref() {
-                "chat" => commands::open_chat(app, false),
-                "settings" => commands::show_panel_view(app, "settings"),
+                // Off the event handler: creating a window there deadlocks on Windows.
+                "chat" => {
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move { commands::open_chat(&app, false) });
+                }
+                "settings" => {
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move { commands::show_panel_view(&app, "settings") });
+                }
                 "wander" => {
                     let s = app.state::<AppState>().update_settings(|s| s.movement_enabled = !s.movement_enabled);
                     let _ = app.emit("settings-changed", &s);
@@ -58,7 +65,10 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 fn main() {
     tauri::Builder::default()
         // A second launch just opens the chat of the running Glitch.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| commands::open_chat(app, false)))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move { commands::open_chat(&app, false) });
+        }))
         .setup(|app| {
             app.manage(AppState::new(app.path().app_config_dir()?));
             app.manage(hover::Hitbox::default());
@@ -96,6 +106,15 @@ fn main() {
             commands::set_hitbox,
             commands::quit,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Glitch");
+        .build(tauri::generate_context!())
+        .expect("error while building Glitch")
+        .run(|app, event| {
+            // Any way of exiting (tray Quit, OS logout, last window closed):
+            // save the chat/memory. (Quit from the UI also unloads the model.)
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                if let Ok(mut agent) = app.state::<AppState>().agent.try_lock() {
+                    agent.persist();
+                }
+            }
+        });
 }

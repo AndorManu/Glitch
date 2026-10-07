@@ -41,6 +41,35 @@ pub fn normalise(raw: &str) -> Result<String, ToolError> {
     Ok(url.to_string())
 }
 
+/// Local-network targets (router admin pages, dev servers, NAS...): opening
+/// them can trigger actions via GET, so they need the user's OK.
+pub fn is_private_host(url: &str) -> bool {
+    use std::net::IpAddr;
+    let Ok(u) = Url::parse(url) else { return true };
+    match u.host() {
+        None => true,
+        Some(url::Host::Domain(d)) => {
+            let d = d.trim_end_matches('.').to_ascii_lowercase();
+            d == "localhost"
+                || [".localhost", ".local", ".lan", ".internal", ".home.arpa", ".home"].iter().any(|s| d.ends_with(s))
+                || !d.contains('.')
+        }
+        Some(url::Host::Ipv4(ip)) => {
+            let ip = IpAddr::V4(ip);
+            match ip {
+                IpAddr::V4(v4) => v4.is_private() || v4.is_loopback() || v4.is_link_local() || v4.is_unspecified(),
+                _ => unreachable!(),
+            }
+        }
+        Some(url::Host::Ipv6(v6)) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
+
 /// `scheme:` prefix that is not followed by a port number, e.g. "mailto:a@b",
 /// "javascript:alert(1)", "file:///C:/x", "C:\\Windows" (drive letter).
 fn looks_like_other_scheme(s: &str) -> bool {
@@ -91,6 +120,23 @@ mod tests {
             "smb://server/share",
         ] {
             assert!(normalise(bad).is_err(), "should reject {bad}");
+        }
+    }
+
+    #[test]
+    fn private_hosts() {
+        for p in [
+            "http://localhost:3000/",
+            "http://192.168.1.1/",
+            "http://10.0.0.5/admin",
+            "http://nas.local/",
+            "http://[::1]/",
+            "http://router/",
+        ] {
+            assert!(is_private_host(p), "{p}");
+        }
+        for p in ["https://x.com/elonmusk", "https://www.youtube.com/", "http://8.8.8.8/"] {
+            assert!(!is_private_host(p), "{p}");
         }
     }
 

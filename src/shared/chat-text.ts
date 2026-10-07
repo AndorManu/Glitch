@@ -6,6 +6,10 @@ export function explainError(e: UiError): { text: string; offerSetup: boolean } 
   switch (e.code) {
     case "ollama_unreachable":
       return { text: "I can't reach Ollama, my brain app. Is it running?", offerSetup: true };
+    case "ai_timeout":
+      return { text: "My brain is taking ages. It may still be waking up. Try again in a moment, or pick a smaller brain in Settings.", offerSetup: false };
+    case "too_long":
+      return { text: "That's a lot of text! Could you make it shorter?", offerSetup: false };
     case "model_missing":
       return { text: "My brain (the AI model) isn't downloaded yet.", offerSetup: true };
     case "no_model":
