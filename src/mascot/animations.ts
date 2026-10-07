@@ -1014,7 +1014,13 @@ export type AnimationName =
   | "look_dirs"
   | "high_five"
   | "happy_spin"
-  | "jump_scare";
+  | "jump_scare"
+  // Context reactions (src/mascot/context.ts REACT_FALLBACKS).
+  | "stretch"
+  | "hide"
+  | "guard"
+  | "suggest"
+  | "yawn_stay";
 
 export const ANIMATIONS: Record<AnimationName, Animation> = {
   // moods
@@ -1143,6 +1149,19 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   happy_spin: { keys: () => [...clip("happy_spin", 90, { ease: 1 }), k("idle0", 200)], once: true },
   // Startled jump (a sudden click, woken with a jolt): starts at once.
   jump_scare: { keys: () => [...clip("jump_scare", 90, { ease: 0, hold: 300 }), k("idle0", 200)], once: true, bridge: false },
+  // Context reactions (src/mascot/context.ts asks for these names).
+  // Good morning: the side-on stretch (turns side-on, stretches, turns back).
+  stretch: { keys: (r, mem) => FIDGETS.find((f) => f.id === "stretch")!.make(r, mem) ?? [...WAKE.slice(-4)], once: true },
+  // Fullscreen / a game: sitting quietly, looking off to the side now and then.
+  hide: {
+    keys: (r, mem) => [...sitLoop(r, mem), ...(has("sit_idle_look") ? clip("sit_idle_look", 220, { ease: 2, hold: 1400 }) : [])],
+  },
+  // Focus mode: a calm sentinel, sitting with the tail curled round his feet.
+  guard: { keys: (r, mem) => (has("idle_tail_sit") ? tail(mem, "idle_tail_sit", 10 * TAIL_MS) : sitLoop(r, mem)) },
+  // A suggestion: "there, try that".
+  suggest: { keys: () => [...cycle("point", [0, 1, 2], 90), k("point3", 140), k("point4", 600, { fx: "sparkle" }), k("point5", 300), k("point6", 200), k("point7", 250)], once: true },
+  // Late at night: a big yawn, but he stays up (yawn goes on to sleep).
+  yawn_stay: { keys: [k("wake7", 250), k("wake6", 250), k("wake4", 1000), k("wake3", 350), k("wake6", 250), k("wake7", 300), k("idle0", 200)], once: true },
   // actions
   startled: { keys: startledKeys, once: true },
   laugh: { keys: laughKeys, once: true },

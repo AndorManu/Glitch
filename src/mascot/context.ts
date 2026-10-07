@@ -29,6 +29,7 @@ export const REACT_FALLBACKS: Record<string, readonly string[]> = {
   celebrate_focus: ["celebrate", "happy"],
   stretch: ["wake", "happy"],
   yawn: ["lookAround"],
+  yawn_stay: ["yawn", "lookAround"],
   // Hushed poses (loops).
   hide: ["sit", "idle"],
   guard: ["sit", "idle"],
@@ -72,7 +73,8 @@ export function planReaction(r: Reaction, ctx: ReactContext, rand: () => number,
     case "watch_tv":
       return planWatch(r.window, ctx, rand, a);
     case "late_night":
-      return plan(anim(a("yawn"), 2500));
+      // Yawns but stays up (plain "yawn" goes on to sleep).
+      return plan(anim(a("yawn_stay"), 2500));
     case "morning":
       return plan(anim(a("stretch"), 3000));
     case "battery_low":
