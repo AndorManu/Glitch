@@ -25,7 +25,7 @@ tauri-plugin-global-shortcut = "2.4"
 # Speech-model download over HTTPS with the OS's own TLS (SChannel on
 # Windows, Security.framework on macOS): no extra TLS stack in the binary.
 reqwest = { version = "0.13", default-features = false, features = ["native-tls"] }
-sha1_smol = "1"
+sha2 = "0.10"
 # Only for the debug-build capture check (src/desktop.rs); already in the tree via glitch-core.
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Clipboard text for the read_clipboard / write_clipboard tools.
