@@ -25,6 +25,7 @@ import {
 } from "../shared/ipc";
 import { browserStore, pickGreeting } from "../shared/greeting";
 import { canSend, dismissSpeech, initialState, transition, type BubbleEvent, type Request } from "./state";
+import { UpdateMe } from "./update-me";
 import { BubbleView } from "./view";
 import {
   explainDownloadError,
@@ -74,7 +75,12 @@ const view = new BubbleView(root, {
     state = dismissSpeech(state);
     view.render(state);
   },
+  choose: (id, choice) => void updates.choose(id, choice),
 });
+
+// "Update me": reminders, Claude Code, scripts, the digest, the briefing.
+const updates = new UpdateMe({ dispatch: (e) => dispatch(e), busy: () => state.busy });
+updates.listen();
 
 // A new version of Glitch (src-tauri/src/autoupdate.rs): he offers it here.
 void listen<UpdateAvailable>("update-available", (e) => dispatch({ type: "update_offer", version: e.payload.version }));
@@ -298,6 +304,7 @@ function onShown(): void {
     dispatch({ type: "shown", awayMs });
     view.enter();
     keepWarm(true);
+    void updates.opened();
   }
   view.focus();
 }

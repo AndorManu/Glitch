@@ -5,7 +5,7 @@
 // a thought cloud while the model is working.
 
 import { CLEARED, EMPTY_REPLY, WELCOME, explainError, plainText } from "../shared/chat-text";
-import type { AgentProgress, CaptureTarget, Step, UiError } from "../shared/ipc";
+import type { AgentProgress, CaptureTarget, Step, UiError, UpdateChoice, UpdateIcon, UpdateSpeech } from "../shared/ipc";
 
 export type Answer = "allowed" | "denied" | "stale";
 
@@ -19,7 +19,9 @@ export type Speech =
   /** Voice: offer to download the speech model, then its progress. */
   | { kind: "voice_setup"; model: string; sizeMb: number; progress: number | null; failed: string | null }
   /** A new version of Glitch: Install / Later (src-tauri/src/autoupdate.rs). */
-  | { kind: "update"; version: string; installing: boolean; failed: string | null };
+  | { kind: "app_update"; version: string; installing: boolean; failed: string | null }
+  /** "Update me": something Glitch says by himself, with optional buttons (Done / Snooze, Tell me...). */
+  | { kind: "update"; id: string; text: string; icon: UpdateIcon; choices: UpdateChoice[]; answered: boolean };
 
 /** One tool step in the live step list ("Reading your clipboard"). */
 export interface WorkStep {
@@ -63,6 +65,10 @@ export type BubbleEvent =
   | { type: "progress"; p: AgentProgress }
   /** A timer Glitch set has rung. */
   | { type: "reminder"; text: string }
+  /** "Update me": a reminder, Claude Code, a script, the digest, the briefing. */
+  | { type: "update"; speech: UpdateSpeech }
+  /** A button on the update was clicked (the buttons switch off). */
+  | { type: "update_answered"; id: string }
   /** The bubble window became visible after `awayMs` hidden (null: unknown). */
   | { type: "shown"; awayMs: number | null }
   /** Voice wants to say something (ignored while Glitch is thinking). */
@@ -167,6 +173,17 @@ export function transition(s: BubbleState, e: BubbleEvent): Transition {
       // While busy the caller holds it until the answer is in.
       if (s.busy) return none(s);
       return none(speak(s, { kind: "reply", text: `\u23F0 ${e.text}`, actions: [] }));
+    case "update": {
+      // While busy (or asking for permission) the caller holds it until Glitch is free.
+      if (s.busy || pendingConfirm(s)) return none(s);
+      // The same update again (live event + the pending fetch): nothing new.
+      if (s.speech?.kind === "update" && s.speech.id === e.speech.id) return none(s);
+      const { id, text, icon, choices } = e.speech;
+      return none(speak(s, { kind: "update", id, text, icon, choices, answered: false }));
+    }
+    case "update_answered":
+      if (s.speech?.kind !== "update" || s.speech.id !== e.id || s.speech.answered) return none(s);
+      return none({ ...s, speech: { ...s.speech, answered: true } });
     case "failed": {
       const { text, offerSetup } = explainError(e.error);
       return none(speak(s, { kind: "error", text, offerSetup }));
@@ -175,7 +192,8 @@ export function transition(s: BubbleState, e: BubbleEvent): Transition {
       return none(s.seen ? s : { ...s, seen: true });
     case "shown": {
       const stale = e.awayMs !== null && e.awayMs >= COLLAPSE_AFTER_MS;
-      if (stale && !s.busy && s.speech && s.seen && !pendingConfirm(s) && s.speech.kind !== "voice_setup") {
+      const waitingUpdate = s.speech?.kind === "update" && !s.speech.answered && s.speech.choices.length > 0;
+      if (stale && !s.busy && s.speech && s.seen && !pendingConfirm(s) && s.speech.kind !== "voice_setup" && !waitingUpdate) {
         return none({ ...speak(s, null), seen: true });
       }
       return none(s);
@@ -194,11 +212,11 @@ export function transition(s: BubbleState, e: BubbleEvent): Transition {
     case "update_offer":
       if (s.busy) return none(s);
       // Already offering (or installing) this one: keep it as it is.
-      if (s.speech?.kind === "update" && s.speech.version === e.version) return none(s);
-      return none(speak(s, { kind: "update", version: e.version, installing: false, failed: null }));
+      if (s.speech?.kind === "app_update" && s.speech.version === e.version) return none(s);
+      return none(speak(s, { kind: "app_update", version: e.version, installing: false, failed: null }));
     case "update_state": {
       const sp = s.speech;
-      if (sp?.kind !== "update") return none(s);
+      if (sp?.kind !== "app_update") return none(s);
       // Stopped without restarting: it failed (the restart never comes back here).
       const failed = !e.installing && sp.installing ? (e.failed ?? UPDATE_FAILED) : e.installing ? null : sp.failed;
       if (sp.installing === e.installing && sp.failed === failed) return none(s);

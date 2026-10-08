@@ -16,6 +16,7 @@ pub mod platform;
 pub mod settings;
 pub mod stream;
 pub mod tools;
+pub mod update_me;
 pub mod vision;
 pub mod voice;
 pub mod world;

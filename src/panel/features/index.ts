@@ -6,6 +6,7 @@ import type { Settings } from "../../shared/ipc";
 import { contextFeature } from "./context";
 import { streamFeature } from "./stream";
 import { updatesFeature } from "./updates";
+import { updateMeFeature } from "./update-me";
 
 export interface Feature {
   id: string;
@@ -13,4 +14,4 @@ export interface Feature {
   render(s: Settings): HTMLElement;
 }
 
-export const FEATURES: readonly Feature[] = [contextFeature, streamFeature, updatesFeature];
+export const FEATURES: readonly Feature[] = [contextFeature, updateMeFeature, streamFeature, updatesFeature];

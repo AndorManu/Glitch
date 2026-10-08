@@ -10,6 +10,18 @@
       body { user-select: none; -webkit-user-select: none; }
       canvas { display: block; width: 160px; height: 160px; cursor: grab; touch-action: none; }
       canvas:active { cursor: grabbing; }
+      /* "Update me": the text on the sign Glitch holds up (src/mascot/update-act.ts). */
+      .update-sign {
+        position: fixed; left: 50%; top: 6px; transform: translateX(-50%);
+        display: flex; flex-direction: column; align-items: center;
+        max-width: 148px; padding: 3px 7px; pointer-events: none;
+        background: #fffdfa; color: #241c27; border: 2px solid #1e1820; border-radius: 4px;
+        box-shadow: 0 2px 0 #1e1820;
+        font: 700 10px/1.25 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: nowrap;
+        animation: sign-up 0.18s steps(3, end) both;
+      }
+      @keyframes sign-up { from { transform: translate(-50%, 8px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+      @media (prefers-reduced-motion: reduce) { .update-sign { animation: none; } }
     </style>
   </head>
   <body>

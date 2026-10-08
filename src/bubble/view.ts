@@ -2,7 +2,8 @@
 // All decisions live in state.ts; this file only turns state into DOM.
 
 import { askPermission, lookingText, plainText, PLACEHOLDER, THINKING } from "../shared/chat-text";
-import type { BubbleLayout } from "../shared/ipc";
+import type { BubbleLayout, UpdateIcon } from "../shared/ipc";
+import { allowAccepted, CONFIRM_CHOICES, defaultChoice } from "./choices";
 import { h, svg } from "./dom";
 import {
   CLOUD,
@@ -44,7 +45,18 @@ export interface ViewHandlers {
   /** New version offer buttons. */
   updateInstall(): void;
   updateLater(): void;
+  /** A button on an "Update me" speech (Done, Snooze, Tell me...). */
+  choose?(id: string, choice: string): void;
 }
+
+/** The little round badge in front of an update. */
+const UPDATE_GLYPHS: Record<UpdateIcon, string> = {
+  reminder: "⏰",
+  claude: "✦",
+  event: "✓",
+  digest: "✉",
+  briefing: "☀",
+};
 
 /** Transparent gap kept around the shapes for their shadow and focus ring. */
 const SIDE = 6;
@@ -62,10 +74,12 @@ type SpeechShown = {
   balloon: HTMLElement;
   tail: SVGSVGElement;
   choices: HTMLButtonElement[];
+  /** An Allow / Nope card. */
+  confirm: boolean;
   /** Voice setup offer: progress bar, status line, and its button rows. */
   setup?: { bar: HTMLElement; fill: HTMLElement; note: HTMLElement; pct: HTMLElement; offer: HTMLElement; running: HTMLElement };
   /** New version offer: its two buttons and the "didn't work" line. */
-  update?: { install: HTMLButtonElement; later: HTMLButtonElement; note: HTMLElement };
+  appUpdate?: { install: HTMLButtonElement; later: HTMLButtonElement; note: HTMLElement };
 };
 /** While busy: the thought cloud (no text yet) or the reply streaming in. Both carry the step list. */
 type CloudShown = { kind: "cloud"; el: HTMLElement; work: HTMLElement };
@@ -207,7 +221,10 @@ export class BubbleView {
   /** Put the keyboard where it's most useful right now. */
   focus(): void {
     const s = this.shown;
-    if (s?.kind === "speech" && s.choices.length && !s.choices[0].disabled && !this.input.value) s.choices[0].focus();
+    // A confirmation card focuses "Nope", so a stray Enter can't approve.
+    const i = s?.kind === "speech" ? defaultChoice(s.confirm ? "confirm" : "other", s.choices.length) : null;
+    const button = s?.kind === "speech" && i !== null ? s.choices[i] : undefined;
+    if (button && !button.disabled && !this.input.value) button.focus();
     else this.input.focus();
   }
 
@@ -337,7 +354,7 @@ export class BubbleView {
     // Text that already streamed in is shown at once, not typed again.
     if (speech.kind === "reply" && speech.instant) typer.finish();
     else if (this.live) queueMicrotask(() => typer.start());
-    if (this.live && (speech.kind === "reply" || speech.kind === "confirm") && text.trim()) {
+    if (this.live && (speech.kind === "reply" || speech.kind === "confirm" || speech.kind === "update") && text.trim()) {
       // He opened a site or an app for you: he points at it first, then says it.
       const opened = speech.kind === "reply" && speech.actions.some((a) => a.startsWith("Opened"));
       this.on.talk?.(text.length, opened);
@@ -375,7 +392,7 @@ export class BubbleView {
         ? askPermission(speech.title)
         : speech.kind === "voice_setup"
           ? setupText(speech.sizeMb)
-          : speech.kind === "update"
+          : speech.kind === "app_update"
             ? updateText(speech.version)
             : speech.text;
 
@@ -388,6 +405,7 @@ export class BubbleView {
       scroll.prepend(h("span", { class: "glyph", "aria-hidden": "true" }, "!"));
     }
     if (speech.kind === "voice_setup") scroll.prepend(h("span", { class: "glyph mic-glyph", "aria-hidden": "true" }, svg(ICON_MIC)));
+    if (speech.kind === "update") scroll.prepend(h("span", { class: `glyph update-glyph ${speech.icon}`, "aria-hidden": "true" }, UPDATE_GLYPHS[speech.icon]));
     if (main) balloon.append(scroll);
 
     if (speech.kind === "confirm" && speech.detail) {
@@ -401,8 +419,13 @@ export class BubbleView {
 
     const choices: HTMLButtonElement[] = [];
     if (speech.kind === "confirm") {
-      const allow = h("button", { type: "button", class: "choice yes", onclick: () => this.on.answer(true) }, "Allow");
-      const nope = h("button", { type: "button", class: "choice no", onclick: () => this.on.answer(false) }, "Nope");
+      const shownAt = performance.now();
+      const allow = h(
+        "button",
+        { type: "button", class: "choice yes", onclick: () => allowAccepted(shownAt, performance.now()) && this.on.answer(true) },
+        CONFIRM_CHOICES[0],
+      );
+      const nope = h("button", { type: "button", class: "choice no", onclick: () => this.on.answer(false) }, CONFIRM_CHOICES[1]);
       choices.push(allow, nope);
       const row = h("div", { class: "choices", role: "group", "aria-label": "Allow this?" }, allow, nope);
       // Typing while a button is focused goes to the message box instead.
@@ -410,6 +433,13 @@ export class BubbleView {
         if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && e.key !== " ") this.input.focus();
       });
       balloon.append(row);
+    }
+    if (speech.kind === "update" && speech.choices.length) {
+      speech.choices.forEach((c, i) => {
+        const b = h("button", { type: "button", class: `choice ${i === 0 ? "yes" : "no"}`, onclick: () => this.on.choose?.(speech.id, c.id) }, c.label);
+        choices.push(b);
+      });
+      balloon.append(h("div", { class: "choices", role: "group" }, ...choices));
     }
     if (speech.kind === "error" && speech.offerSetup) {
       balloon.append(h("div", { class: "choices" }, h("button", { type: "button", class: "choice yes", onclick: () => this.on.openSetup() }, "Fix it")));
@@ -439,14 +469,14 @@ export class BubbleView {
       balloon.append(bar, note, offer, running);
     }
 
-    let update: SpeechShown["update"];
-    if (speech.kind === "update") {
+    let appUpdate: SpeechShown["appUpdate"];
+    if (speech.kind === "app_update") {
       const install = h("button", { type: "button", class: "choice yes", onclick: () => this.on.updateInstall() }, "Install");
       const later = h("button", { type: "button", class: "choice no", onclick: () => this.on.updateLater() }, "Later");
       const note = h("p", { class: "note", role: "alert" });
       // Focus lands on "Later": an Enter meant for the chat never installs anything.
       choices.push(later, install);
-      update = { install, later, note };
+      appUpdate = { install, later, note };
       balloon.append(note, h("div", { class: "choices", role: "group", "aria-label": "Update Glitch?" }, install, later));
     }
 
@@ -457,7 +487,7 @@ export class BubbleView {
 
     scroll.addEventListener("scroll", () => this.markOverflow(scroll), { passive: true });
 
-    const shown: SpeechShown = { kind: "speech", rev, el, balloon, tail, choices, setup, update };
+    const shown: SpeechShown = { kind: "speech", rev, el, balloon, tail, choices, confirm: speech.kind === "confirm", setup, appUpdate };
     this.updateSpeech(shown, speech);
     return { shown, typed, text: main };
   }
@@ -497,14 +527,18 @@ export class BubbleView {
       if (offer.firstElementChild && offer.firstElementChild.textContent !== label) offer.firstElementChild.textContent = label;
       return;
     }
-    if (speech.kind === "update" && s.update) {
-      const { install, later, note } = s.update;
+    if (speech.kind === "app_update" && s.appUpdate) {
+      const { install, later, note } = s.appUpdate;
       install.disabled = later.disabled = speech.installing;
       const label = speech.installing ? "Installing…" : speech.failed ? "Try again" : "Install";
       if (install.textContent !== label) install.textContent = label;
       const text = speech.failed ?? "";
       if (note.textContent !== text) note.textContent = text;
       note.hidden = !text;
+      return;
+    }
+    if (speech.kind === "update") {
+      for (const b of s.choices) b.disabled = speech.answered;
       return;
     }
     if (speech.kind !== "confirm") return;

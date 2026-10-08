@@ -154,6 +154,25 @@ const scenarios = {
       500,
     ),
   },
+  // Auto-update (kind "app_update") next to an "Update me" speech (kind "update").
+  "14-app-update-offer": { wait: 1200, then: seq(emit("update-available", { version: "0.2.0", notes: "" }), 1800) },
+  "14b-app-update-installing": {
+    wait: 1200,
+    then: seq(emit("update-available", { version: "0.2.0", notes: "" }), 1800, async (p) => p.locator("button", { hasText: "Install" }).click(), 300),
+  },
+  "14c-app-update-failed": {
+    wait: 1200, result: { error: { code: "update_failed", message: "The update didn't download. Try again in a bit?" } },
+    then: seq(emit("update-available", { version: "0.2.0", notes: "" }), 1800, async (p) => p.locator("button", { hasText: "Install" }).click(), 500),
+  },
+  "14d-update-me-reminder": {
+    wait: 1200,
+    then: seq(emit("glitch-update", { id: "r1", text: "Reminder: call mum!", icon: "reminder", choices: [{ id: "done", label: "Done" }, { id: "snooze", label: "Snooze 10 min" }] }), 1800),
+  },
+  "14e-dark-app-update-offer": { dark: true, wait: 1200, then: seq(emit("update-available", { version: "0.2.0", notes: "" }), 1800) },
+  "14f-dark-update-me-claude": {
+    dark: true, wait: 1200,
+    then: seq(emit("glitch-update", { id: "c1", text: "Claude Code finished in Glitch: all checks pass.", icon: "claude", choices: [] }), 1800),
+  },
   "09-dark-welcome": { dark: true, wait: 1500 },
   "09b-dark-confirm": { dark: true, send: "open spotify", result: confirm, wait: 900 },
   "09c-dark-thinking": { dark: true, send: "hi", result: { hang: true }, wait: 700 },
@@ -189,6 +208,13 @@ function mock(sc) {
           return args.handler;
         case "plugin:event|unlisten": return null;
         case "voice_status": return sc.voice ? sc.voice : null;
+        case "update_install":
+          // A real install restarts Glitch; a failure rejects (scenario 14c).
+          if (sc.result?.error) {
+            await new Promise((res) => setTimeout(res, 250));
+            throw sc.result.error;
+          }
+          return new Promise(() => {});
         case "resize_bubble":
           window.__height = Math.min(420, Math.max(56, Math.round(args.height)));
           return sc.layout ?? { tail_up: false, tail_x: 150 };

@@ -1611,6 +1611,7 @@ name = "glitch"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "chrono",
  "core-foundation",
  "core-graphics",
  "cpal",
@@ -1621,7 +1622,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "sha1_smol",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-global-shortcut",

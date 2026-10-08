@@ -2,6 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod autoupdate;
+#[cfg(test)]
+mod capabilities_check;
 mod chaos;
 mod chaos_native;
 mod commands;
@@ -11,9 +13,12 @@ mod desktop;
 mod hover;
 mod layout;
 mod ledge_watch;
+#[cfg(target_os = "windows")]
+mod notify_win;
 mod os;
 mod state;
 mod stream;
+mod update_me;
 mod voice;
 mod windows;
 mod world_native;
@@ -86,6 +91,12 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn main() {
+    let context = tauri::generate_context!();
+    // `glitch --notify "build done"` / the Claude Code hook: send the event
+    // to the running Glitch and exit, no windows.
+    if let Some(code) = update_me::cli(&context.config().identifier) {
+        std::process::exit(code);
+    }
     tauri::Builder::default()
         // A second launch just opens the chat of the running Glitch.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -98,6 +109,7 @@ fn main() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             app.manage(AppState::new(app.handle(), app.path().app_config_dir()?));
+            update_me::setup(app.handle(), app.path().app_config_dir()?);
             app.manage(hover::Hitbox::default());
             app.manage(chaos::ChaosState::default());
             app.manage(context::ContextState::default());
@@ -116,6 +128,7 @@ fn main() {
             context::debug_trigger(app.handle());
             Ok(())
         })
+        // A new command also goes into build.rs and a window's capabilities/ file.
         .invoke_handler(tauri::generate_handler![
             commands::setup_status,
             commands::start_ollama,
@@ -186,13 +199,26 @@ fn main() {
             autoupdate::update_set_auto,
             autoupdate::update_later,
             autoupdate::update_install,
+            update_me::update_me_status,
+            update_me::update_me_set,
+            update_me::claude_connect,
+            update_me::claude_disconnect,
+            update_me::reminder_delete,
+            update_me::update_pending,
+            update_me::update_seen,
+            update_me::update_choose,
+            update_me::briefing_today,
+            update_me::location_search,
+            update_me::update_me_test,
+            update_me::update_me_fake_toast,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building Glitch")
         .run(|app, event| {
             // Any way of exiting (tray Quit, OS logout, last window closed):
             // save the chat/memory. (Quit from the UI also unloads the model.)
             if let tauri::RunEvent::ExitRequested { .. } = event {
+                update_me::shutdown(app);
                 if let Ok(mut agent) = app.state::<AppState>().agent.try_lock() {
                     agent.persist();
                 }

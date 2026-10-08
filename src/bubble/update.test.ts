@@ -8,7 +8,7 @@ function run(s: BubbleState, ...events: Parameters<typeof transition>[1][]): Bub
 describe("new version bubble", () => {
   it("offers once, installs, and says when it failed", () => {
     let s = run(initialState(null), { type: "update_offer", version: "0.2.0" });
-    expect(s.speech).toEqual({ kind: "update", version: "0.2.0", installing: false, failed: null });
+    expect(s.speech).toEqual({ kind: "app_update", version: "0.2.0", installing: false, failed: null });
     const rev = s.rev;
     // The same offer again (daily check, window reload) changes nothing.
     s = run(s, { type: "update_offer", version: "0.2.0" });

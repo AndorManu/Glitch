@@ -184,7 +184,29 @@ try {
 
   // Walk mode: the page reloads itself and a stream Glitch walks.
   if (mascot) {
-    await mascot.evaluate(() => window.__TAURI_INTERNALS__.invoke("update_stream_settings", { patch: { mode: "walk", size: 1 } }));
+    // Per-window permissions: the mascot may not change settings, so open
+    // Settings (the mascot may) and switch the mode from the panel page.
+    const denied = await mascot
+      .evaluate(() => window.__TAURI_INTERNALS__.invoke("update_stream_settings", { patch: { mode: "walk" } }).then(() => false, () => true))
+      .catch(() => true);
+    record("the mascot window can't change overlay settings", denied);
+    await mascot.evaluate(() => window.__TAURI_INTERNALS__.invoke("show_panel", { view: "settings" }));
+    const panel = await until(() => cdp.contexts().flatMap((c) => c.pages()).find((p) => p.url().includes("panel.html")), 15000);
+    record("Settings panel found", !!panel);
+    await panel.evaluate(() => window.__TAURI_INTERNALS__.invoke("update_stream_settings", { patch: { mode: "walk", size: 1 } }));
+    const card = await until(
+      () =>
+        panel.evaluate(() => {
+          const block = [...document.querySelectorAll(".fx-block")].find((b) => b.textContent.includes("Copy OBS URL"));
+          block?.scrollIntoView({ block: "start" });
+          return block?.textContent ?? "";
+        }),
+      8000,
+    );
+    record("Settings shows the Streaming overlay card", /Streaming overlay/.test(card ?? "") && /Copy OBS URL/.test(card ?? ""));
+    await sleep(400);
+    await panel.screenshot({ path: path.join(OUT, "overlay-settings-card.png") });
+    await panel.evaluate(() => window.__TAURI_INTERNALS__.invoke("hide_panel"));
     const walking = await until(() => obs.evaluate(() => window.__overlay?.config?.mode === "walk"), 10000);
     record("switching to walk mode reaches the page", !!walking);
     const p0 = await obs.evaluate(() => window.__overlay.pos);
