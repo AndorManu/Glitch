@@ -31,7 +31,7 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - name: Release script tests (version bump, changelog)
-        run: node --test scripts/
+        run: node --test scripts/release-lib.test.mjs
       - run: npm run build # src-tauri needs ../dist to compile
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings

@@ -74,10 +74,10 @@ function placeBubble(): void {
   const s = config.size;
   const w = bubble.offsetWidth;
   const h = bubble.offsetHeight;
-  // Just above his head (standing, it is about 44% down his 160 px window), kept on the page.
+  // Just above his head (the bubble tip about half way down his 160 px window, a little above his ears), kept on the page.
   const cx = pos.x + (VIEW_W * s) / 2;
   const x = Math.max(8, Math.min(window.innerWidth - w - 8, cx - w / 2));
-  const y = Math.max(8, pos.y + VIEW_H * s * 0.44 - h);
+  const y = Math.max(8, pos.y + VIEW_H * s * 0.52 - h);
   bubble.style.transform = `translate(${px(x)}, ${px(y)})`;
   bubble.style.setProperty("--tail-x", px(Math.max(14, Math.min(w - 14, cx - x))));
 }

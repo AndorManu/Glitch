@@ -1,5 +1,5 @@
 // Shared, pure helpers for scripts/bump-version.mjs and scripts/changelog.mjs.
-// Tested by scripts/release-lib.test.mjs (node --test scripts/).
+// Tested by scripts/release-lib.test.mjs (node --test scripts/release-lib.test.mjs).
 
 /** "1.2.3" or "1.2.3-beta.1". */
 export function isVersion(v) {
