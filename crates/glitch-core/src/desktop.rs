@@ -53,6 +53,16 @@ pub struct WindowInfo {
     pub app: String,
 }
 
+/// What the system media session is playing (read only when the user asks).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NowPlaying {
+    pub title: String,
+    pub artist: String,
+    /// The app playing it, e.g. "Spotify.exe", "Chrome".
+    pub app: String,
+    pub playing: bool,
+}
+
 /// Pixel rectangle inside a capture (top-left origin).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PixelRect {
@@ -104,6 +114,15 @@ pub trait Desktop: Send + Sync {
     /// The notes file `take_note` appends to.
     fn notes_file(&self) -> Option<PathBuf> {
         default_notes_file()
+    }
+    /// What music/video the system media session has (`None`: nothing).
+    fn now_playing(&self) -> DesktopResult<Option<NowPlaying>> {
+        Err("Glitch can't see what's playing on this computer".into())
+    }
+    /// Focus mode: start a session (`Some(0)` stops it, `None` = the default
+    /// length). Returns the minutes started (0 = stopped).
+    fn focus(&self, _minutes: Option<u32>) -> DesktopResult<u32> {
+        Err("focus mode isn't available here".into())
     }
     /// Save a reminder for `due` (unix seconds) that survives restarts
     /// ("Update me" reminders; see `crate::update_me::reminders`).
@@ -163,6 +182,8 @@ pub(crate) mod fake {
         pub timers: Mutex<Vec<(Duration, String)>>,
         pub reminders: Mutex<Vec<(i64, String)>>,
         pub notes: Option<PathBuf>,
+        pub playing: Option<NowPlaying>,
+        pub focus: Mutex<Vec<Option<u32>>>,
     }
 
     impl Desktop for FakeDesktop {
@@ -196,6 +217,13 @@ pub(crate) mod fake {
         }
         fn notes_file(&self) -> Option<PathBuf> {
             self.notes.clone()
+        }
+        fn now_playing(&self) -> DesktopResult<Option<NowPlaying>> {
+            Ok(self.playing.clone())
+        }
+        fn focus(&self, minutes: Option<u32>) -> DesktopResult<u32> {
+            self.focus.lock().unwrap().push(minutes);
+            Ok(minutes.unwrap_or(25))
         }
         fn add_reminder(&self, due: i64, text: &str) -> DesktopResult<()> {
             self.reminders.lock().unwrap().push((due, text.into()));

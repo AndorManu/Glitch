@@ -168,14 +168,9 @@ async function renderSettings(): Promise<void> {
         ),
         clearChatNote,
       ),
+      card("Features", ...FEATURES.map((f) => f.render(s))),
       card("Voice", voiceBody),
       card("Memory", memoryBody),
-      h("h2", { class: "features-title" }, "Features"),
-      ...FEATURES.map((f) => {
-        const body = h("div", { class: `feature feature-${f.id}` });
-        void f.render(body);
-        return card(f.title, body);
-      }),
       h("p", { class: `info ${ollama.state}` }, h("span", { class: "dot", "aria-hidden": "true" }), h("span", {}, ollama.text)),
     ],
     [

@@ -1,14 +1,15 @@
-// Settings → Features: one card per optional feature, each in its own file.
-// To add one: write src/panel/features/<feature>.ts exporting a Feature and
-// add it to FEATURES below. Each card owns its switches and redraws itself.
+// The Settings "Features" section: one card per feature, each with its own
+// on/off switch. Add a feature by writing src/panel/features/<feature>.ts
+// and listing it here.
 
+import type { Settings } from "../../shared/ipc";
+import { contextFeature } from "./context";
 import { updateMeFeature } from "./update-me";
 
 export interface Feature {
   id: string;
-  title: string;
-  /** Fill `root` (the card body). Called on every settings redraw. */
-  render(root: HTMLElement): Promise<void>;
+  /** Draw the feature's controls from the current settings. */
+  render(s: Settings): HTMLElement;
 }
 
-export const FEATURES: Feature[] = [updateMeFeature];
+export const FEATURES: readonly Feature[] = [contextFeature, updateMeFeature];

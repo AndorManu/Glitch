@@ -17,6 +17,8 @@ export interface Settings {
   notes_trusted?: boolean;
   /** Voice commands (see the voice section at the end of this file). */
   voice?: VoiceSettings;
+  /** "He reacts to what you're doing" (see ./context.ts). Missing from old builds: defaults. */
+  context?: import("./context").ContextSettings;
   /** "Update me" features (missing from old builds: defaults). */
   update_me?: UpdateMeSettings;
 }

@@ -258,4 +258,13 @@ async function render(root: HTMLElement): Promise<void> {
   root.replaceChildren(endpoint, claude, notif, reminders, briefing, note);
 }
 
-export const updateMeFeature: Feature = { id: "update-me", title: "Update me", render };
+export const updateMeFeature: Feature = {
+  id: "update-me",
+  // The card body fills itself (it has its own status to load) and redraws
+  // itself after its own changes.
+  render: () => {
+    const body = h("div", { class: "feature-update-me" });
+    void render(body);
+    return h("div", { class: "um-feature" }, h("h4", { class: "um-title" }, "Update me"), body);
+  },
+};

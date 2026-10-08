@@ -48,6 +48,8 @@ pub const SET_REMINDER: &str = "set_reminder";
 pub const TAKE_NOTE: &str = "take_note";
 pub const REMEMBER: &str = "remember";
 pub const FORGET: &str = "forget";
+pub const NOW_PLAYING: &str = "get_now_playing";
+pub const FOCUS: &str = "focus_mode";
 
 /// Where `web_search` sends the query.
 pub const SEARCH_URL: &str = "https://www.google.com/search?q=";
@@ -276,6 +278,21 @@ fn computer_specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: NOW_PLAYING,
+            description: "Get the title and artist of the song or video playing on this computer, for \"what's                 playing?\", \"what song is this?\".",
+            parameters: no_args(),
+        },
+        ToolSpec {
+            name: FOCUS,
+            description: "Focus mode (Pomodoro): Glitch guards quietly for that many minutes, then celebrates                 and reminds the user to take a break. For \"focus for 25 minutes\", \"pomodoro\". minutes 0                 stops it.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "minutes": { "type": "number", "description": "Session length; leave out for the default (25)" }
+                }
+            }),
+        },
+        ToolSpec {
             name: DATETIME,
             description: "Get the current date, time, weekday and time zone.",
             parameters: no_args(),
@@ -338,6 +355,11 @@ pub enum Action {
     Forget {
         about: String,
     },
+    NowPlaying,
+    /// `None`: the default length; `Some(0)`: stop.
+    Focus {
+        minutes: Option<u32>,
+    },
 }
 
 /// How an action is shown to the user in a confirmation card.
@@ -367,6 +389,8 @@ impl Action {
             Action::TakeNote { .. } => TAKE_NOTE,
             Action::Remember { .. } => REMEMBER,
             Action::Forget { .. } => FORGET,
+            Action::NowPlaying => NOW_PLAYING,
+            Action::Focus { .. } => FOCUS,
         }
     }
 
@@ -390,6 +414,9 @@ impl Action {
             Action::TakeNote { .. } => "Writing a note".into(),
             Action::Remember { .. } => "Remembering".into(),
             Action::Forget { .. } => "Forgetting".into(),
+            Action::NowPlaying => "Checking what's playing".into(),
+            Action::Focus { minutes: Some(0) } => "Ending focus mode".into(),
+            Action::Focus { .. } => "Starting focus mode".into(),
         }
     }
 
@@ -445,6 +472,15 @@ impl Action {
             },
             Action::Remember { fact } => Description { title: "Remember something".into(), detail: fact.clone() },
             Action::Forget { about } => Description { title: "Forget something".into(), detail: about.clone() },
+            Action::NowPlaying => Description { title: "See what's playing".into(), detail: String::new() },
+            Action::Focus { minutes } => Description {
+                title: "Focus mode".into(),
+                detail: match minutes {
+                    Some(0) => "Stop".into(),
+                    Some(m) => duration_text(u64::from(*m) * 60),
+                    None => "The usual length".into(),
+                },
+            },
         }
     }
 }
@@ -584,6 +620,20 @@ pub fn prepare(call: &ToolCall, platform: &dyn Platform) -> Result<Action, ToolE
         }
         REMEMBER => Ok(Action::Remember { fact: str_arg(args, "fact")?.to_string() }),
         FORGET => Ok(Action::Forget { about: str_arg(args, "about")?.to_string() }),
+        NOW_PLAYING => Ok(Action::NowPlaying),
+        FOCUS => {
+            let minutes = match args.get("minutes") {
+                None | Some(Value::Null) => None,
+                Some(_) => {
+                    let m = num_arg(args, "minutes")?;
+                    if !(0.0..=crate::context::MAX_FOCUS_MINUTES as f64).contains(&m) {
+                        return Err(ToolError("focus mode lasts between 1 and 180 minutes".into()));
+                    }
+                    Some(m.round() as u32)
+                }
+            };
+            Ok(Action::Focus { minutes })
+        }
         other => Err(ToolError(format!("there is no tool called \"{other}\""))),
     }
 }
@@ -732,6 +782,25 @@ pub fn execute(action: &Action, env: &Env<'_>) -> Outcome {
                 ),
                 Err(e) => failed("write the note", e),
             },
+        },
+        Action::NowPlaying => match env.desktop.now_playing() {
+            Ok(Some(p)) => Outcome {
+                private: true,
+                ..Outcome::new(
+                    json!({ "ok": true, "title": p.title, "artist": p.artist, "app": p.app, "playing": p.playing }),
+                    "Checked what's playing",
+                )
+            },
+            Ok(None) => Outcome::new(json!({ "ok": true, "playing": false, "note": "nothing is playing" }), "Nothing is playing"),
+            Err(e) => Outcome::failed(e, "Couldn't see what's playing"),
+        },
+        Action::Focus { minutes } => match env.desktop.focus(*minutes) {
+            Ok(0) => Outcome::new(json!({ "ok": true, "focus": "stopped" }), "Focus mode ended"),
+            Ok(m) => Outcome::new(
+                json!({ "ok": true, "focus_minutes": m, "note": "Glitch guards quietly and pops up for the break" }),
+                format!("Focus mode: {}", duration_text(u64::from(m) * 60)),
+            ),
+            Err(e) => Outcome::failed(e, "Couldn't start focus mode"),
         },
         Action::Remember { .. } | Action::Forget { .. } => {
             Outcome::new(json!({ "ok": false, "error": "memory is turned off" }), "Memory is off")
@@ -1049,5 +1118,33 @@ mod tests {
         assert_eq!(duration_text(90), "1 min 30 s");
         assert_eq!(duration_text(7200), "2 hours");
         assert_eq!(duration_text(5400), "1 h 30 min");
+    }
+
+    #[test]
+    fn now_playing_and_focus_mode() {
+        let p = FakePlatform::default();
+        let d = FakeDesktop {
+            playing: Some(crate::desktop::NowPlaying {
+                title: "Song".into(),
+                artist: "Band".into(),
+                app: "Spotify.exe".into(),
+                playing: true,
+            }),
+            ..Default::default()
+        };
+        let a = prepare(&call(NOW_PLAYING, json!({})), &p).unwrap();
+        let out = run(&a, &p, &d);
+        assert!(out.private, "track titles are never saved");
+        assert_eq!(model_json(&out)["title"], "Song");
+        let nothing = run(&a, &p, &FakeDesktop::default());
+        assert_eq!(model_json(&nothing)["playing"], false);
+        assert_eq!(prepare(&call(FOCUS, json!({})), &p), Ok(Action::Focus { minutes: None }));
+        assert_eq!(prepare(&call(FOCUS, json!({"minutes": "50"})), &p), Ok(Action::Focus { minutes: Some(50) }));
+        assert_eq!(prepare(&call(FOCUS, json!({"minutes": 0})), &p), Ok(Action::Focus { minutes: Some(0) }));
+        assert!(prepare(&call(FOCUS, json!({"minutes": 500})), &p).is_err());
+        let out = run(&Action::Focus { minutes: Some(50) }, &p, &d);
+        assert_eq!(model_json(&out)["focus_minutes"], 50);
+        assert_eq!(*d.focus.lock().unwrap(), [Some(50)]);
+        assert_eq!(crate::confirm::approval_for(&Action::Focus { minutes: None }), crate::confirm::Approval::Automatic);
     }
 }

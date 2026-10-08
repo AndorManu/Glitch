@@ -7,6 +7,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::ai::ollama;
+use crate::context::ContextSettings;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -33,6 +34,9 @@ pub struct Settings {
     pub notes_trusted: bool,
     /// Voice commands (push-to-talk). Missing in older files → defaults.
     pub voice: VoiceSettings,
+    /// "He reacts to what you're doing" (music, coding, games, focus...).
+    /// Missing in older files -> defaults (all on except focus auto-suggest).
+    pub context: ContextSettings,
     /// "Update me": the local event endpoint, Claude Code buddy, the
     /// notification reader, reminders and the daily briefing.
     pub update_me: UpdateMeSettings,
@@ -119,6 +123,7 @@ impl Default for Settings {
             screen_enabled: true,
             notes_trusted: false,
             voice: VoiceSettings::default(),
+            context: ContextSettings::default(),
             update_me: UpdateMeSettings::default(),
         }
     }
@@ -226,6 +231,7 @@ mod tests {
         let s = Settings::load(&path);
         assert!(s.onboarding_done && !s.memory_enabled);
         assert_eq!(s.voice, VoiceSettings::default());
+        assert_eq!(s.context, ContextSettings::default());
         // Partial voice section: the rest falls back to defaults.
         std::fs::write(&path, r#"{"voice":{"model":"tiny","future":1}}"#).unwrap();
         let s = Settings::load(&path);

@@ -160,7 +160,8 @@ pub fn system_prompt(os: Os, screen: bool) -> String {
          open_path with a path from the results to open one.\n\
          - web_search: for facts you don't know or that change (news, prices, weather, scores), never for the \
          user's files. open_url: for a specific website.\n\
-         - open_app, set_timer, take_note, write_clipboard, get_datetime, get_active_window: when asked.\n\
+         - open_app, set_timer, take_note, write_clipboard, get_datetime, get_active_window, \
+         get_now_playing, focus_mode: when asked.\n\
          Opening apps and files, copying to the clipboard and the first note ask the user for permission by \
          themselves: just call the tool. You can't delete, move or edit files, type or click in other apps, or \
          run commands; say so kindly if asked. If the user declines an action, accept it cheerfully and don't \
