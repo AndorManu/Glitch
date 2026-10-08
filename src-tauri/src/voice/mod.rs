@@ -26,13 +26,13 @@ pub mod download;
 pub mod hotkey;
 #[cfg(test)]
 mod live_check;
-#[cfg(test)]
-mod wake_check;
 pub mod session;
 pub mod stt;
 pub mod tray;
 pub mod tts;
 pub mod wake;
+#[cfg(test)]
+mod wake_check;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};

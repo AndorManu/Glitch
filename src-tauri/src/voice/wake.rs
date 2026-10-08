@@ -419,10 +419,13 @@ pub fn toggle(app: &AppHandle) {
 }
 
 /// The bubble's system voice started/stopped reading a reply aloud.
+/// A deadline rather than a flag: if the webview never says "done" (a
+/// cancelled utterance may not), the wake word comes back on its own.
 pub fn set_speaking(app: &AppHandle, on: bool) {
     let vs = app.state::<VoiceState>();
-    vs.speaking.store(on, Ordering::SeqCst);
-    if !on {
-        quiet_for_a_moment(&vs);
-    }
+    let until = Instant::now() + if on { SYSTEM_VOICE_MAX } else { QUIET_AFTER };
+    *vs.quiet_until.lock().unwrap() = until;
 }
+
+/// The system voice reads at most ~280 characters: well under this.
+const SYSTEM_VOICE_MAX: Duration = Duration::from_secs(45);

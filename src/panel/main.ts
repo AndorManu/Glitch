@@ -4,10 +4,10 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { api, asUiError, CHAT_CLEARED_EVENT, type PanelView, type Settings, type SetupStatus, type TtsDownloadEvent, type VoiceDownloadEvent } from "../shared/ipc";
 import { drawAvatar } from "./avatar";
 import { h } from "./dom";
-import { FEATURES } from "./features";
 import { onTtsDownload, onWakeStatus } from "./features/voice-extra";
 import { renderMemory } from "./memory";
 import { formatGb, layout, ollamaSummary, prettyModelName, SetupView, sameModel } from "./setup";
+import { FEATURES } from "./features";
 import { busyButton, enterView, loading, settingsKey, toggleSwitch } from "./ui";
 import { onVoiceDownload, renderVoice } from "./voice";
 
@@ -122,11 +122,6 @@ async function renderSettings(): Promise<void> {
   void renderMemory(memoryBody);
   const voiceBody = h("div", { class: "voice" });
   void renderVoice(voiceBody);
-  const featureCards = FEATURES.map((f) => {
-    const body = h("div", { class: "voice feature" });
-    f.render(body);
-    return h("section", { class: "card", "data-feature": f.id }, h("h3", { class: "card-title" }, f.title), body);
-  });
 
   layout(
     root,
@@ -174,10 +169,9 @@ async function renderSettings(): Promise<void> {
         ),
         clearChatNote,
       ),
+      card("Features", ...FEATURES.map((f) => f.render(s))),
       card("Voice", voiceBody),
       card("Memory", memoryBody),
-      featureCards.length ? h("h2", { class: "section-title" }, "Features") : null,
-      ...featureCards,
       h("p", { class: `info ${ollama.state}` }, h("span", { class: "dot", "aria-hidden": "true" }), h("span", {}, ollama.text)),
     ],
     [

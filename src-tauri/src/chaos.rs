@@ -87,7 +87,7 @@ fn allowed(app: &AppHandle) -> Result<(), Refusal> {
     if windows::chat_open(app) {
         return Err(Refusal::Busy);
     }
-    if native::user_busy() {
+    if native::user_busy() || crate::context::blocks_chaos(app) {
         return Err(Refusal::Fullscreen);
     }
     Ok(())

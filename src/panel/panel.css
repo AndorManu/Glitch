@@ -530,16 +530,16 @@ button.danger-text.armed:hover:not(:disabled) { background: var(--danger); }
 .voice-error { color: var(--danger); }
 .voice-gap { height: 12px; border-bottom: 2px dashed var(--line-soft); margin-bottom: 12px; }
 
+/* Features: "He reacts to what you're doing" (src/panel/features/context.ts). */
+.context-details { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; padding-left: 10px; border-left: 2px dashed var(--line-soft); }
+.context-details[hidden] { display: none; }
+.context-details .row { margin-top: 0; padding-top: 10px; align-items: flex-end; }
+.context-details .voice-field { margin-top: 0; }
+.context-details input[type="time"] { font: inherit; padding: 4px 6px; border: 2px solid var(--outline); border-radius: 8px; background: var(--surface); color: inherit; }
+
 /* ---------------------------------------------------- settings: features */
 
-.section-title {
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--fur-dark);
-  margin: 18px 2px 8px;
-}
+.feature-title { font-weight: 750; font-size: 13px; margin: 16px 0 4px; padding-top: 12px; border-top: 2px dashed var(--line-soft); }
 /* "Listening for Hey Glitch": a live dot, so the open mic is never subtle. */
 .wake-status { margin: 8px 0 0; }
 .wake-armed { color: var(--ok); font-weight: 600; padding-left: 16px; position: relative; }

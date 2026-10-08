@@ -234,6 +234,11 @@ export class Creature {
   readonly director: ChaosDirector | null;
   panelOpen = false;
   mood: Mood = "idle";
+  /**
+   * Hushed (a game is fullscreen, a focus session runs): he holds this rest
+   * pose, doesn't wander and gets up to no mischief until it's lifted.
+   */
+  hush: AnimationName | null = null;
   hovered = false;
   private facingLeftValue = false;
   /** Which way he faces; the animator's transition clips need it too (see transitions.ts toSide). */
@@ -1334,7 +1339,40 @@ export class Creature {
   }
 
   private canAct(): boolean {
-    return this.mode === "stand" && !this.asleep && !this.panelOpen && !this.busy() && !this.hovered && !this.press && !this.hold && !this.plan;
+    return this.mode === "stand" && !this.asleep && !this.panelOpen && !this.busy() && !this.hovered && !this.press && !this.hold && !this.plan && !this.hush;
+  }
+
+  /**
+   * May he react to what the user is doing right now (context.ts)? Not
+   * while asleep, held, hovered, chatting, annoyed, mid-mischief or flying.
+   */
+  canReact(): boolean {
+    if (this.mode !== "stand" || this.asleep || this.panelOpen || this.busy() || this.hovered || this.press || this.hold) return false;
+    if (this.annoyance >= ANNOY_MEDIUM || this.sulking) return false;
+    return !this.plan || this.plan.name === "stroll" || this.plan.name === "lookAround";
+  }
+
+  /** Run a reaction plan now (context.ts checked canReact). */
+  react(plan: Plan): boolean {
+    if (!this.world || this.mode !== "stand" || this.hold) return false;
+    this.interrupt();
+    this.startPlan(plan);
+    return true;
+  }
+
+  /** Hush him into `pose` (null: lift it). See `hush`. */
+  setHush(pose: AnimationName | null): void {
+    if (this.hush === pose) return;
+    this.hush = pose;
+    if (pose) {
+      if (this.plan?.name === "mischief" || this.loco?.haul) this.interrupt();
+      if (this.mode === "stand" && !this.plan && isStanding(this.surface)) this.animator.play(this.restAnim());
+      return;
+    }
+    if (this.mode === "stand" && !this.plan) {
+      this.animator.play(this.restAnim());
+      this.scheduleBrain(3000 + this.rand() * 3000);
+    }
   }
 
   /** What he does when he's doing nothing. */
@@ -1363,6 +1401,7 @@ export class Creature {
     // Studying a screenshot: the same curious, ears-forward look.
     if (this.mood === "looking") return "listen";
     if (this.mood === "talking") return "talk";
+    if (this.hush && this.mode === "stand" && isStanding(this.surface)) return this.hush;
     return isStanding(this.surface) || this.mode !== "stand" ? "idle" : "cling";
   }
 

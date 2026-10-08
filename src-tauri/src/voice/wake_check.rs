@@ -69,8 +69,7 @@ fn wavs(prefix: &str) -> Vec<PathBuf> {
         .unwrap()
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| {
-            p.extension().is_some_and(|x| x == "wav")
-                && p.file_name().unwrap().to_string_lossy().starts_with(prefix)
+            p.extension().is_some_and(|x| x == "wav") && p.file_name().unwrap().to_string_lossy().starts_with(prefix)
         })
         .collect();
     v.sort();
@@ -160,7 +159,13 @@ fn live_wake_wavs() {
             cmd_ok += usize::from(good);
             eprintln!(
                 "[{id}] {} {name}: {:?} -> {:?}",
-                if o.woke && good { "ok  " } else if o.woke { "CMD?" } else { "MISS" },
+                if o.woke && good {
+                    "ok  "
+                } else if o.woke {
+                    "CMD?"
+                } else {
+                    "MISS"
+                },
                 o.texts,
                 o.command
             );

@@ -1,14 +1,15 @@
-// Settings → Features: optional extras, one card each. To add one, write
-// a module with a `Feature` and list it in FEATURES.
+// The Settings "Features" section: one card per feature, each with its own
+// on/off switch. Add a feature by writing src/panel/features/<feature>.ts
+// and listing it here.
 
+import type { Settings } from "../../shared/ipc";
+import { contextFeature } from "./context";
 import { voiceExtra } from "./voice-extra";
 
 export interface Feature {
-  /** Stable id (also the card's data-feature attribute). */
   id: string;
-  title: string;
-  /** Fill the card body; the feature keeps it up to date itself. */
-  render(root: HTMLElement): void;
+  /** Draw the feature's controls from the current settings. */
+  render(s: Settings): HTMLElement;
 }
 
-export const FEATURES: readonly Feature[] = [voiceExtra];
+export const FEATURES: readonly Feature[] = [contextFeature, voiceExtra];

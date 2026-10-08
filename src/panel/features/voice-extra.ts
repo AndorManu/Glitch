@@ -157,6 +157,9 @@ async function render(root: HTMLElement): Promise<void> {
 
 export const voiceExtra: Feature = {
   id: "voice-extra",
-  title: "Hey Glitch & his voice",
-  render: (root) => void render(root),
+  render: () => {
+    const body = h("div", { class: "voice" });
+    void render(body);
+    return h("div", { class: "voice-extra", "data-feature": "voice-extra" }, h("h4", { class: "feature-title" }, "Hey Glitch & his voice"), body);
+  },
 };
