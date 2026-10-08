@@ -136,6 +136,30 @@ export const CLICK_DEBOUNCE_MS = 500;
 type ClickReaction = "startled" | "annoyed" | "grumpy";
 const CLICK_REACTIONS: ClickReaction[] = ["startled", "annoyed", "grumpy"];
 
+/** What he does once down after an annoying pick-up. */
+type AfterLanding = "annoyed" | "grumpy" | "sulk" | "escape";
+/** One way a pick-up can end: cling on to the cursor first or not, then what after landing. */
+interface AnnoyPath {
+  id: string;
+  cling: boolean;
+  after: AfterLanding;
+  weight: number;
+}
+/** Annoyed (MEDIUM): grumbles, sometimes hangs on to the cursor first, or just turns his back for a bit. */
+const PATHS_MEDIUM: AnnoyPath[] = [
+  { id: "cling+annoyed", cling: true, after: "annoyed", weight: 3 },
+  { id: "annoyed", cling: false, after: "annoyed", weight: 2 },
+  { id: "huff", cling: false, after: "sulk", weight: 1.5 },
+];
+/** Fed up (HIGH): bites (after clinging or not), sulks without a bite, or at the very top glitches out of reach. */
+const PATHS_HIGH: AnnoyPath[] = [
+  { id: "cling+bite", cling: true, after: "grumpy", weight: 2.5 },
+  { id: "bite", cling: false, after: "grumpy", weight: 2 },
+  { id: "cling+sulk", cling: true, after: "sulk", weight: 1.5 },
+  { id: "sulk", cling: false, after: "sulk", weight: 1.5 },
+];
+const PATH_ESCAPE: AnnoyPath = { id: "escape", cling: false, after: "escape", weight: 2 };
+
 /** Clicked on a wall or the ceiling: a twitch in the wall pose (glance back, eye spark), never a front pose. */
 function wallFlinch(base: Omit<Keyframe, "ms">): Keyframe[] {
   const keep = { flip: base.flip, rot: base.rot, pivot: base.pivot };
@@ -450,7 +474,12 @@ export class Creature {
   private annoyRaw = 0;
   private annoyAt = 0;
   private sulkUntil = 0;
-  private reactAfterLanding: "annoyed" | "grumpy" | null = null;
+  private reactAfterLanding: AfterLanding | null = null;
+  /** How the current pick-up ends (picked at the first let-go, see pickAnnoyPath); the last one's id. */
+  private annoyPath: AnnoyPath | null = null;
+  private lastAnnoyPath = "";
+  /** Held this time without fighting it (resigned): dangles instead of struggling. */
+  private holdLimp = false;
   private annoyTimer: unknown = null;
   private clingTimer: unknown = null;
   private clingDone = false;
@@ -1330,6 +1359,16 @@ export class Creature {
       });
       return;
     }
+    if (this.reactAfterLanding === "escape" && c.speed <= PHYS.splat) {
+      // Fed up for good: lands, and glitches out of reach (a teleport somewhere else).
+      this.reactAfterLanding = null;
+      this.animator.play("idle");
+      this.animator.interject((_, base) => landKeys(c.speed, base));
+      this.wait(350, () => {
+        if (this.mode === "stand" && !this.hold && !this.force("teleport")) this.animator.play("annoyed", this.restAnim());
+      });
+      return;
+    }
     if (f.canSplat && c.speed > PHYS.splat) {
       this.animator.play("splat"); // -> dizzy -> idle
       this.excitedUntil = this.now + 60_000;
@@ -1430,15 +1469,9 @@ export class Creature {
     if (this.reactAfterLanding && this.mode === "stand" && isStanding(this.surface)) {
       const r = this.reactAfterLanding;
       this.reactAfterLanding = null;
-      if (r === "grumpy") {
-        this.sulkUntil = this.now + 7000;
-        if (this.annoyTimer !== null) this.clock.clearTimeout(this.annoyTimer);
-        this.annoyTimer = this.clock.setTimeout(() => {
-          this.annoyTimer = null;
-          if (this.mode === "stand" && ["grumpy", "annoyed", "sulk"].includes(this.animator.animation)) this.animator.play("calmDown", "idle");
-        }, 7000);
-      }
-      return r;
+      if (r === "grumpy" || r === "sulk") this.startSulk();
+      // (An escape is started from landed(); should it end up here, plain annoyed.)
+      return r === "escape" ? "annoyed" : r;
     }
     if (this.sulking && this.mode === "stand" && isStanding(this.surface)) return "sulk";
     // On a wall or the ceiling the front-facing mood poses would lie sideways: hold on instead.
@@ -2112,6 +2145,26 @@ export class Creature {
     ]);
   }
 
+  /**
+   * How a pick-up ends at annoyance `a` (what it will be once he's let go):
+   * calm (null), or one of the paths for his level, weighted, never the same
+   * path twice in a row, so repeated pick-ups don't play one identical
+   * sequence. Clinging on to the cursor only when let go gently; the
+   * glitch-out escape only when he's very fed up and may move.
+   */
+  private pickAnnoyPath(a: number, speed: number): AnnoyPath | null {
+    if (a < ANNOY_MEDIUM) return null;
+    let pool = a >= ANNOY_HIGH ? [...PATHS_HIGH] : [...PATHS_MEDIUM];
+    if (a >= ANNOY_HIGH + 2 && this.movement) pool.push(PATH_ESCAPE);
+    if (speed >= 400) pool = pool.filter((p) => !p.cling);
+    if (pool.length > 1) pool = pool.filter((p) => p.id !== this.lastAnnoyPath);
+    let r = this.rand() * pool.reduce((t, p) => t + p.weight, 0);
+    const path = pool.find((p) => (r -= p.weight) <= 0) ?? pool[pool.length - 1];
+    this.lastAnnoyPath = path.id;
+    this.event(`annoy-path:${path.id}`);
+    return path;
+  }
+
   /** Back turned and sulking for 7 s (clicks get no reaction), then he calms down. */
   private startSulk(): void {
     this.sulkUntil = this.now + 7000;
@@ -2170,7 +2223,10 @@ export class Creature {
     this.syncLedgeWatch();
     this.annoy(1);
     this.sulkUntil = 0;
-    this.animator.play(this.annoyance >= ANNOY_MEDIUM ? "struggle" : "held");
+    this.annoyPath = null;
+    // Annoyed, he mostly fights it; now and then he just hangs there, resigned.
+    this.holdLimp = this.annoyance >= ANNOY_MEDIUM && this.rand() < 0.3;
+    this.animator.play(this.annoyance >= ANNOY_MEDIUM && !this.holdLimp ? "struggle" : "held");
     this.animator.glitchBurst(280);
     this.event("grab");
     this.updateHitbox();
@@ -2230,7 +2286,7 @@ export class Creature {
     const speed = Math.hypot(h.vs.x, h.vs.y) / u;
     if (speed > 900) h.kickUntil = now + 350;
     if (this.clingTimer !== null) return; // hanging on to the cursor after you let go
-    const want: AnimationName = now < h.kickUntil ? "heldKick" : this.annoyance >= ANNOY_MEDIUM ? "struggle" : "held";
+    const want: AnimationName = now < h.kickUntil ? "heldKick" : this.annoyance >= ANNOY_MEDIUM && !this.holdLimp ? "struggle" : "held";
     if (this.animator.animation !== want && ["held", "heldKick", "struggle"].includes(this.animator.animation)) this.animator.play(want);
   }
 
@@ -2242,9 +2298,11 @@ export class Creature {
     const tip = h.pend.tipVelocity(h.L);
     const v = capSpeed({ x: vc.x + tip.x, y: vc.y + tip.y }, MAX_THROW * u);
     const speed = Math.hypot(v.x, v.y) / u;
+    // How this pick-up ends (decided once, at the first let-go).
+    if (this.clingTimer === null && !this.clingDone) this.annoyPath = this.pickAnnoyPath(this.annoyance + (speed > 600 ? 1.5 : 0.5), speed);
     // Let go gently while he's annoyed: he holds on to the cursor a moment
     // longer (still following it), then drops. Not when thrown.
-    if (this.clingTimer === null && !this.clingDone && this.annoyance >= ANNOY_MEDIUM && speed < 400) {
+    if (this.clingTimer === null && !this.clingDone && this.annoyPath?.cling) {
       this.annoy(0.5);
       this.animator.play("clingCursor");
       // Hold on by the grip drawn in the frame (art/frames/cling_cursor-grips.json), easing there from the scruff.
@@ -2270,8 +2328,8 @@ export class Creature {
     }
     this.hold = null;
     this.annoy(speed > 600 ? 1.5 : 0.5);
-    const a = this.annoyance;
-    this.reactAfterLanding = a >= ANNOY_HIGH ? "grumpy" : a >= ANNOY_MEDIUM ? "annoyed" : null;
+    this.reactAfterLanding = this.annoyPath?.after ?? null;
+    this.annoyPath = null;
     // Only a hard throw sends him spinning (the drawn spin); otherwise he falls upright, flailing.
     this.body.spin = speed > HARD_THROW ? Math.max(-1100, Math.min(1100, (-h.pend.omega * 180) / Math.PI + (v.x / u) * 0.3)) : 0;
     this.motion = CALM;
