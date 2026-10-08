@@ -128,6 +128,10 @@ const CORNER_MS = 380;
 export const FLOAT_FALL = 130;
 /** Landing back on the window he just fell off within this long: no rest pose yet (it may slide away again). */
 export const RELAND_MS = 250;
+/** Pressed this long without moving or letting go: he notices (a flicker, see pointerDown). */
+export const PRESS_NOTICE_MS = 300;
+/** Chat moods on a wall (he can't show the front poses there): an eye flicker this often instead. */
+export const WALL_CUE_MS = 2000;
 /** Clicks closer together than this count as rapid clicking (annoy more). */
 const RAPID_CLICK_MS = 700;
 /** A click reaction is never restarted within this long (a flinch instead). */
@@ -446,8 +450,8 @@ export class Creature {
   /** Stop every timer (tests, page unload). */
   dispose(): void {
     this.animator.stop();
-    for (const t of [this.annoyTimer, this.clingTimer]) if (t !== null) this.clock.clearTimeout(t);
-    this.annoyTimer = this.clingTimer = null;
+    for (const t of [this.annoyTimer, this.clingTimer, this.pressTimer, this.cueTimer]) if (t !== null) this.clock.clearTimeout(t);
+    this.annoyTimer = this.clingTimer = this.pressTimer = this.cueTimer = null;
     for (const t of [this.motionTimer, this.brainTimer, this.pollTimer, this.actionTimer, this.talkTimer, this.watchTimer]) if (t !== null) this.clock.clearTimeout(t);
     this.motionTimer = this.brainTimer = this.pollTimer = this.actionTimer = this.talkTimer = this.watchTimer = null;
   }
@@ -566,6 +570,7 @@ export class Creature {
     this.place();
     this.armLedgeWatch();
     this.ensureMotion();
+    this.syncWallCue();
   }
 
   // =========================================================== the world
@@ -1883,10 +1888,34 @@ export class Creature {
     this.scheduleBrain(3000 + this.rand() * 3000);
   }
 
+  /**
+   * Chatting while he holds on to a wall or the ceiling: the mood poses face
+   * you and would lie sideways there (restAnim keeps him clinging), so the
+   * cue that he is on it is an eye flicker every WALL_CUE_MS.
+   */
+  private syncWallCue(): void {
+    const want = this.busy() && this.mode === "stand" && !isStanding(this.surface) && !this.asleep;
+    if (!want || this.cueTimer !== null) return;
+    this.cueTimer = this.clock.setTimeout(() => {
+      this.cueTimer = null;
+      if (!(this.busy() && this.mode === "stand" && !isStanding(this.surface))) return;
+      if (familyOf(this.animator.pose?.frame ?? "") === "wall") {
+        this.animator.interject((_, base) => [
+          { ...base, ms: 60, glitch: 0.35, fx: "eye" },
+          { ...base, ms: 140, fx: "eye" },
+        ]);
+      }
+      this.syncWallCue();
+    }, WALL_CUE_MS);
+  }
+
+  private cueTimer: unknown = null;
+
   setMood(m: string): void {
     const mood = (MOODS.includes(m) ? m : "idle") as Mood;
     this.mood = mood;
     this.interaction();
+    this.syncWallCue();
     if (this.asleep) {
       this.asleep = false;
       this.armLedgeWatch();
@@ -2055,6 +2084,24 @@ export class Creature {
     }
     if (this.brainTimer !== null) this.clock.clearTimeout(this.brainTimer);
     this.brainTimer = null;
+    // Pressed and held without moving: after a moment he notices (eye flicker, a little perk-up).
+    this.clearPressTimer();
+    const p = this.press;
+    this.pressTimer = this.clock.setTimeout(() => {
+      this.pressTimer = null;
+      if (this.press !== p || this.hold || this.mode !== "stand") return;
+      this.animator.interject((_, base) => [
+        { ...base, ms: 60, glitch: 0.3, fx: "eye" },
+        { ...base, ms: 160, fx: "eye", sx: (base.sx ?? 1) * 0.97, sy: (base.sy ?? 1) * 1.04 },
+      ]);
+    }, PRESS_NOTICE_MS);
+  }
+
+  private pressTimer: unknown = null;
+
+  private clearPressTimer(): void {
+    if (this.pressTimer !== null) this.clock.clearTimeout(this.pressTimer);
+    this.pressTimer = null;
   }
 
   pointerMove(local: Vec): void {
@@ -2064,6 +2111,7 @@ export class Creature {
   }
 
   pointerUp(): void {
+    this.clearPressTimer();
     if (this.hold) return this.release();
     if (!this.press) return;
     this.press = null;
@@ -2179,6 +2227,7 @@ export class Creature {
 
   /** Lost the mouse (pointer cancelled, window blurred): let go. */
   pointerCancel(): void {
+    this.clearPressTimer();
     if (this.hold) return this.release();
     this.press = null;
     this.updateHitbox();
@@ -2192,6 +2241,7 @@ export class Creature {
     const w = this.world!;
     const u = w.scale;
     this.interrupt();
+    this.clearPressTimer();
     this.press = null;
     this.flight = null;
     this.asleep = false;
