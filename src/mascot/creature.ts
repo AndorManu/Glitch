@@ -12,8 +12,8 @@
 // While moving, a repaint happens only when the picture changes (a new key,
 // a new angle); the window move alone carries a walking sprite.
 
-import { ANIMATIONS, type AnimationName, Animator, type Clock, isAnimationName, type Keyframe, landKeys, type Pose } from "./animations";
-import { familyOf, turnKeys } from "./transitions";
+import { ANIMATIONS, type AnimationName, Animator, type Clock, isAnimationName, type Keyframe, landKeys, MIN_KEY_MS, type Pose } from "./animations";
+import { bridge, clip, familyOf, glitchCut, has, turnKeys } from "./transitions";
 import { ANIM_FRAME_H, ANIM_FRAME_W, ANIM_GRIPS } from "../sprites/anim";
 import { ART_SCALE } from "../sprites/glitch-anim";
 import { type BehaviourName, Brain, type BrainContext, type Haul, isBehaviourName, type Plan, type Gait } from "./brain";
@@ -126,6 +126,23 @@ const MAX_THROW = 3800;
 const CORNER_MS = 380;
 /** Floating down (tail copter / glide): fall speed, CSS px / s. */
 export const FLOAT_FALL = 130;
+/** Clicks closer together than this count as rapid clicking (annoy more). */
+const RAPID_CLICK_MS = 700;
+/** A click reaction is never restarted within this long (a flinch instead). */
+export const CLICK_DEBOUNCE_MS = 500;
+/** What a click gets, from mild to fed up (see clickReaction). */
+type ClickReaction = "startled" | "annoyed" | "grumpy";
+const CLICK_REACTIONS: ClickReaction[] = ["startled", "annoyed", "grumpy"];
+
+/** Clicked on a wall or the ceiling: a twitch in the wall pose (glance back, eye spark), never a front pose. */
+function wallFlinch(base: Omit<Keyframe, "ms">): Keyframe[] {
+  const keep = { flip: base.flip, rot: base.rot, pivot: base.pivot };
+  return [
+    { frame: "climb0", ms: 60, ...keep, glitch: 0.5, fx: "eye" },
+    { frame: "climb7", ms: 220, ...keep, fx: "eye" },
+    { frame: "climb0", ms: 120, ...keep },
+  ];
+}
 
 const now0 = (): CreatureClock => ({
   setTimeout: (fn, ms) => setTimeout(fn, ms),
@@ -419,6 +436,13 @@ export class Creature {
   // High: he bites the cursor, turns his back on you and sulks for a few
   // seconds (clicks get no reaction), then calms down with a little hop.
 
+  private lastClickAt = -Infinity;
+  /** When the last click reaction started (debounce). */
+  private reactAt = -Infinity;
+  /** Which rung of CLICK_REACTIONS that was. */
+  private reactLevel = 0;
+  /** When he last woke up. */
+  private wokeAt = -Infinity;
   private annoyRaw = 0;
   private annoyAt = 0;
   private sulkUntil = 0;
@@ -1344,7 +1368,7 @@ export class Creature {
   }
 
   private canAct(): boolean {
-    return this.mode === "stand" && !this.asleep && !this.panelOpen && !this.busy() && !this.hovered && !this.press && !this.hold && !this.plan && !this.hush;
+    return this.mode === "stand" && !this.asleep && !this.panelOpen && !this.busy() && !this.hovered && !this.press && !this.hold && !this.plan && !this.hush && !this.sulking;
   }
 
   /**
@@ -1798,6 +1822,7 @@ export class Creature {
     this.interaction();
     if (!this.asleep) return;
     this.asleep = false;
+    this.wokeAt = this.now;
     // Stretch and yawn awake (standing only: on a wall he just snaps back to life).
     if (this.mode === "stand" && isStanding(this.surface) && !this.busy()) this.animator.play("wake", this.restAnim());
     else this.animator.play(this.restAnim());
@@ -1991,18 +2016,93 @@ export class Creature {
     if (!this.press) return;
     this.press = null;
     this.host.clicked();
-    this.annoy(0.4);
+    // Clicked again and again: each quick click annoys him more than a single poke.
+    const rapid = this.now - this.lastClickAt < RAPID_CLICK_MS;
+    this.lastClickAt = this.now;
+    this.annoy(rapid ? 0.6 : 0.4);
     if (this.sulking) {
       // Ignores you (a glance back over the shoulder at most).
       this.updateHitbox();
       return;
     }
-    if (this.mode === "stand") {
-      this.interrupt();
-      this.animator.play("startled", this.restAnim());
-    }
+    if (this.mode === "stand") this.clickReaction();
     this.updateHitbox();
     if (!this.plan) this.scheduleBrain(6000 + this.rand() * 6000);
+  }
+
+  /**
+   * A click: startled, or, the more annoyed he is, annoyed and then grumpy
+   * (bite, back turned, sulk). Never restarts a reaction that is still
+   * playing (rapid clicks would make him vibrate between two frames): a quick
+   * glitch flinch over it instead. On a wall or the ceiling a wall pose
+   * flinch (the front poses would lie sideways there). Sitting or lying down,
+   * he gets up first.
+   */
+  private clickReaction(): void {
+    const cur = this.animator.animation;
+    const frame = this.animator.pose?.frame ?? "idle0";
+    // Just woken up (by this press or the hover before it): let the wake-up play, a flinch over it.
+    if (this.now - this.wokeAt < 1500 && (cur === "wake" || familyOf(frame) === "curled")) return this.flinch();
+    this.interrupt();
+    if (!isStanding(this.surface)) {
+      if (this.now - this.reactAt < CLICK_DEBOUNCE_MS) return this.flinch();
+      this.reactAt = this.now;
+      if (cur !== "cling") this.animator.play("cling");
+      this.animator.interject((_, base) => wallFlinch(base));
+      return;
+    }
+    const a = this.annoyance;
+    let want: ClickReaction = a >= ANNOY_HIGH ? "grumpy" : a >= ANNOY_MEDIUM ? "annoyed" : "startled";
+    // Step by step up the ladder: right after a startle he gets annoyed before he bites.
+    if (this.now - this.reactAt < 4000) want = CLICK_REACTIONS[Math.min(CLICK_REACTIONS.indexOf(want), this.reactLevel + 1)];
+    const playing = CLICK_REACTIONS.indexOf(cur as ClickReaction);
+    // The same reaction or a milder one is still on: no restart.
+    if ((playing >= 0 && CLICK_REACTIONS.indexOf(want) <= playing) || this.now - this.reactAt < CLICK_DEBOUNCE_MS) return this.flinch();
+    this.reactAt = this.now;
+    this.reactLevel = CLICK_REACTIONS.indexOf(want);
+    if (want === "grumpy") {
+      this.startSulk();
+      this.animator.play("grumpy");
+      return;
+    }
+    if (want === "annoyed") return this.animator.play("annoyed", this.restAnim());
+    this.animator.play("startled", this.restAnim(), this.standUpFirst("surprised0"));
+  }
+
+  /**
+   * Startled is unbridged (a fright can't wait), but it is drawn standing:
+   * finish the clip on screen, and from sitting jump up (the hop stand-up,
+   * quick), from lying down get up at double speed, else the usual bridge.
+   */
+  private standUpFirst(next: string): Keyframe[] {
+    const lead = this.animator.exitKeys("startled");
+    const shown = lead.at(-1)?.frame ?? this.animator.pose?.frame ?? "idle0";
+    const fam = familyOf(shown);
+    if (fam === "sit") return [...lead, ...(has("stand_up_hop") ? clip("stand_up_hop", 60, { ease: 0 }) : glitchCut(next))];
+    if (fam === "curled") return [...lead, ...(has("get_up") ? clip("get_up", 55, { ease: 0 }) : glitchCut(next))];
+    // A fright: the turn at double speed.
+    const turn = bridge(shown, next, this.rand, this.animator.mem as { lastClip?: Record<string, string> });
+    return [...lead, ...turn.map((key) => ({ ...key, ms: Math.max(MIN_KEY_MS, Math.round(key.ms / 2)) }))];
+  }
+
+  /** A quick glitch twitch over whatever is showing (no new animation). */
+  private flinch(): void {
+    this.animator.interject((_, base) => [
+      { ...base, ms: 50, dx: (base.dx ?? 0) - 2, glitch: 0.6, fx: "eye" },
+      { ...base, ms: 50, glitch: 0.3, fx: "eye" },
+    ]);
+  }
+
+  /** Back turned and sulking for 7 s (clicks get no reaction), then he calms down. */
+  private startSulk(): void {
+    this.sulkUntil = this.now + 7000;
+    if (this.annoyTimer !== null) this.clock.clearTimeout(this.annoyTimer);
+    this.annoyTimer = this.clock.setTimeout(() => {
+      this.annoyTimer = null;
+      if (this.mode === "stand" && ["grumpy", "annoyed", "sulk"].includes(this.animator.animation)) this.animator.play("calmDown", "idle");
+      // The sulk kept the brain quiet (canAct): back to normal life.
+      if (!this.plan) this.scheduleBrain(3000 + this.rand() * 3000);
+    }, 7000);
   }
 
   /** Lost the mouse (pointer cancelled, window blurred): let go. */
