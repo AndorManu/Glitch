@@ -152,16 +152,52 @@ pub struct Detection {
     pub confidence: Option<f32>,
 }
 
-/// The wake check for one utterance (`audio` mono at `rate`). `None` if
-/// there's too little speech in it to bother whisper.
-pub fn detect(model: &stt::Model, audio: &[f32], rate: u32) -> Result<Option<Detection>, String> {
-    let Some(samples) = prepare_for_whisper(&resample(audio, rate, SAMPLE_RATE)) else { return Ok(None) };
-    let tokens = stt::transcribe_wake(model, &samples, true)?;
-    let text = tokens.iter().map(|(t, _)| t.as_str()).collect::<String>().trim().to_string();
-    let confidence = wake_core::wake_confidence(&tokens);
-    let wake = confidence.is_some_and(|c| c >= wake_core::MIN_CONFIDENCE);
-    let has_command = wake && wake_core::strip_wake(&text).is_some();
-    Ok(Some(Detection { text, wake, has_command, confidence }))
+/// Prime whisper with "Hey Glitch." for the wake check? Measured with
+/// dev/wake-check.mjs: the prompt makes whisper *skip* the phrase when the
+/// command follows in one breath (it reads the prompt as already said) and
+/// parrot it on noise, so it's off.
+pub const WAKE_PROMPT: bool = false;
+
+/// "Hey." then a pause then "Glitch." still counts if the name comes within this.
+const GREETING_GAP: Duration = Duration::from_millis(2_500);
+
+/// The wake check, utterance by utterance (remembers a lone "Hey." for the
+/// next one).
+pub struct Detector {
+    greeting_at: Option<Instant>,
+    pub prompt: bool,
+}
+
+impl Default for Detector {
+    fn default() -> Self {
+        Self { greeting_at: None, prompt: WAKE_PROMPT }
+    }
+}
+
+impl Detector {
+    /// One utterance (`audio` mono at `rate`). `None` if there's too little
+    /// speech in it to bother whisper.
+    pub fn check(&mut self, model: &stt::Model, audio: &[f32], rate: u32) -> Result<Option<Detection>, String> {
+        let after_greeting = self.greeting_at.take().is_some_and(|t| t.elapsed() < GREETING_GAP);
+        let Some(samples) = prepare_for_whisper(&resample(audio, rate, SAMPLE_RATE)) else { return Ok(None) };
+        let mut tokens = stt::transcribe_wake(model, &samples, self.prompt)?;
+        let text = tokens.iter().map(|(t, _)| t.as_str()).collect::<String>().trim().to_string();
+        if wake_core::is_greeting_only(&text) {
+            self.greeting_at = Some(Instant::now());
+        }
+        if after_greeting && !wake_core::is_wake(&text) {
+            // Judge "Glitch, open YouTube" as the end of "Hey ... Glitch".
+            tokens.insert(0, ("Hey".into(), 1.0));
+            if !tokens.get(1).is_some_and(|(t, _)| t.starts_with(' ')) {
+                tokens.insert(1, (" ".into(), 1.0));
+            }
+        }
+        let confidence = wake_core::wake_confidence(&tokens);
+        let wake = confidence.is_some_and(|c| c >= wake_core::MIN_CONFIDENCE);
+        let full: String = tokens.iter().map(|(t, _)| t.as_str()).collect();
+        let has_command = wake && wake_core::strip_wake(full.trim()).is_some();
+        Ok(Some(Detection { text, wake, has_command, confidence }))
+    }
 }
 
 /// Arm or disarm to match the settings (and whether it can work at all).
@@ -318,6 +354,7 @@ fn run(
 ) -> Option<String> {
     let vs = app.state::<VoiceState>();
     let mut seg = Segmenter::new(tap.rate, WakeConfig::default());
+    let mut detector = Detector::default();
     let mut was_paused = false;
     while !stop.load(Ordering::SeqCst) {
         if let Ok(e) = erx.try_recv() {
@@ -345,7 +382,7 @@ fn run(
         let model_path = vs.model_path(super::current_model(app));
         let t = Instant::now();
         let result = vs.stt.get(&model_path, stt::load).and_then(|m| {
-            let r = detect(&m, &check.audio, tap.rate);
+            let r = detector.check(&m, &check.audio, tap.rate);
             drop(m);
             vs.stt.touch();
             r

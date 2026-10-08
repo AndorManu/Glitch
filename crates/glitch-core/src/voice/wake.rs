@@ -45,7 +45,7 @@ pub struct WakeConfig {
 
 impl Default for WakeConfig {
     fn default() -> Self {
-        Self { pre_roll_ms: 300, end_silence_ms: 400, min_speech_ms: 300, window_ms: 2_000, noise_ratio: 3.0 }
+        Self { pre_roll_ms: 300, end_silence_ms: 600, min_speech_ms: 250, window_ms: 2_000, noise_ratio: 3.0 }
     }
 }
 
@@ -260,6 +260,11 @@ fn lower(text: &str, (s, e): (usize, usize)) -> String {
 /// optionally after "oh"/"um"), the byte offset right after it and the
 /// punctuation following it; `None` if it doesn't.
 pub fn wake_end(text: &str) -> Option<usize> {
+    name_span(text).map(|(_, e)| next_word(text, e))
+}
+
+/// Byte range of the name in a transcript that starts with the wake phrase.
+fn name_span(text: &str) -> Option<(usize, usize)> {
     let ws = words(text);
     let mut i = 0;
     if ws.first().is_some_and(|&w| FILLERS.contains(&lower(text, w).as_str())) {
@@ -268,13 +273,22 @@ pub fn wake_end(text: &str) -> Option<usize> {
     let first = lower(text, *ws.get(i)?);
     // "Heyglitch" written as one word.
     if first.strip_prefix("hey").is_some_and(is_glitch) {
-        return Some(next_word(text, ws[i].1));
+        return Some(ws[i]);
     }
     if !GREETINGS.contains(&first.as_str()) {
         return None;
     }
     let name = *ws.get(i + 1)?;
-    is_glitch(&lower(text, name)).then(|| next_word(text, name.1))
+    is_glitch(&lower(text, name)).then_some(name)
+}
+
+/// The utterance was only "Hey." / "Okay." (a pause before the name, as in
+/// "Hey ... Glitch"): the next utterance may finish the phrase.
+pub fn is_greeting_only(text: &str) -> bool {
+    let ws = words(text);
+    let rest: Vec<String> =
+        ws.iter().map(|w| lower(text, *w)).skip_while(|w| FILLERS.contains(&w.as_str())).collect();
+    rest.len() == 1 && GREETINGS.contains(&rest[0].as_str())
 }
 
 /// Whether whisper's transcript of an utterance is the wake phrase.
@@ -286,22 +300,22 @@ pub fn is_wake(text: &str) -> bool {
 /// Calibrated on synthetic speech (see dev/wake-check.mjs).
 pub const MIN_CONFIDENCE: f32 = 0.5;
 
-/// How sure whisper was of the wake phrase: the lowest probability of the
-/// tokens that spell it. `tokens` are whisper's (text, probability) pairs in
-/// order (special tokens left out). `None` if the text isn't the wake phrase.
+/// How sure whisper was of the name: the lowest probability of the tokens
+/// that spell "Glitch" (the greeting doesn't count: "OK" vs "Okay" is a
+/// spelling question, not a hearing one). `tokens` are whisper's (text,
+/// probability) pairs in order, special tokens left out. `None` if the text
+/// isn't the wake phrase.
 pub fn wake_confidence(tokens: &[(String, f32)]) -> Option<f32> {
     let text: String = tokens.iter().map(|(t, _)| t.as_str()).collect();
-    let lead = text.len() - text.trim_start().len();
-    let after = wake_end(text.trim_start())? + lead;
-    // Up to the end of the name itself (not the punctuation after it).
-    let end = text[..after].trim_end_matches(|c: char| !c.is_alphanumeric()).len();
+    let (start, end) = name_span(&text)?;
     let mut at = 0;
     let mut min = f32::INFINITY;
     for (t, p) in tokens {
-        if at < end && t.chars().any(char::is_alphanumeric) {
+        let span = (at, at + t.len());
+        if span.0 < end && span.1 > start && t.chars().any(char::is_alphanumeric) {
             min = min.min(*p);
         }
-        at += t.len();
+        at = span.1;
     }
     min.is_finite().then_some(min)
 }
@@ -394,7 +408,7 @@ mod tests {
         assert_eq!(checks.len(), 1);
         assert!(checks[0].ended);
         // pre-roll + speech + the silence that ended it
-        assert!((1.4..1.6).contains(&secs(&checks[0])), "{}", secs(&checks[0]));
+        assert!((1.6..1.8).contains(&secs(&checks[0])), "{}", secs(&checks[0]));
     }
 
     #[test]
@@ -504,10 +518,14 @@ mod tests {
     #[test]
     fn confidence() {
         let clear = toks(&[(" Hey", 0.95), (" Gl", 0.8), ("itch", 0.9), (",", 0.7), (" open", 0.2), (" YouTube", 0.3)]);
-        assert_eq!(wake_confidence(&clear), Some(0.8), "only the wake phrase's tokens count");
+        assert_eq!(wake_confidence(&clear), Some(0.8), "only the name's tokens count");
+        let ok = toks(&[(" OK", 0.3), (" Gl", 0.9), ("itch", 0.95), (".", 0.9)]);
+        assert_eq!(wake_confidence(&ok), Some(0.9), "how whisper spells the greeting doesn't matter");
         assert!(is_confident_wake(&clear));
         let mumbled = toks(&[(" Hey", 0.9), (" Gl", 0.3), ("itch", 0.6), (".", 0.9)]);
         assert_eq!(wake_confidence(&mumbled), Some(0.3));
+        assert!(is_greeting_only(" Hey.") && is_greeting_only("Oh, okay!") && !is_greeting_only("Hey Glitch"));
+        assert!(!is_greeting_only("Hey you") && !is_greeting_only("") && !is_greeting_only("Glitch"));
         assert!(!is_confident_wake(&mumbled));
         let other = toks(&[(" There", 0.9), ("'s", 0.9), (" a", 0.9), (" glitch", 0.9)]);
         assert_eq!(wake_confidence(&other), None);

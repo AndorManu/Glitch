@@ -99,8 +99,10 @@ struct Outcome {
 }
 
 /// One clip through the listener's pipeline, as fast as possible.
-fn run_clip(model: &stt::Model, audio: &[f32], rate: u32) -> Outcome {
+fn run_clip(model: &stt::Model, audio: &[f32], rate: u32, prompt: bool) -> Outcome {
     let mut seg = Segmenter::new(rate, WakeConfig::default());
+    let mut detector = wake::Detector::default();
+    detector.prompt = prompt;
     let mut out = Outcome { woke: false, checks: 0, texts: vec![], command: None, whisper: Duration::ZERO };
     let chunk = rate as usize / 100;
     let mut fed = 0;
@@ -109,7 +111,7 @@ fn run_clip(model: &stt::Model, audio: &[f32], rate: u32) -> Outcome {
         let Some(check) = seg.push(c) else { continue };
         out.checks += 1;
         let t = Instant::now();
-        let d = wake::detect(model, &check.audio, rate).unwrap();
+        let d = detector.check(model, &check.audio, rate).unwrap();
         out.whisper += t.elapsed();
         let Some(d) = d else { continue };
         out.texts.push((d.text.clone(), d.confidence));
@@ -134,9 +136,15 @@ fn live_wake_wavs() {
     let (pos, neg) = (wavs("pos_"), wavs("neg_"));
     assert!(!pos.is_empty() && !neg.is_empty(), "run `node dev/wake-check.mjs`");
     let mut seed = 0x2545_f491;
-    for (id, path) in models() {
+    let prompts: Vec<bool> = match std::env::var("GLITCH_WAKE_PROMPT").as_deref() {
+        Ok("1") => vec![true],
+        Ok("both") => vec![false, true],
+        _ => vec![wake::WAKE_PROMPT],
+    };
+    for ((id, path), prompt) in models().into_iter().flat_map(|m| prompts.iter().map(move |p| (m.clone(), *p))) {
         let k: stt::Keeper<stt::Model> = stt::Keeper::new(Duration::from_secs(600));
         let model = k.get(&path, stt::load).unwrap();
+        let id = if prompt { format!("{id}+prompt") } else { id.to_string() };
         eprintln!("\n===== model {id} =====");
 
         let (mut tp, mut cmd_ok, mut pos_conf) = (0, 0, vec![]);
@@ -146,7 +154,7 @@ fn live_wake_wavs() {
             let mut a = hiss(rate as usize, &mut seed);
             a.extend(&clip);
             a.extend(hiss(rate as usize * 3 / 2, &mut seed));
-            let o = run_clip(&model, &a, rate);
+            let o = run_clip(&model, &a, rate, prompt);
             latencies.push(o.whisper.as_secs_f64() * 1000.0 / o.checks.max(1) as f64);
             let name = p.file_stem().unwrap().to_string_lossy();
             if o.woke {
@@ -180,7 +188,7 @@ fn live_wake_wavs() {
             secs += clip.len() as f64 / rate as f64;
             let mut a = clip;
             a.extend(hiss(rate as usize, &mut seed));
-            let o = run_clip(&model, &a, rate);
+            let o = run_clip(&model, &a, rate, prompt);
             checks += o.checks;
             whisper += o.whisper;
             for (t, c) in &o.texts {
