@@ -1,0 +1,29 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "panel",
+  "description": "Setup and Settings: settings, memory, models, voice downloads, reset and quit.",
+  "windows": [
+    "panel"
+  ],
+  "permissions": [
+    "allow-clear-memory",
+    "allow-finish-setup",
+    "allow-forget-memory",
+    "allow-get-memory",
+    "allow-hide-panel",
+    "allow-open-ollama-download",
+    "allow-panel-view",
+    "allow-pull-model",
+    "allow-quit",
+    "allow-reset-chat",
+    "allow-setup-status",
+    "allow-show-bubble",
+    "allow-start-ollama",
+    "allow-update-settings",
+    "allow-update-voice-settings",
+    "allow-voice-cancel-download",
+    "allow-voice-delete-model",
+    "allow-voice-download-model",
+    "allow-voice-status"
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "mascot",
+  "description": "The mascot: moving itself, the world it walks on, chaos mode, opening Settings.",
+  "windows": [
+    "mascot"
+  ],
+  "permissions": [
+    "core:window:allow-set-position",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus",
+    "allow-chaos-debug-log",
+    "allow-chaos-drag-cursor",
+    "allow-chaos-drag-window",
+    "allow-chaos-grab-cursor",
+    "allow-chaos-grab-window",
+    "allow-chaos-note-move",
+    "allow-chaos-note-open",
+    "allow-chaos-note-open-now",
+    "allow-chaos-paws",
+    "allow-chaos-release-cursor",
+    "allow-chaos-release-window",
+    "allow-chaos-status",
+    "allow-chaos-windows",
+    "allow-get-settings",
+    "allow-ledge-frame",
+    "allow-ledge-watch",
+    "allow-mascot-clicked",
+    "allow-set-hitbox",
+    "allow-show-panel",
+    "allow-world-snapshot"
+  ]
+}
