@@ -5,7 +5,7 @@
 //!   (the part file is kept on errors and on cancel),
 //! * the server's size is sanity-checked before anything is written (an HTML
 //!   error page or a wrong file is refused early),
-//! * the finished file must match the official SHA-1, and only then is it
+//! * the finished file must match the pinned SHA-256, and only then is it
 //!   renamed into place. So a model file that exists is always complete.
 
 use std::fmt;
@@ -16,11 +16,13 @@ use std::time::Duration;
 
 use reqwest::header::{CONTENT_RANGE, RANGE};
 use reqwest::StatusCode;
+use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
 /// What the finished file must look like.
 pub struct Expected<'a> {
-    pub sha1: &'a str,
+    /// Lower-case hex SHA-256.
+    pub sha256: &'a str,
     /// Approximate size; the server's answer must be within [`SIZE_TOLERANCE`].
     pub size: u64,
 }
@@ -110,8 +112,13 @@ fn size_ok(got: u64, expected: u64) -> bool {
     (got as f64 - expected as f64).abs() <= expected as f64 * SIZE_TOLERANCE
 }
 
-/// SHA-1 of the first part of a file (to continue hashing after a resume).
-fn hash_existing(path: &Path, hasher: &mut sha1_smol::Sha1) -> std::io::Result<u64> {
+/// Lower-case hex of what has been hashed so far.
+fn hex(hasher: &Sha256) -> String {
+    format!("{:x}", hasher.clone().finalize())
+}
+
+/// SHA-256 of the first part of a file (to continue hashing after a resume).
+fn hash_existing(path: &Path, hasher: &mut Sha256) -> std::io::Result<u64> {
     let mut f = std::fs::File::open(path)?;
     let mut buf = vec![0u8; 1 << 16];
     let mut n = 0u64;
@@ -141,12 +148,12 @@ pub async fn download(
     let part = part_path(dest);
     // Two tries: if the server can't resume what we have, start over once.
     for attempt in 0..2 {
-        let mut hasher = sha1_smol::Sha1::new();
+        let mut hasher = Sha256::new();
         let mut have = match tokio::fs::metadata(&part).await {
             Ok(m) if attempt == 0 && m.len() > 0 && m.len() < expected.size + expected.size / 10 => {
                 let p = part.clone();
                 let (n, h) = tokio::task::spawn_blocking(move || {
-                    let mut h = sha1_smol::Sha1::new();
+                    let mut h = Sha256::new();
                     hash_existing(&p, &mut h).map(|n| (n, h))
                 })
                 .await
@@ -178,13 +185,13 @@ pub async fn download(
             StatusCode::OK => {
                 // Fresh download, or the server ignored our Range header.
                 have = 0;
-                hasher = sha1_smol::Sha1::new();
+                hasher = Sha256::new();
                 resp.content_length().unwrap_or(0)
             }
             StatusCode::RANGE_NOT_SATISFIABLE if have > 0 => {
                 // Our part file is as long as (or longer than) the file: it is
                 // complete or junk. The checksum decides; else start over.
-                if hasher.digest().to_string() == expected.sha1 {
+                if hex(&hasher) == expected.sha256 {
                     progress(have, have);
                     return finish(&part, dest).await;
                 }
@@ -236,7 +243,7 @@ pub async fn download(
             // The connection ended early: keep what we have for next time.
             return Err(DownloadError::Offline("the connection was interrupted".into()));
         }
-        if hasher.digest().to_string() != expected.sha1 {
+        if hex(&hasher) != expected.sha256 {
             let _ = tokio::fs::remove_file(&part).await;
             return Err(DownloadError::Checksum);
         }
@@ -262,8 +269,8 @@ mod tests {
         (0..n).map(|i| (i * 7 % 251) as u8).collect()
     }
 
-    fn sha1(b: &[u8]) -> String {
-        sha1_smol::Sha1::from(b).digest().to_string()
+    fn sha256(b: &[u8]) -> String {
+        format!("{:x}", Sha256::digest(b))
     }
 
     /// Serves `data`, honouring `Range: bytes=N-` like Hugging Face does.
@@ -308,8 +315,8 @@ mod tests {
         let s = server(&data).await;
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("models/ggml-test.bin");
-        let sum = sha1(&data);
-        let (r, seen) = run(&s, &dest, &Expected { sha1: &sum, size: data.len() as u64 }).await;
+        let sum = sha256(&data);
+        let (r, seen) = run(&s, &dest, &Expected { sha256: &sum, size: data.len() as u64 }).await;
         r.unwrap();
         assert_eq!(std::fs::read(&dest).unwrap(), data);
         assert!(!part_path(&dest).exists());
@@ -332,8 +339,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("ggml-test.bin");
         std::fs::write(part_path(&dest), &data[..120_000]).unwrap();
-        let sum = sha1(&data);
-        let (r, seen) = run(&s, &dest, &Expected { sha1: &sum, size: 200_000 }).await;
+        let sum = sha256(&data);
+        let (r, seen) = run(&s, &dest, &Expected { sha256: &sum, size: 200_000 }).await;
         r.unwrap();
         assert_eq!(seen.first(), Some(&(120_000, 200_000)));
         assert_eq!(std::fs::read(&dest).unwrap(), data);
@@ -351,8 +358,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("ggml-test.bin");
         std::fs::write(part_path(&dest), b"garbage that is not the start of the file").unwrap();
-        let sum = sha1(&data);
-        let (r, _) = run(&s, &dest, &Expected { sha1: &sum, size: 50_000 }).await;
+        let sum = sha256(&data);
+        let (r, _) = run(&s, &dest, &Expected { sha256: &sum, size: 50_000 }).await;
         r.unwrap();
         assert_eq!(std::fs::read(&dest).unwrap(), data);
     }
@@ -365,8 +372,8 @@ mod tests {
         let dest = dir.path().join("ggml-test.bin");
         // Part file already complete (crash right before the rename): 416.
         std::fs::write(part_path(&dest), &data).unwrap();
-        let sum = sha1(&data);
-        let (r, _) = run(&s, &dest, &Expected { sha1: &sum, size: 10_000 }).await;
+        let sum = sha256(&data);
+        let (r, _) = run(&s, &dest, &Expected { sha256: &sum, size: 10_000 }).await;
         r.unwrap();
         assert_eq!(std::fs::read(&dest).unwrap(), data);
     }
@@ -380,7 +387,7 @@ mod tests {
             .await;
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("ggml-test.bin");
-        let (r, _) = run(&s, &dest, &Expected { sha1: &"0".repeat(40), size: 147_951_465 }).await;
+        let (r, _) = run(&s, &dest, &Expected { sha256: &"0".repeat(64), size: 147_951_465 }).await;
         assert!(matches!(r, Err(DownloadError::BadSize { expected: 147_951_465, .. })), "{r:?}");
         assert_eq!(r.unwrap_err().code(), "download_corrupt");
         assert!(!dest.exists());
@@ -393,7 +400,7 @@ mod tests {
         let s = server(&data).await;
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("ggml-test.bin");
-        let (r, _) = run(&s, &dest, &Expected { sha1: &sha1(b"something else"), size: 20_000 }).await;
+        let (r, _) = run(&s, &dest, &Expected { sha256: &sha256(b"something else"), size: 20_000 }).await;
         assert_eq!(r, Err(DownloadError::Checksum));
         assert!(!dest.exists());
         assert!(!part_path(&dest).exists());
@@ -405,7 +412,7 @@ mod tests {
         Mock::given(method("GET")).respond_with(ResponseTemplate::new(404)).mount(&s).await;
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("ggml-test.bin");
-        let exp = Expected { sha1: "x", size: 1 };
+        let exp = Expected { sha256: "x", size: 1 };
         assert_eq!(run(&s, &dest, &exp).await.0, Err(DownloadError::Http(404)));
 
         // Nothing listening on this port.
@@ -433,8 +440,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("ggml-test.bin");
         let cancel = AtomicBool::new(false);
-        let sum = sha1(&data);
-        let exp = Expected { sha1: &sum, size: 400_000 };
+        let sum = sha256(&data);
+        let exp = Expected { sha256: &sum, size: 400_000 };
         let url = format!("{}/ggml-test.bin", s.uri());
         let r = download(&client(), &url, &dest, &exp, &cancel, |done, _| {
             if done > 0 {

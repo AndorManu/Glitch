@@ -3,6 +3,7 @@
 
 import { askPermission, lookingText, plainText, PLACEHOLDER, THINKING } from "../shared/chat-text";
 import type { BubbleLayout } from "../shared/ipc";
+import { allowAccepted, CONFIRM_CHOICES, defaultChoice } from "./choices";
 import { h, svg } from "./dom";
 import {
   CLOUD,
@@ -59,6 +60,8 @@ type SpeechShown = {
   balloon: HTMLElement;
   tail: SVGSVGElement;
   choices: HTMLButtonElement[];
+  /** An Allow / Nope card. */
+  confirm: boolean;
   /** Voice setup offer: progress bar, status line, and its button rows. */
   setup?: { bar: HTMLElement; fill: HTMLElement; note: HTMLElement; pct: HTMLElement; offer: HTMLElement; running: HTMLElement };
 };
@@ -202,7 +205,10 @@ export class BubbleView {
   /** Put the keyboard where it's most useful right now. */
   focus(): void {
     const s = this.shown;
-    if (s?.kind === "speech" && s.choices.length && !s.choices[0].disabled && !this.input.value) s.choices[0].focus();
+    // A confirmation card focuses "Nope", so a stray Enter can't approve.
+    const i = s?.kind === "speech" ? defaultChoice(s.confirm ? "confirm" : "other", s.choices.length) : null;
+    const button = s?.kind === "speech" && i !== null ? s.choices[i] : undefined;
+    if (button && !button.disabled && !this.input.value) button.focus();
     else this.input.focus();
   }
 
@@ -390,8 +396,13 @@ export class BubbleView {
 
     const choices: HTMLButtonElement[] = [];
     if (speech.kind === "confirm") {
-      const allow = h("button", { type: "button", class: "choice yes", onclick: () => this.on.answer(true) }, "Allow");
-      const nope = h("button", { type: "button", class: "choice no", onclick: () => this.on.answer(false) }, "Nope");
+      const shownAt = performance.now();
+      const allow = h(
+        "button",
+        { type: "button", class: "choice yes", onclick: () => allowAccepted(shownAt, performance.now()) && this.on.answer(true) },
+        CONFIRM_CHOICES[0],
+      );
+      const nope = h("button", { type: "button", class: "choice no", onclick: () => this.on.answer(false) }, CONFIRM_CHOICES[1]);
       choices.push(allow, nope);
       const row = h("div", { class: "choices", role: "group", "aria-label": "Allow this?" }, allow, nope);
       // Typing while a button is focused goes to the message box instead.
@@ -435,7 +446,7 @@ export class BubbleView {
 
     scroll.addEventListener("scroll", () => this.markOverflow(scroll), { passive: true });
 
-    const shown: SpeechShown = { kind: "speech", rev, el, balloon, tail, choices, setup };
+    const shown: SpeechShown = { kind: "speech", rev, el, balloon, tail, choices, confirm: speech.kind === "confirm", setup };
     this.updateSpeech(shown, speech);
     return { shown, typed, text: main };
   }

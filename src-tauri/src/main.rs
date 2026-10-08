@@ -1,6 +1,8 @@
 // No console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(test)]
+mod capabilities_check;
 mod chaos;
 mod chaos_native;
 mod commands;
@@ -110,6 +112,7 @@ fn main() {
             context::debug_trigger(app.handle());
             Ok(())
         })
+        // A new command also goes into build.rs and a window's capabilities/ file.
         .invoke_handler(tauri::generate_handler![
             commands::setup_status,
             commands::start_ollama,
