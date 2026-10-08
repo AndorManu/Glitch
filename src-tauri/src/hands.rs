@@ -25,6 +25,11 @@ use tauri::AppHandle;
 pub struct NativeHands {
     app: Option<AppHandle>,
     dry_run: bool,
+    /// Debug builds with GLITCH_HANDS_ONLY_PIDS (tests, QA): only the test's
+    /// own windows exist for Glitch, and system-wide things (the media
+    /// session, app links) are never touched, so the owner's music and apps
+    /// stay alone.
+    scoped: bool,
 }
 
 /// What the agent gets for "Let Glitch control apps" (`None`: off).
@@ -39,12 +44,21 @@ pub fn for_setting(app: &AppHandle, enabled: bool) -> Option<Arc<dyn Hands>> {
 impl NativeHands {
     /// `app`: for the banner window (None in tests: no banner).
     pub fn new(app: Option<AppHandle>, dry_run: bool) -> Arc<Self> {
-        Arc::new(Self { app, dry_run })
+        let scoped = cfg!(debug_assertions) && std::env::var_os("GLITCH_HANDS_ONLY_PIDS").is_some();
+        Arc::new(Self { app, dry_run, scoped })
     }
 
+    /// Dry runs never act, unless scoped to a test's own windows.
     fn refuse_dry(&self) -> HandsResult<()> {
-        if self.dry_run {
+        if self.dry_run && !self.scoped {
             return Err("dry run (GLITCH_DRY_RUN_ACTIONS=1): Glitch doesn't touch other apps".into());
+        }
+        Ok(())
+    }
+
+    fn refuse_system_wide(&self) -> HandsResult<()> {
+        if self.dry_run || self.scoped {
+            return Err("not in a test or dry run: media controls and app links act on the whole computer".into());
         }
         Ok(())
     }
@@ -85,14 +99,17 @@ impl Hands for NativeHands {
         imp::scroll(w.id, el.map(|e| e.key), down)
     }
     fn media(&self, m: Media) -> HandsResult<()> {
-        self.refuse_dry()?;
+        self.refuse_system_wide()?;
         imp::media(m)
     }
     fn media_status(&self) -> Option<MediaStatus> {
+        if self.scoped {
+            return None;
+        }
         imp::media_status()
     }
     fn open_link(&self, uri: &str) -> HandsResult<()> {
-        self.refuse_dry()?;
+        self.refuse_system_wide()?;
         open::that_detached(uri).map_err(|e| format!("couldn't open {uri}: {e}"))
     }
     fn ready_to_act(&self) -> HandsResult<()> {
@@ -674,6 +691,7 @@ mod imp {
     static INTERRUPTED: AtomicBool = AtomicBool::new(false);
     /// What stopped Glitch (1 key, 2 mouse button/wheel, 3 mouse moved), for the log.
     static WHY: AtomicU32 = AtomicU32::new(0);
+    static WHY_KEY: AtomicU32 = AtomicU32::new(0);
     static WATCH_THREAD: AtomicU32 = AtomicU32::new(0);
     static ANCHOR_X: AtomicI32 = AtomicI32::new(i32::MIN);
     static ANCHOR_Y: AtomicI32 = AtomicI32::new(i32::MIN);
@@ -689,10 +707,9 @@ mod imp {
             let k = &*(l as *const KBDLLHOOKSTRUCT);
             // Glitch's own SendInput is "injected"; anything else is the user (Esc included).
             if k.flags & (LLKHF_INJECTED | LLKHF_LOWER_IL_INJECTED) == 0 {
-                {
-                    WHY.store(1, Ordering::SeqCst);
-                    INTERRUPTED.store(true, Ordering::SeqCst);
-                }
+                WHY.store(1, Ordering::SeqCst);
+                WHY_KEY.store(k.vkCode, Ordering::SeqCst);
+                INTERRUPTED.store(true, Ordering::SeqCst);
             }
         }
         CallNextHookEx(std::ptr::null_mut(), code, w, l)
@@ -771,7 +788,10 @@ mod imp {
             let why = WHY.swap(0, Ordering::SeqCst);
             if why != 0 {
                 let what = ["", "a key press", "a mouse click or wheel", "the mouse moving"][why as usize];
-                eprintln!("glitch: hands stopped by the user's own input ({what})");
+                eprintln!(
+                    "glitch: hands stopped by the user's own input ({what}, key {})",
+                    WHY_KEY.load(Ordering::SeqCst)
+                );
             }
         }
         stop

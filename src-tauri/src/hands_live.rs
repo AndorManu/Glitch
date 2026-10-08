@@ -91,6 +91,28 @@ fn edit_text(pid: u32) -> Option<String> {
     }
 }
 
+/// Milliseconds since the last real keyboard/mouse input anywhere.
+fn idle_ms() -> u32 {
+    use windows_sys::Win32::System::SystemInformation::GetTickCount;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+    let mut info = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+    if unsafe { GetLastInputInfo(&mut info) } == 0 {
+        return 0;
+    }
+    unsafe { GetTickCount() }.wrapping_sub(info.dwTime)
+}
+
+/// Don't start a run (which takes the foreground) while someone is using
+/// the computer: wait until it has been idle for a few seconds.
+async fn wait_until_idle() {
+    for _ in 0..600 {
+        if idle_ms() > 4000 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "live: needs Ollama and a desktop; see the module docs"]
 async fn hands_live_notepad_type_hello() {
@@ -108,7 +130,11 @@ async fn hands_live_notepad_type_hello() {
     let ollama = Arc::new(OllamaClient::new("http://127.0.0.1:11434", "5m"));
     let _ = ollama.warm_up(&model, "5m").await;
     let mut passes = 0;
-    for run in 1..=runs {
+    let mut stopped_by_user = 0;
+    let mut run = 0;
+    while run < runs {
+        run += 1;
+        wait_until_idle().await;
         let file = dir.path().join(format!("glitch-hands-{run}.txt"));
         std::fs::write(&file, "").unwrap();
         let platform = Arc::new(LivePlatform { exe: exe.clone(), file, child: Mutex::new(None) });
@@ -141,17 +167,29 @@ async fn hands_live_notepad_type_hello() {
         let text = child.as_ref().and_then(|c| edit_text(c.id())).unwrap_or_default();
         let ok = text.trim().eq_ignore_ascii_case("hello");
         passes += ok as usize;
+        // The person at the computer touched it: that is the safety stop
+        // working, not the model failing. Run it again (at most 5 times).
+        let user_stop = !ok && reply.starts_with("Hands off!") && stopped_by_user < 5;
+        let verdict = match (ok, user_stop) {
+            (true, _) => "PASS",
+            (false, true) => "STOP",
+            _ => "FAIL",
+        };
         println!(
-            "{} run {run}  {ms:>6} ms  typed {text:?}  cards {confirms:?}\n      steps {:?}\n      \u{201c}{reply}\u{201d}",
-            if ok { "PASS" } else { "FAIL" },
+            "{verdict} run {run}  {ms:>6} ms  typed {text:?}  cards {confirms:?}\n      steps {:?}\n      \u{201c}{reply}\u{201d}",
             steps.lock().unwrap()
         );
+        if user_stop {
+            stopped_by_user += 1;
+            run -= 1;
+            println!("      (stopped by real user input: run repeated)");
+        }
         if let Some(mut c) = child {
             let _ = c.kill();
             let _ = c.wait();
         }
         std::env::set_var("GLITCH_HANDS_ONLY_PIDS", "0");
     }
-    println!("notepad (real window, {model}): {passes}/{runs}");
+    println!("notepad (real window, {model}): {passes}/{runs} ({stopped_by_user} run(s) stopped by real user input, repeated)");
     assert!(passes > 0, "no run passed");
 }

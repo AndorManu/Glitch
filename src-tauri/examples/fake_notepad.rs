@@ -9,6 +9,7 @@
 //! has. The test must never touch the user's work, so it drives this.
 //!
 //!   cargo build -p glitch --example fake_notepad
+//!   fake_notepad.exe <file> [x y width height]
 
 #[cfg(not(target_os = "windows"))]
 fn main() {
@@ -46,7 +47,15 @@ fn main() {
         }
     }
 
-    let path = std::env::args().nth(1).unwrap_or_else(|| "Untitled".into());
+    let args: Vec<String> = std::env::args().collect();
+    let path = args.get(1).cloned().unwrap_or_else(|| "Untitled".into());
+    // Optional: x y width height (the QA script frames it for screenshots).
+    let mut geo = [200, 200, 700, 450];
+    for (i, g) in geo.iter_mut().enumerate() {
+        if let Some(v) = args.get(i + 2).and_then(|a| a.parse().ok()) {
+            *g = v;
+        }
+    }
     let text = std::fs::read_to_string(&path).unwrap_or_default().replace('\n', "\r\n");
     let name = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(path);
     unsafe {
@@ -75,10 +84,10 @@ fn main() {
             class.as_ptr(),
             title.as_ptr(),
             WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-            200,
-            200,
-            700,
-            450,
+            geo[0],
+            geo[1],
+            geo[2],
+            geo[3],
             std::ptr::null_mut(),
             menu,
             inst,
