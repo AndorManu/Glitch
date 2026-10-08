@@ -44,6 +44,12 @@ pub struct Message {
     /// live chat, but never written to disk or folded into memory.
     #[serde(skip)]
     pub private: bool,
+    /// Holds (or was written while reading) outside content: anything the
+    /// user did not type (screen, clipboard, selection, window titles, file
+    /// names). It could carry instructions, so while such a message is in the
+    /// chat every side effect waits for the user's OK. Never saved.
+    #[serde(skip)]
+    pub untrusted: bool,
 }
 
 impl Message {
@@ -55,6 +61,7 @@ impl Message {
             tool_name: None,
             images: Vec::new(),
             private: false,
+            untrusted: false,
         }
     }
     pub fn system(content: impl Into<String>) -> Self {

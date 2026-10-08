@@ -1,13 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the Glitch windows may do. App commands (chat, settings, ...) are defined in src-tauri/src/commands.rs.",
-  "windows": ["mascot", "bubble", "panel", "note", "pawprints", "ball"],
+  "description": "Shared by every Glitch window: Tauri's core defaults (events, channels) and nothing else. App commands are granted per window in the other files here (review 2026-10-08, L4); every command is listed in build.rs.",
+  "windows": [
+    "mascot",
+    "bubble",
+    "panel",
+    "note",
+    "pawprints",
+    "ball"
+  ],
   "permissions": [
-    "core:default",
-    "core:window:allow-set-position",
-    "core:window:allow-show",
-    "core:window:allow-hide",
-    "core:window:allow-set-focus"
+    "core:default"
   ]
 }

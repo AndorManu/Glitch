@@ -144,7 +144,7 @@ try {
   check("hide: pointing at him finds him (back up, XP)", a.sink === 0 && xp2 >= xp1 + 20, `sink ${a.sink}, xp ${xp1} -> ${xp2}`);
 
   // ------------------------------------------------- personal hello
-  await m.evaluate(() => window.__TAURI_INTERNALS__.invoke("show_bubble"));
+  await m.evaluate(() => window.__TAURI_INTERNALS__.invoke("mascot_clicked"));
   const b = await page("bubble");
   await sleep(4000);
   const said = await b.evaluate(() => document.body.innerText);
@@ -175,7 +175,7 @@ try {
   await sleep(500);
   check("an unlocked hat is worn right away", (await acc()).hat === "cap");
   await shot(m, "8-cap");
-  await m.evaluate(() => window.__TAURI_INTERNALS__.invoke("quit")).catch(() => {});
+  await p.evaluate(() => window.__TAURI_INTERNALS__.invoke("quit")).catch(() => {});
 } catch (e) {
   check("run", false, String(e));
 } finally {
