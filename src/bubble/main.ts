@@ -22,6 +22,7 @@ import {
 } from "../shared/ipc";
 import { browserStore, pickGreeting } from "../shared/greeting";
 import { canSend, dismissSpeech, initialState, transition, type BubbleEvent, type Request } from "./state";
+import { UpdateMe } from "./update-me";
 import { BubbleView } from "./view";
 import {
   explainDownloadError,
@@ -61,7 +62,12 @@ const view = new BubbleView(root, {
   },
   voiceCancelDownload: () => void voiceApi.cancelDownload().catch(() => {}),
   openMicSettings: () => void voiceApi.openMicSettings().catch(() => {}),
+  choose: (id, choice) => void updates.choose(id, choice),
 });
+
+// "Update me": reminders, Claude Code, scripts, the digest, the briefing.
+const updates = new UpdateMe({ dispatch: (e) => dispatch(e), busy: () => state.busy });
+updates.listen();
 
 function dispatch(e: BubbleEvent): void {
   const prev = state;
@@ -272,6 +278,7 @@ function onShown(): void {
     dispatch({ type: "shown", awayMs });
     view.enter();
     keepWarm(true);
+    void updates.opened();
   }
   view.focus();
 }
