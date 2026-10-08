@@ -150,6 +150,17 @@ pub fn place_bubble(app: &AppHandle) -> Option<BubbleLayout> {
 }
 
 pub fn show_bubble(app: &AppHandle) {
+    show_bubble_with(app, true);
+}
+
+/// For things Glitch says by himself ("Claude Code is done", a reminder):
+/// the bubble appears without taking the keyboard away from what the user
+/// is typing in.
+pub fn show_bubble_unfocused(app: &AppHandle) {
+    show_bubble_with(app, false);
+}
+
+fn show_bubble_with(app: &AppHandle, focus: bool) {
     let bubble = match app.get_webview_window(BUBBLE) {
         Some(b) => b,
         None => match create_bubble(app) {
@@ -164,7 +175,9 @@ pub fn show_bubble(app: &AppHandle) {
     let _ = bubble.show();
     // Some window managers ignore positions set before the first show.
     place_bubble(app);
-    let _ = bubble.set_focus();
+    if focus {
+        let _ = bubble.set_focus();
+    }
     note_bubble_shown();
     // Also tells a page that is mid close-animation to stop and stay open.
     let _ = bubble.emit("bubble-shown", ());

@@ -290,6 +290,30 @@
     },
     {
       "function": {
+        "description": "Save a reminder for a clock time or a day: \"remind me to call mum at 5\", \"tomorrow at 9am\", \"on friday\". It is kept even if the computer restarts, and Glitch nags until it's done. For \"in N minutes\" use set_timer instead.",
+        "name": "set_reminder",
+        "parameters": {
+          "properties": {
+            "text": {
+              "description": "What to remind the user of, e.g. \"call mum\"",
+              "type": "string"
+            },
+            "when": {
+              "description": "The user's own words for the time, e.g. \"at 5\", \"tomorrow 9am\", \"friday at noon\"",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "when"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
         "description": "Save one short, lasting fact about the user to your memory, e.g. \"The user's dog is called Rex\" or \"Prefers dark mode\". Use it when the user tells you something worth knowing next week, or asks you to remember something. Never passwords, codes or card numbers.",
         "name": "remember",
         "parameters": {

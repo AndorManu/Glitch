@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "pawprints",
+  "description": "Chaos mode's paw prints: they can only say they faded.",
+  "windows": [
+    "pawprints"
+  ],
+  "permissions": [
+    "allow-chaos-paws-idle"
+  ]
+}

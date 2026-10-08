@@ -1,0 +1,31 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "bubble",
+  "description": "The chat bubble: the only window that may chat with the agent and answer its Allow / Nope questions.",
+  "windows": [
+    "bubble"
+  ],
+  "permissions": [
+    "allow-bubble-closing",
+    "allow-confirm-action",
+    "allow-cool-model",
+    "allow-hide-bubble",
+    "allow-resize-bubble",
+    "allow-send-message",
+    "allow-show-panel",
+    "allow-voice-cancel",
+    "allow-voice-cancel-download",
+    "allow-voice-download-model",
+    "allow-voice-hands-free",
+    "allow-voice-offer-seen",
+    "allow-voice-open-mic-settings",
+    "allow-voice-start",
+    "allow-voice-status",
+    "allow-voice-stop",
+    "allow-warm-model",
+    "allow-briefing-today",
+    "allow-update-choose",
+    "allow-update-pending",
+    "allow-update-seen"
+  ]
+}

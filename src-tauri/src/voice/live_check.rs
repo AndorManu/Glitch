@@ -42,7 +42,7 @@ fn check_models() -> Vec<&'static SpeechModel> {
 }
 
 /// Downloads a model like the app does, but first cuts the download off
-/// part-way (cancel) to prove resuming + the SHA-1 check on the real server.
+/// part-way (cancel) to prove resuming + the SHA-256 check on the real server.
 async fn fetch(m: &SpeechModel) -> PathBuf {
     let dest = models_dir().join(m.file);
     if dest.is_file() {
@@ -50,7 +50,7 @@ async fn fetch(m: &SpeechModel) -> PathBuf {
         return dest;
     }
     let url = speech_models::url(speech_models::DEFAULT_BASE_URL, m);
-    let exp = download::Expected { sha1: m.sha1, size: m.size_bytes };
+    let exp = download::Expected { sha256: m.sha256, size: m.size_bytes };
     let client = download::client();
 
     // 1. Start, cancel after ~15 MB.
@@ -68,7 +68,7 @@ async fn fetch(m: &SpeechModel) -> PathBuf {
     assert!(kept > 0 && !dest.exists(), "part file kept, nothing final yet");
     eprintln!("[download] {}: cancelled at {} MB after {:?}", m.file, kept >> 20, t.elapsed());
 
-    // 2. Resume to the end; must start where it stopped and pass SHA-1.
+    // 2. Resume to the end; must start where it stopped and pass SHA-256.
     let cancel = AtomicBool::new(false);
     let first = Mutex::new(None);
     let t = Instant::now();
@@ -76,12 +76,12 @@ async fn fetch(m: &SpeechModel) -> PathBuf {
         first.lock().unwrap().get_or_insert((done, total));
     })
     .await
-    .expect("resumed download completes and matches the SHA-1");
+    .expect("resumed download completes and matches the SHA-256");
     let (first_done, total) = first.into_inner().unwrap().unwrap();
     assert!(first_done >= kept, "resumed at {first_done}, not from zero (had {kept})");
     assert!(!part.exists());
     assert_eq!(std::fs::metadata(&dest).unwrap().len(), total);
-    eprintln!("[download] {}: resumed at {} MB, done in {:?}, SHA-1 ok", m.file, kept >> 20, t.elapsed());
+    eprintln!("[download] {}: resumed at {} MB, done in {:?}, SHA-256 ok", m.file, kept >> 20, t.elapsed());
     dest
 }
 
