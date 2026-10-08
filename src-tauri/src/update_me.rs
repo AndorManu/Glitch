@@ -702,6 +702,7 @@ pub async fn claude_connect(app: AppHandle) -> Result<UpdateMeStatus, UiError> {
 pub async fn claude_disconnect(app: AppHandle) -> Result<UpdateMeStatus, UiError> {
     let path = claude_code::settings_path().ok_or_else(|| UiError::new("no_home", "Couldn't find your home folder"))?;
     claude_code::disconnect(&path).map_err(|e| UiError::new("claude_settings", e.to_string()))?;
+    app.state::<AppState>().update_settings(|s| s.update_me.claude_code_enabled = false);
     Ok(status_of(&app))
 }
 

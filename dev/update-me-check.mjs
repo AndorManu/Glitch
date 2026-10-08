@@ -178,7 +178,9 @@ try {
   check("Claude Code needs input: bubble", t3 === "Claude Code needs you in api: Claude needs your permission to use Bash", t3);
   await invoke(mascot, "claude_disconnect");
   const restored = JSON.parse(readFileSync(claudeSettings, "utf8"));
-  check("disconnect restores the user's file", JSON.stringify(restored) === JSON.stringify(original), JSON.stringify(restored));
+  // Same content (serde_json writes keys sorted).
+  const canon = (v) => (Array.isArray(v) ? v.map(canon) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v);
+  check("disconnect restores the user's file", JSON.stringify(canon(restored)) === JSON.stringify(canon(original)), JSON.stringify(restored));
 
   // 6. The saved reminder fires (it was in reminders.json before start)
   const left = now + dueIn - Math.floor(Date.now() / 1000);
@@ -221,8 +223,9 @@ try {
   const panel = await page("panel");
   await panel.waitForSelector(".feature-update-me .um-section", { timeout: 15000 });
   const card = await panel.$(".feature-update-me");
-  await card.scrollIntoViewIfNeeded();
-  await card.screenshot({ path: join(OUT, "9-features-card.png") });
+  await card.evaluate((el) => el.scrollIntoView({ block: "start" }));
+  await sleep(400);
+  await panel.screenshot({ path: join(OUT, "9-features-card.png") });
   check("Features card rendered", true);
 } catch (e) {
   check("run", false, String(e?.stack ?? e));
