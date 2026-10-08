@@ -486,10 +486,16 @@ mod imp {
             if OpenProcessToken(process, TOKEN_QUERY, &mut token) == 0 {
                 return None;
             }
-            let mut buf = [0u8; 256];
+            // u64s: TOKEN_MANDATORY_LABEL holds a pointer, so the buffer must be 8-byte aligned.
+            let mut buf = [0u64; 32];
             let mut len = 0u32;
-            let ok =
-                GetTokenInformation(token, TokenIntegrityLevel, buf.as_mut_ptr().cast(), buf.len() as u32, &mut len);
+            let ok = GetTokenInformation(
+                token,
+                TokenIntegrityLevel,
+                buf.as_mut_ptr().cast(),
+                std::mem::size_of_val(&buf) as u32,
+                &mut len,
+            );
             let mut ui = 0u32;
             let ok2 = GetTokenInformation(token, TokenUIAccess, (&mut ui as *mut u32).cast(), 4, &mut len);
             CloseHandle(token);

@@ -8,6 +8,8 @@ mod context;
 mod context_native;
 mod desktop;
 mod hands;
+#[cfg(all(test, target_os = "windows"))]
+mod hands_live;
 mod hover;
 mod layout;
 mod ledge_watch;
