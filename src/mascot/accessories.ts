@@ -80,8 +80,9 @@ export function headTop(alpha: (x: number, y: number) => number, eyeX: number, w
 
 /** Recolour one pixel of the magenta glitch eye: keep its brightness, change the hue. Pure. */
 export function recolour(r: number, g: number, b: number, target: [number, number, number]): [number, number, number] | null {
-  if (!(r > 150 && b > 150 && g < 120)) return null;
-  const k = Math.max(r, b) / 255;
+  // The eye's magentas and purples (#df10f3, #bf0de8, #9015ba, #510f68): strong blue+red, almost no green.
+  if (!(b >= 90 && r >= 60 && g < 70 && b > 2.5 * g)) return null;
+  const k = Math.min(1, Math.max(r, b) / 243);
   return [Math.round(target[0] * k), Math.round(target[1] * k), Math.round(target[2] * k)];
 }
 
