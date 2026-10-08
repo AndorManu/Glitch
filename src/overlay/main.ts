@@ -74,10 +74,10 @@ function placeBubble(): void {
   const s = config.size;
   const w = bubble.offsetWidth;
   const h = bubble.offsetHeight;
-  // Above his head (the body is in the lower ~70% of his 160 px window), kept on the page.
+  // Just above his head (standing, it is about 44% down his 160 px window), kept on the page.
   const cx = pos.x + (VIEW_W * s) / 2;
   const x = Math.max(8, Math.min(window.innerWidth - w - 8, cx - w / 2));
-  const y = Math.max(8, pos.y + VIEW_H * s * 0.22 - h);
+  const y = Math.max(8, pos.y + VIEW_H * s * 0.44 - h);
   bubble.style.transform = `translate(${px(x)}, ${px(y)})`;
   bubble.style.setProperty("--tail-x", px(Math.max(14, Math.min(w - 14, cx - x))));
 }
@@ -181,7 +181,12 @@ async function startMirror(cfg: OverlayConfig): Promise<void> {
   window.addEventListener("resize", place);
 }
 
+/** The last mirrored animation names (debug hook). */
+const mirrored: string[] = [];
+
 function mirror(m: { animation?: unknown; facing_left?: unknown }): void {
+  mirrored.push(String(m.animation));
+  if (mirrored.length > 12) mirrored.shift();
   if (!animator || !renderer || !isAnimationName(m.animation)) return;
   const left = m.facing_left === true;
   renderer.facingLeft = left;
@@ -273,6 +278,9 @@ function connect(): void {
   },
   get bubble() {
     return bubble.hidden ? null : bubble.textContent;
+  },
+  get mirrored() {
+    return [...mirrored];
   },
   get clip() {
     return !clip.hidden;

@@ -324,6 +324,19 @@ after start and every 25 s; `GLITCH_CHAOS_FAST=1` shortens the rate limits to
 
 ---
 
+## Streaming overlay and updates
+
+* **On stream**: Settings → Features → *Streaming overlay* (off by default)
+  shows Glitch in OBS as a browser source, mirroring the desktop Glitch or as
+  a separate Glitch walking along the bottom, reacting to follows, subs, raids
+  and chat (Twitch read-only, Streamer.bot, or a local webhook). Setup and the
+  security model: [docs/STREAMING.md](docs/STREAMING.md).
+* **Updates**: Settings → Features → *Updates* (on by default) checks GitHub
+  Releases once a day; Glitch offers a new version in his bubble (Install /
+  Later), and only installs files signed with the project's key. How releases
+  are made, signed and published: [docs/RELEASING.md](docs/RELEASING.md),
+  changes per version: [CHANGELOG.md](CHANGELOG.md).
+
 ## Why Tauri (and not Electron)
 
 | | **Tauri 2** (chosen) | Electron |

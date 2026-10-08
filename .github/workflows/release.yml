@@ -192,3 +192,24 @@ jobs:
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }} --config release.conf.json
+
+  # Copies with names that never change, so a website can link to
+  # https://github.com/<owner>/<repo>/releases/latest/download/Glitch-windows-x64-setup.exe
+  # (and ...-macos-universal.dmg) without being edited for every version.
+  stable-names:
+    needs: [draft, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Upload stable-name copies
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir dl && cd dl
+          gh release download "$TAG" --repo "$REPO" --pattern "*-setup.exe" --pattern "*.dmg"
+          ls -la
+          exe=$(ls *-setup.exe | head -n1)
+          dmg=$(ls *.dmg | head -n1)
+          cp "$exe" Glitch-windows-x64-setup.exe
+          cp "$dmg" Glitch-macos-universal.dmg
+          gh release upload "$TAG" --repo "$REPO" --clobber Glitch-windows-x64-setup.exe Glitch-macos-universal.dmg
