@@ -578,6 +578,11 @@ button:focus:not(:focus-visible) { outline: none; }
   animation: peek 1.2s ease-in-out infinite;
 }
 .steps { margin: 0; padding: 0; list-style: none; }
+.plan-box { margin-bottom: 4px; color: var(--muted); }
+.plan-title { font-weight: 700; color: var(--text); }
+.plan { margin: 2px 0 0; padding-left: 18px; }
+.plan li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 250px; }
+.step.earlier { color: var(--muted); font-style: italic; }
 .looking + .steps { margin-top: 4px; }
 .step { display: flex; align-items: center; gap: 6px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 270px; }
 .step .label { overflow: hidden; text-overflow: ellipsis; }

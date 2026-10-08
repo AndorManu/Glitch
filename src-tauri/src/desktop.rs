@@ -138,6 +138,9 @@ impl Desktop for NativeDesktop {
     }
 }
 
+#[cfg(target_os = "windows")]
+pub use imp::friendly_app;
+
 #[cfg(not(target_os = "windows"))]
 mod imp {
     use super::*;
@@ -281,7 +284,7 @@ mod imp {
     }
 
     /// "notepad" → "Notepad", "msedge" → "Microsoft Edge".
-    fn friendly_app(exe_stem: &str) -> String {
+    pub fn friendly_app(exe_stem: &str) -> String {
         let known = [
             ("msedge", "Microsoft Edge"),
             ("chrome", "Google Chrome"),

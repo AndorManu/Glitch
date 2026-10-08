@@ -12,7 +12,7 @@ export type Answer = "allowed" | "denied" | "stale";
 export type Speech =
   /** `instant`: the text already streamed in live, so it isn't typed again. */
   | { kind: "reply"; text: string; actions: string[]; instant?: boolean }
-  | { kind: "confirm"; id: string; title: string; detail: string; actions: string[]; answer: Answer | null }
+  | { kind: "confirm"; id: string; title: string; detail: string; actions: string[]; answer: Answer | null; allow?: string; deny?: string }
   | { kind: "error"; text: string; offerSetup: boolean }
   /** Voice: a hint or a microphone problem (optionally with an "Open settings" button). */
   | { kind: "notice"; text: string; tone: "info" | "error"; action: "mic-settings" | null }
@@ -34,9 +34,11 @@ export interface Work {
   looking: CaptureTarget | null;
   /** The reply so far, as it streams in (plain text). */
   text: string;
+  /** An app task's plan, shown above the steps. */
+  plan: string[];
 }
 
-export const NO_WORK: Work = { steps: [], looking: null, text: "" };
+export const NO_WORK: Work = { steps: [], looking: null, text: "", plan: [] };
 
 export interface BubbleState {
   /** Waiting for the model: the thought cloud is up and sending is off. */
@@ -102,8 +104,11 @@ function speak(s: BubbleState, speech: Speech | null): BubbleState {
 
 function fromStep(step: Step, streamed: string): Speech {
   if (step.type === "confirm") {
-    const { id, title, detail, actions } = step;
-    return { kind: "confirm", id, title, detail, actions, answer: null };
+    const { id, title, detail, actions, allow, deny } = step;
+    const speech: Speech = { kind: "confirm", id, title, detail, actions, answer: null };
+    if (allow) speech.allow = allow;
+    if (deny) speech.deny = deny;
+    return speech;
   }
   const text = step.text.trim();
   // Already on screen word for word (it streamed in): don't type it again.
@@ -126,6 +131,8 @@ export function applyProgress(w: Work, p: AgentProgress): Work {
       return { ...w, looking: p.active ? p.target : null };
     case "text":
       return { ...w, text: w.text + p.delta };
+    case "plan":
+      return { ...w, plan: p.steps.slice(0, 6) };
   }
 }
 

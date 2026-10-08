@@ -7,6 +7,7 @@ mod commands;
 mod context;
 mod context_native;
 mod desktop;
+mod hands;
 mod hover;
 mod layout;
 mod ledge_watch;

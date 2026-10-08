@@ -95,6 +95,8 @@ impl AppState {
         agent.set_progress(Some(progress_sink(app.clone())));
         agent.set_screen_enabled(settings.screen_enabled);
         agent.set_notes_trusted(settings.notes_trusted);
+        agent.set_hands(crate::hands::for_setting(app, settings.hands_enabled));
+        agent.set_hands_model(settings.hands_model.clone());
         if settings.memory_enabled {
             agent.set_memory(Some(MemoryStore::load(&memory_path)));
         }

@@ -4,6 +4,7 @@
 
 import type { Settings } from "../../shared/ipc";
 import { contextFeature } from "./context";
+import { handsFeature } from "./hands";
 
 export interface Feature {
   id: string;
@@ -11,4 +12,4 @@ export interface Feature {
   render(s: Settings): HTMLElement;
 }
 
-export const FEATURES: readonly Feature[] = [contextFeature];
+export const FEATURES: readonly Feature[] = [contextFeature, handsFeature];
