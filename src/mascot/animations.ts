@@ -1110,10 +1110,9 @@ export class Animator {
   play(name: AnimationName, then?: AnimationName, lead: Keyframe[] = []): void {
     const anim = this.animations[name];
     if (name === this.current && !anim.once && this.keys.length > 0 && lead.length === 0) return;
-    const prev = this.animations[this.current];
-    const leaving = name !== this.current && this.keys.length > 0 && prev?.outro && this.index < this.keys.length + 1;
+    // Leaving the running animation: finish a transition clip it was in the middle of, then its outro.
+    const outro = name !== this.current && this.keys.length > 0 && anim.bridge !== false ? this.exitKeys(name) : [];
     this.mem.next = name;
-    const outro = leaving && anim.bridge !== false ? prev.outro!(this.random, this.mem) : [];
     this.current = name;
     this.then = then ?? anim.next ?? "idle";
     // What is on screen once the outro and the lead-in have played.
@@ -1141,6 +1140,22 @@ export class Animator {
     this.keys = [...make(this.random, base), ...this.keys.slice(this.index)];
     this.index = 0;
     this.step();
+  }
+
+  /**
+   * What to play before leaving the running animation for `next`: the rest of
+   * a transition clip cut off mid-way at double speed and an ease out of a
+   * lean or offset (settleKeys), then the animation's outro. play() leads
+   * every bridged switch with these; callers starting an unbridged animation
+   * on purpose (a startle) can lead with them too.
+   */
+  exitKeys(next?: AnimationName): Keyframe[] {
+    const prev = this.animations[this.current];
+    if (next) this.mem.next = next;
+    this.mem.fromFrame = this.lastPose?.frame ?? null;
+    const settle = settleKeys(this.lastPose, this.keys.slice(this.index), !prev?.outro);
+    if (settle.length) this.mem.fromFrame = settle[settle.length - 1].frame;
+    return [...settle, ...(prev?.outro && this.keys.length > 0 ? prev.outro(this.random, this.mem) : [])];
   }
 
   /** A glitch burst over whatever is showing. */
@@ -1185,4 +1200,34 @@ export class Animator {
     // `rate` speeds walking cycles up or down with the actual ground speed (no foot sliding).
     if (!still) this.timer = this.clock.setTimeout(this.step, Math.max(MIN_KEY_MS, Math.round(ms / this.rate)));
   };
+}
+
+/** Transition clips: cut off mid-way, they finish at double speed first (settleKeys). */
+const TRANSITION_CLIP = /^(sit_down|stand_up_paws|stand_up_hop|stand_up_glitch|turn_front_to_side|turn_side_to_front|turn_to_back|turn_around|walk_start|lie_down|get_up|wake)\d+$/;
+
+/**
+ * Keys that get him from `shown` to a clean pose before something new
+ * starts: the rest of the transition clip he is in the middle of (from the
+ * keys still `upcoming`, at double speed, so a stand-up or a turn is never
+ * cut in half), and with `ease`, a lean or offset (peekEdge leans 27 degrees,
+ * 20 px back) eased back to upright over three keys instead of snapping.
+ */
+export function settleKeys(shown: Pose | null, upcoming: Keyframe[], ease = true): Keyframe[] {
+  if (!shown) return [];
+  const out: Keyframe[] = [];
+  if (TRANSITION_CLIP.test(shown.frame)) {
+    const base = shown.frame.replace(/\d+$/, "");
+    let last = shown.frame;
+    for (const key of upcoming) {
+      if (!TRANSITION_CLIP.test(key.frame) || key.frame.replace(/\d+$/, "") !== base) break;
+      if (key.frame === last) continue; // held keys, glitch keys over the same drawing
+      last = key.frame;
+      out.push({ ...key, ms: Math.max(MIN_KEY_MS, Math.min(80, Math.round(key.ms / 2))), glitch: 0, fx: undefined });
+    }
+  }
+  const end = out.length ? toPose(out[out.length - 1]) : shown;
+  if (ease && (Math.abs(end.rot) > 2 || Math.abs(end.dx) > 3 || Math.abs(end.dy) > 3)) {
+    for (const f of [0.6, 0.3, 0.1]) out.push(k(end.frame, 60, { flip: end.flip, pivot: end.pivot, rot: end.rot * f, dx: Math.round(end.dx * f), dy: Math.round(end.dy * f) }));
+  }
+  return out;
 }
