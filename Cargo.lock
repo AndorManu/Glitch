@@ -1581,6 +1581,7 @@ name = "glitch"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "chrono",
  "core-foundation",
  "core-graphics",
  "cpal",
@@ -1613,6 +1614,7 @@ dependencies = [
  "chrono",
  "dirs 6.0.0",
  "dunce",
+ "getrandom 0.3.4",
  "image",
  "open",
  "reqwest",

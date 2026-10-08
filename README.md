@@ -324,6 +324,44 @@ after start and every 25 s; `GLITCH_CHAOS_FAST=1` shortens the rate limits to
 
 ---
 
+## Update me
+
+Glitch tells you when things happen. Settings > Features > Update me has a
+switch for each part:
+
+| Part | Default | What it does |
+|---|---|---|
+| Scripts can ping me | on | A local endpoint on `127.0.0.1` (random port, per-install token in `%APPDATA%\dev.glitch.companion\endpoint.json`). `glitch.exe --notify "build done" [--body ..] [--level success\|warning\|error] [--source ..]` from any script; Glitch knocks on the screen, holds up a sign and says it. Browser requests (Origin header), a wrong Host or token are refused; 20 events a minute at most. |
+| Claude Code buddy | off | "Connect Claude Code..." shows the exact hooks first, then adds `Stop` and `Notification` hooks to `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`) running `"<glitch.exe>" --glitch-claude-hook`. Other settings and hooks stay; one private backup (`settings.json.glitch-backup`) sits next to it; a file that isn't valid JSON is never touched. When a session finishes or needs you, Glitch runs over, knocks, holds "Claude Code is done" / "needs you" and the bubble names the project (the folder of the hook's `cwd`). "Disconnect" removes only Glitch's entries. |
+| What did I miss? | off | Reads Windows' notification feed every 4 s, groups by app ("3 WhatsApp, 1 Teams" on a sign), click Glitch for one-line summaries. Banking, payment, password and authenticator apps are never read (plus your own list), one-time codes and long numbers are hidden first, texts stay in RAM (24 h max). The summary call has no tools and its JSON is validated in Rust; if it is unusable a plain summary is shown. Quiet mode: no sign, you hear it when you open the chat. Windows only. |
+| Reminders | on | "Remind me to call mum at 5" / "tomorrow 9am" / "friday at noon" (the `set_reminder` tool; the time is parsed in Rust). Saved in `reminders.json`, kept after a restart. Glitch nags every 10 min (Done / Snooze 10 min) and gives up after the 4th time. Listed and deletable in Settings. |
+| Daily briefing | on | The first chat of the day: time, weather (Open-Meteo, no key, for the town you pick), today's reminders and open `- [ ]` to-dos from the notes file. Email and calendar have slots for later. |
+
+Outside text (script events, Claude Code messages, notifications) is only
+ever shown in the bubble; it never enters the chat agent's context, so it
+can't make Glitch open, send or change anything.
+
+**Notification access and package identity.** Microsoft documents
+`UserNotificationListener` as needing package identity (a sparse package).
+On this machine (Windows 11 26200, unpackaged exe) `GetAccessStatus` returns
+`Allowed` and toasts can be read, so no package is needed here; access follows
+Settings > Privacy & security > Notifications ("Notification access"). If
+another Windows build reports `Denied`/unavailable, the card says so and the
+feature stays quiet; the fix there is a sparse package: an `AppxManifest.xml`
+with the `userNotificationListener` capability and `allowExternalContent`,
+registered with `winapp create-debug-identity glitch.exe` (dev) or a signed
+sparse MSIX registered by the installer (release).
+
+Animations requested by name (fallbacks while the art lands, see
+`src/mascot/update-act.ts`): `knock_screen` (-> chaos knock -> `startled`),
+`hold_sign` (-> `happy`), `run` (-> `jump`). The sign's text is drawn over
+the canvas, so the sprite only needs an empty board.
+
+Real-app check (own identifier, temp Claude Code dir, fake notification feed,
+dry-run actions): `node dev/update-me-check.mjs <target>/debug/glitch.exe`.
+
+---
+
 ## Why Tauri (and not Electron)
 
 | | **Tauri 2** (chosen) | Electron |

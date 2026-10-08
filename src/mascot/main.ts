@@ -17,7 +17,7 @@ import {
   PhysicalPosition,
   primaryMonitor,
 } from "@tauri-apps/api/window";
-import { api, chaosApi, type LedgeEvent, MASCOT_TALK_EVENT, type Settings, type WorldSnapshot } from "../shared/ipc";
+import { api, chaosApi, type LedgeEvent, MASCOT_TALK_EVENT, type Settings, type UpdateAct, type WorldSnapshot } from "../shared/ipc";
 import { loadGlitchSprites } from "../sprites/glitch-sprites";
 import { contextApi, type ContextStatus, type Reaction } from "../shared/context";
 import { type CountdownLabel, ContextReactor, debugReaction } from "./context";
@@ -25,6 +25,7 @@ import type { AnimationName } from "./animations";
 import { Creature, type Host } from "./creature";
 import { WIN, type Vec } from "./physics";
 import { Renderer } from "./render";
+import { domSignStage, UpdateActor } from "./update-act";
 
 const win = getCurrentWindow();
 const canvas = document.getElementById("glitch") as HTMLCanvasElement;
@@ -196,6 +197,12 @@ async function main(): Promise<void> {
   await listen<Reaction>("context", (e) => void r.handle(e.payload));
   await listen<ContextStatus>("focus", (e) => r.status(e.payload));
   void contextApi.status().then((s) => r.status(s), () => {});
+  // "Update me": run over, knock on the screen, hold up a sign (update-act.ts).
+  const actor = new UpdateActor(
+    { play: playAction, setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (t) => clearTimeout(t as ReturnType<typeof setTimeout>) },
+    domSignStage(document.body),
+  );
+  await listen<UpdateAct>("mascot-update", (e) => actor.run(e.payload));
   // The bubble shows a reply: he says it (mouth moving while it appears).
   await listen<number>(MASCOT_TALK_EVENT, (e) => c.talk(Number(e.payload) || 0));
   window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener("change", () => renderer.redraw());

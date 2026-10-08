@@ -2,7 +2,7 @@
 // All decisions live in state.ts; this file only turns state into DOM.
 
 import { askPermission, lookingText, plainText, PLACEHOLDER, THINKING } from "../shared/chat-text";
-import type { BubbleLayout } from "../shared/ipc";
+import type { BubbleLayout, UpdateIcon } from "../shared/ipc";
 import { allowAccepted, CONFIRM_CHOICES, defaultChoice } from "./choices";
 import { h, svg } from "./dom";
 import {
@@ -42,7 +42,18 @@ export interface ViewHandlers {
   voiceDismiss(): void;
   voiceCancelDownload(): void;
   openMicSettings(): void;
+  /** A button on an "Update me" speech (Done, Snooze, Tell me...). */
+  choose?(id: string, choice: string): void;
 }
+
+/** The little round badge in front of an update. */
+const UPDATE_GLYPHS: Record<UpdateIcon, string> = {
+  reminder: "⏰",
+  claude: "✦",
+  event: "✓",
+  digest: "✉",
+  briefing: "☀",
+};
 
 /** Transparent gap kept around the shapes for their shadow and focus ring. */
 const SIDE = 6;
@@ -338,7 +349,7 @@ export class BubbleView {
     // Text that already streamed in is shown at once, not typed again.
     if (speech.kind === "reply" && speech.instant) typer.finish();
     else if (this.live) queueMicrotask(() => typer.start());
-    if (this.live && (speech.kind === "reply" || speech.kind === "confirm") && text.trim()) {
+    if (this.live && (speech.kind === "reply" || speech.kind === "confirm" || speech.kind === "update") && text.trim()) {
       // He opened a site or an app for you: he points at it first, then says it.
       const opened = speech.kind === "reply" && speech.actions.some((a) => a.startsWith("Opened"));
       this.on.talk?.(text.length, opened);
@@ -383,6 +394,7 @@ export class BubbleView {
       scroll.prepend(h("span", { class: "glyph", "aria-hidden": "true" }, "!"));
     }
     if (speech.kind === "voice_setup") scroll.prepend(h("span", { class: "glyph mic-glyph", "aria-hidden": "true" }, svg(ICON_MIC)));
+    if (speech.kind === "update") scroll.prepend(h("span", { class: `glyph update-glyph ${speech.icon}`, "aria-hidden": "true" }, UPDATE_GLYPHS[speech.icon]));
     if (main) balloon.append(scroll);
 
     if (speech.kind === "confirm" && speech.detail) {
@@ -410,6 +422,13 @@ export class BubbleView {
         if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && e.key !== " ") this.input.focus();
       });
       balloon.append(row);
+    }
+    if (speech.kind === "update" && speech.choices.length) {
+      speech.choices.forEach((c, i) => {
+        const b = h("button", { type: "button", class: `choice ${i === 0 ? "yes" : "no"}`, onclick: () => this.on.choose?.(speech.id, c.id) }, c.label);
+        choices.push(b);
+      });
+      balloon.append(h("div", { class: "choices", role: "group" }, ...choices));
     }
     if (speech.kind === "error" && speech.offerSetup) {
       balloon.append(h("div", { class: "choices" }, h("button", { type: "button", class: "choice yes", onclick: () => this.on.openSetup() }, "Fix it")));
@@ -484,6 +503,10 @@ export class BubbleView {
       note.hidden = !text;
       const label = speech.failed ? "Try again" : "Download";
       if (offer.firstElementChild && offer.firstElementChild.textContent !== label) offer.firstElementChild.textContent = label;
+      return;
+    }
+    if (speech.kind === "update") {
+      for (const b of s.choices) b.disabled = speech.answered;
       return;
     }
     if (speech.kind !== "confirm") return;

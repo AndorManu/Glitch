@@ -106,6 +106,8 @@ pub struct Agent {
     screen_enabled: bool,
     /// The user allowed `take_note` once; no more asking.
     notes_trusted: bool,
+    /// Saved reminders are on (the `set_reminder` tool is offered).
+    reminders_enabled: bool,
     progress: Option<ProgressSink>,
     /// Per user message: steps shown, screenshots taken, private data seen.
     steps: usize,
@@ -118,6 +120,11 @@ pub struct Agent {
     /// Side effects already done (or asked for) this message, see `side_effect_key`.
     done_this_turn: Vec<String>,
 }
+
+/// Added to the system prompt while saved reminders are on.
+pub const REMINDER_PROMPT: &str = "\n\nReminders: for \"remind me to X at 5\", \"tomorrow at 9\" or a weekday, call \
+    set_reminder with the user's own words for the time in \"when\" (don't work out the date yourself). For \"in N \
+    minutes\" use set_timer. Then confirm in one short sentence with the time from the result.";
 
 /// How many recent user messages a `remember` call may be based on.
 const REMEMBER_LOOKBACK: usize = 3;
@@ -320,6 +327,7 @@ impl Agent {
             remembered_this_turn: false,
             screen_enabled: true,
             notes_trusted: false,
+            reminders_enabled: false,
             progress: None,
             steps: 0,
             looks: 0,
@@ -345,6 +353,11 @@ impl Agent {
 
     pub fn set_notes_trusted(&mut self, trusted: bool) {
         self.notes_trusted = trusted;
+    }
+
+    /// Saved reminders ("Update me"): offers the `set_reminder` tool.
+    pub fn set_reminders_enabled(&mut self, on: bool) {
+        self.reminders_enabled = on;
     }
 
     /// True once the user allowed a note (the shell saves this setting).
@@ -684,7 +697,10 @@ impl Agent {
     }
 
     fn full_system_prompt(&self) -> String {
-        let base = system_prompt(self.os, self.screen_enabled);
+        let mut base = system_prompt(self.os, self.screen_enabled);
+        if self.reminders_enabled {
+            base.push_str(REMINDER_PROMPT);
+        }
         let today = today_line();
         match &self.memory {
             None => format!("{base}\n\n{today}"),
@@ -780,7 +796,11 @@ impl Agent {
             let mut messages = Vec::with_capacity(self.history.len() + 1);
             messages.push(Message::system(self.full_system_prompt()));
             messages.extend(self.history.iter().cloned());
-            let specs = tools::specs(tools::Offer { memory: self.memory.is_some(), screen: self.screen_enabled });
+            let specs = tools::specs(tools::Offer {
+                memory: self.memory.is_some(),
+                screen: self.screen_enabled,
+                reminders: self.reminders_enabled,
+            });
             let request = ChatRequest { model, messages: &messages, tools: &specs };
             self.emit(Progress::Thinking);
             let mut reply = match &self.progress {
@@ -885,6 +905,7 @@ fn side_effect_key(a: &Action) -> Option<String> {
         Action::TakeNote { text, .. } => format!("note {text}"),
         // Two timers for the same moment in one message are a repeat.
         Action::SetTimer { seconds, .. } => format!("timer {seconds}"),
+        Action::SetReminder { due, .. } => format!("reminder {due}"),
         _ => return None,
     })
 }

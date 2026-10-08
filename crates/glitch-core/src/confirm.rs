@@ -43,7 +43,9 @@ pub fn approval_for(action: &Action) -> Approval {
         | Action::NowPlaying
         // In-app only: the bubble pops up later.
         | Action::SetTimer { .. }
-        | Action::Focus { .. } => Approval::Automatic,
+        | Action::Focus { .. }
+        // Glitch's own reminders file; listed (and deletable) in Settings.
+        | Action::SetReminder { .. } => Approval::Automatic,
         // Glitch's own notes file: asked the first time, then trusted.
         Action::TakeNote { trusted: true, .. } => Approval::Automatic,
         Action::TakeNote { trusted: false, .. }
@@ -75,6 +77,7 @@ pub fn approval_in_turn(action: &Action, outside_content: bool) -> Approval {
             | Action::Focus { .. }
             // "Forget everything about the user" on a web page.
             | Action::Forget { .. }
+            | Action::SetReminder { .. }
     );
     if outside_content && side_effect {
         Approval::AskUser

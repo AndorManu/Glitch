@@ -26,6 +26,13 @@
     "allow-voice-download-model",
     "allow-voice-status",
     "allow-update-context-settings",
-    "allow-focus-start"
+    "allow-focus-start",
+    "allow-update-me-status",
+    "allow-update-me-set",
+    "allow-update-me-test",
+    "allow-claude-connect",
+    "allow-claude-disconnect",
+    "allow-reminder-delete",
+    "allow-location-search"
   ]
 }

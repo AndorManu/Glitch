@@ -22,6 +22,10 @@
     "allow-voice-start",
     "allow-voice-status",
     "allow-voice-stop",
-    "allow-warm-model"
+    "allow-warm-model",
+    "allow-briefing-today",
+    "allow-update-choose",
+    "allow-update-pending",
+    "allow-update-seen"
   ]
 }
