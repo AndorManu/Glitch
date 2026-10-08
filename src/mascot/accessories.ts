@@ -150,7 +150,7 @@ export class Accessories implements AccessoryLayer {
   }
 
   draw(f: AccessoryFrame): void {
-    const { ctx, dpr } = f;
+    const { ctx } = f;
     if (!f.hidden) {
       // The frame's art grid: art px -> window CSS px.
       const art: Mat = mul(f.css, [f.w / ART_W, 0, 0, f.h / ART_H, -f.w / 2, -f.h]);

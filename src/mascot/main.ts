@@ -24,6 +24,8 @@ import { type CountdownLabel, ContextReactor, debugReaction } from "./context";
 import type { AnimationName } from "./animations";
 import { Creature, type Host } from "./creature";
 import { WIN, type Vec } from "./physics";
+import type { Play } from "./play/games";
+import { initPlay } from "./play/index";
 import { Renderer } from "./render";
 
 const win = getCurrentWindow();
@@ -87,6 +89,7 @@ const host: Host = {
 
 let creature: Creature | null = null;
 let reactor: ContextReactor | null = null;
+let playGames: Play | null = null;
 
 /** The tiny focus countdown above his head (shown while hovering him). */
 function countdownLabel(): CountdownLabel {
@@ -174,6 +177,9 @@ async function main(): Promise<void> {
   } catch (e) {
     console.error("could not load settings", e);
   }
+  // Games, play and growth: hats, mood, fetch, hide and seek, eating (play/).
+  const { play } = await initPlay(c, renderer, () => Promise.resolve(host.cursor()), settings);
+  playGames = play;
   const pos = await win.outerPosition().catch(() => ({ x: 0, y: 0 }));
   await c.start({ x: pos.x, y: pos.y });
 
@@ -229,6 +235,11 @@ if (import.meta.env.DEV || import.meta.env.TAURI_ENV_DEBUG === "true") {
     },
     get reactor() {
       return reactor;
+    },
+    /** Games: "play:fetch", "play:hide", "play:stop". */
+    game: (name: string) => playGames?.action(name) ?? false,
+    get games() {
+      return playGames;
     },
     get animation(): AnimationName | undefined {
       return creature?.animation;
