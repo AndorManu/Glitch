@@ -13,7 +13,7 @@
 //! * `capture`: microphone (cpal), Windows + macOS
 //! * `session`: one command from mic to text (tested with a fake mic)
 //! * `stt`: whisper model loading/unloading and transcription
-//! * `download`: speech-model download (resume, size + SHA-1 check)
+//! * `download`: speech-model download (resume, size + SHA-256 check)
 //! * `hotkey`: the global push-to-talk shortcut
 //! * `wake`: the optional "Hey Glitch" wake word (off by default)
 //! * `tts`: Glitch's own read-aloud voice (optional Piper download)

@@ -5,9 +5,9 @@ import { api, asUiError, CHAT_CLEARED_EVENT, type PanelView, type Settings, type
 import { drawAvatar } from "./avatar";
 import { h } from "./dom";
 import { onTtsDownload, onWakeStatus } from "./features/voice-extra";
+import { FEATURES } from "./features";
 import { renderMemory } from "./memory";
 import { formatGb, layout, ollamaSummary, prettyModelName, SetupView, sameModel } from "./setup";
-import { FEATURES } from "./features";
 import { busyButton, enterView, loading, settingsKey, toggleSwitch } from "./ui";
 import { onVoiceDownload, renderVoice } from "./voice";
 

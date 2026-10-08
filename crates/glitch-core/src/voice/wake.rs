@@ -286,8 +286,7 @@ fn name_span(text: &str) -> Option<(usize, usize)> {
 /// "Hey ... Glitch"): the next utterance may finish the phrase.
 pub fn is_greeting_only(text: &str) -> bool {
     let ws = words(text);
-    let rest: Vec<String> =
-        ws.iter().map(|w| lower(text, *w)).skip_while(|w| FILLERS.contains(&w.as_str())).collect();
+    let rest: Vec<String> = ws.iter().map(|w| lower(text, *w)).skip_while(|w| FILLERS.contains(&w.as_str())).collect();
     rest.len() == 1 && GREETINGS.contains(&rest[0].as_str())
 }
 
@@ -296,9 +295,12 @@ pub fn is_wake(text: &str) -> bool {
     wake_end(text).is_some()
 }
 
-/// Whisper must be at least this sure of every token of the wake phrase.
-/// Calibrated on synthetic speech (see dev/wake-check.mjs).
-pub const MIN_CONFIDENCE: f32 = 0.5;
+/// Whisper must be at least this sure of every token of the name.
+/// Calibrated with dev/wake-check.mjs (base model, no prompt): real "Hey
+/// Glitch"es score 0.36-0.98 on their weakest name token; a mumble that
+/// whisper half-guesses as "Glitch" scores below 0.3. None of the 5 minutes
+/// of other speech and music produced the phrase at all.
+pub const MIN_CONFIDENCE: f32 = 0.3;
 
 /// How sure whisper was of the name: the lowest probability of the tokens
 /// that spell "Glitch" (the greeting doesn't count: "OK" vs "Okay" is a
@@ -522,8 +524,8 @@ mod tests {
         let ok = toks(&[(" OK", 0.3), (" Gl", 0.9), ("itch", 0.95), (".", 0.9)]);
         assert_eq!(wake_confidence(&ok), Some(0.9), "how whisper spells the greeting doesn't matter");
         assert!(is_confident_wake(&clear));
-        let mumbled = toks(&[(" Hey", 0.9), (" Gl", 0.3), ("itch", 0.6), (".", 0.9)]);
-        assert_eq!(wake_confidence(&mumbled), Some(0.3));
+        let mumbled = toks(&[(" Hey", 0.9), (" Gl", 0.2), ("itch", 0.6), (".", 0.9)]);
+        assert_eq!(wake_confidence(&mumbled), Some(0.2));
         assert!(is_greeting_only(" Hey.") && is_greeting_only("Oh, okay!") && !is_greeting_only("Hey Glitch"));
         assert!(!is_greeting_only("Hey you") && !is_greeting_only("") && !is_greeting_only("Glitch"));
         assert!(!is_confident_wake(&mumbled));

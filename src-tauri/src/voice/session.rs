@@ -547,6 +547,6 @@ mod tests {
         let m = j(VoiceEvent::NeedsModel { model: *glitch_core::voice::models::find("base").unwrap() });
         assert_eq!(m["phase"], "needs_model");
         assert_eq!(m["model"]["id"], "base");
-        assert!(m["model"].get("sha1").is_none());
+        assert!(m["model"].get("sha256").is_none());
     }
 }

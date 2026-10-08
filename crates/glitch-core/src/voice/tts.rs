@@ -6,13 +6,14 @@
 //! instead of a newsreader. Nothing leaves the computer.
 //!
 //! Downloaded on first use (opt-in, Settings → Features), like the speech
-//! models: resumable, size- and SHA-1-checked. The voice is "Joe" (CC0
+//! models: resumable, size- and SHA-256-checked. The voice is "Joe" (CC0
 //! dataset, so no licence strings attached).
 
 use serde::Serialize;
 
-/// One file to download. SHA-1s were computed from the files at these URLs
-/// (pinned release and Hugging Face revision paths that don't change).
+/// One file to download. SHA-256s were computed from the files at these URLs
+/// (a pinned release, and Hugging Face paths of a voice that doesn't change);
+/// a finished download must match exactly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Asset {
     pub id: &'static str,
@@ -21,7 +22,7 @@ pub struct Asset {
     pub file: &'static str,
     pub size_bytes: u64,
     #[serde(skip)]
-    pub sha1: &'static str,
+    pub sha256: &'static str,
 }
 
 /// The Piper program for Windows x64 (piper.exe + onnxruntime + espeak-ng
@@ -31,7 +32,7 @@ pub const ENGINE_WINDOWS: Asset = Asset {
     url: "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip",
     file: "piper_windows_amd64.zip",
     size_bytes: 22_477_236,
-    sha1: "48b7ae8a46c07124aacbd112a1ba0ed4a913e3f0",
+    sha256: "f3c58906402b24f3a96d92145f58acba6d86c9b5db896d207f78dc80811efcea",
 };
 
 pub const VOICE: Asset = Asset {
@@ -39,7 +40,7 @@ pub const VOICE: Asset = Asset {
     url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/joe/medium/en_US-joe-medium.onnx",
     file: "en_US-joe-medium.onnx",
     size_bytes: 63_201_294,
-    sha1: "1c55b66bb6d167b4c11e2fe0a5b912f14cea6f99",
+    sha256: "58afce0321b8d9c46d7cdf9c16500cc55a793b4220212dba6b70fb788b3baf06",
 };
 
 /// Piper looks for `<model>.json` next to the model.
@@ -48,7 +49,7 @@ pub const VOICE_CONFIG: Asset = Asset {
     url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/joe/medium/en_US-joe-medium.onnx.json",
     file: "en_US-joe-medium.onnx.json",
     size_bytes: 4_794,
-    sha1: "6490a30eabcee7ef78c988293d0e9d8bcedf3947",
+    sha256: "3d6d5410b3795cb1950595247ef8f06190719e6fdbfa3a2356d8ec368e1aad33",
 };
 
 /// Everything the character voice needs, in download order. `None` where
@@ -157,8 +158,8 @@ mod tests {
     #[test]
     fn asset_table() {
         for a in [ENGINE_WINDOWS, VOICE, VOICE_CONFIG] {
-            assert_eq!(a.sha1.len(), 40);
-            assert!(a.sha1.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+            assert_eq!(a.sha256.len(), 64);
+            assert!(a.sha256.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
             assert!(a.url.starts_with("https://") && a.url.ends_with(a.file), "{}", a.id);
         }
         assert_eq!(format!("{}.json", VOICE.file), VOICE_CONFIG.file);

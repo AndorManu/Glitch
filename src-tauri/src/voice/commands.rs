@@ -286,7 +286,7 @@ pub async fn voice_download_model(app: AppHandle, model: Option<String>) -> Resu
         &download::client(),
         &url,
         &dest,
-        &Expected { sha1: m.sha1, size: m.size_bytes },
+        &Expected { sha256: m.sha256, size: m.size_bytes },
         &cancel,
         |done, total| {
             // At most 5 updates a second (plus the last one).

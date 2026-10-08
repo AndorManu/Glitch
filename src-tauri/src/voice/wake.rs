@@ -334,6 +334,17 @@ fn spawn(app: &AppHandle) -> Result<Listener, MicError> {
     }
 }
 
+/// The model the wake check uses: "base" if it's downloaded (measured: tiny
+/// without a prompt hears "Hey Glitch" in only ~20% of clips, base in ~95%),
+/// else the one voice commands use.
+fn wake_model(app: &AppHandle) -> &'static glitch_core::voice::models::SpeechModel {
+    let vs = app.state::<VoiceState>();
+    match glitch_core::voice::models::find("base") {
+        Some(base) if vs.is_downloaded(base) => base,
+        _ => super::current_model(app),
+    }
+}
+
 /// Whether the wake check should ignore the microphone right now.
 fn paused(vs: &VoiceState) -> bool {
     vs.phase_name() != "idle" || vs.speaking.load(Ordering::SeqCst) || Instant::now() < *vs.quiet_until.lock().unwrap()
@@ -379,7 +390,7 @@ fn run(
             was_paused = false;
         }
         let Some(check) = seg.push(&chunk) else { continue };
-        let model_path = vs.model_path(super::current_model(app));
+        let model_path = vs.model_path(wake_model(app));
         let t = Instant::now();
         let result = vs.stt.get(&model_path, stt::load).and_then(|m| {
             let r = detector.check(&m, &check.audio, tap.rate);

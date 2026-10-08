@@ -124,6 +124,12 @@ pub trait Desktop: Send + Sync {
     fn focus(&self, _minutes: Option<u32>) -> DesktopResult<u32> {
         Err("focus mode isn't available here".into())
     }
+    /// Save a reminder for `due` (unix seconds) that survives restarts
+    /// ("Update me" reminders; see `crate::update_me::reminders`).
+    fn add_reminder(&self, due: i64, text: &str) -> DesktopResult<()> {
+        let _ = (due, text);
+        Err("saved reminders are switched off (Settings > Features)".into())
+    }
 }
 
 /// Documents/Glitch notes/notes.md
@@ -174,6 +180,7 @@ pub(crate) mod fake {
         pub redact: Vec<PixelRect>,
         pub captures: Mutex<Vec<CaptureTarget>>,
         pub timers: Mutex<Vec<(Duration, String)>>,
+        pub reminders: Mutex<Vec<(i64, String)>>,
         pub notes: Option<PathBuf>,
         pub playing: Option<NowPlaying>,
         pub focus: Mutex<Vec<Option<u32>>>,
@@ -217,6 +224,10 @@ pub(crate) mod fake {
         fn focus(&self, minutes: Option<u32>) -> DesktopResult<u32> {
             self.focus.lock().unwrap().push(minutes);
             Ok(minutes.unwrap_or(25))
+        }
+        fn add_reminder(&self, due: i64, text: &str) -> DesktopResult<()> {
+            self.reminders.lock().unwrap().push((due, text.into()));
+            Ok(())
         }
     }
 }

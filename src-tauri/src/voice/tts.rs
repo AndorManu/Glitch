@@ -426,7 +426,7 @@ pub async fn download_all(app: &AppHandle) -> Result<(), DownloadError> {
             &client,
             &url(&a),
             &dest,
-            &Expected { sha1: a.sha1, size: a.size_bytes },
+            &Expected { sha256: a.sha256, size: a.size_bytes },
             &cancel,
             |done, _| {
                 if last.elapsed() >= Duration::from_millis(200) {
