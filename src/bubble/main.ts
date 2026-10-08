@@ -11,6 +11,7 @@ import {
   asUiError,
   CHAT_CLEARED_EVENT,
   MASCOT_TALK_EVENT,
+  playApi,
   voiceApi,
   type AgentProgress,
   type BubbleLayout,
@@ -272,8 +273,24 @@ function onShown(): void {
     dispatch({ type: "shown", awayMs });
     view.enter();
     keepWarm(true);
+    personalHello();
   }
   view.focus();
+}
+
+/**
+ * Personality growth: the first time the chat opens each day he may say
+ * hello by name and ask about one of your projects (Rust decides, at most
+ * once a day; null = keep the usual greeting). Never over a conversation.
+ */
+function personalHello(): void {
+  void playApi.greeting().then(
+    (text) => {
+      if (!text || state.busy || (state.speech && state.speech.kind !== "reply")) return;
+      dispatch({ type: "step", step: { type: "reply", text, actions: [] } });
+    },
+    () => {},
+  );
 }
 
 function onHidden(): void {
