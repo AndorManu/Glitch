@@ -126,6 +126,8 @@ const MAX_THROW = 3800;
 const CORNER_MS = 380;
 /** Floating down (tail copter / glide): fall speed, CSS px / s. */
 export const FLOAT_FALL = 130;
+/** Landing back on the window he just fell off within this long: no rest pose yet (it may slide away again). */
+export const RELAND_MS = 250;
 /** Clicks closer together than this count as rapid clicking (annoy more). */
 const RAPID_CLICK_MS = 700;
 /** A click reaction is never restarted within this long (a flinch instead). */
@@ -436,6 +438,8 @@ export class Creature {
   // High: he bites the cursor, turns his back on you and sulks for a few
   // seconds (clicks get no reaction), then calms down with a little hop.
 
+  /** The window he last fell off, and until when landing back on it doesn't count yet (see landed). */
+  private lostLedge: { id: number; until: number } | null = null;
   private lastClickAt = -Infinity;
   /** When the last click reaction started (debounce). */
   private reactAt = -Infinity;
@@ -634,6 +638,7 @@ export class Creature {
     this.event(`ledge-gone:${why}`);
     this.asleep = false;
     const id = isTop(this.surface) ? this.surface.ledge.id : null;
+    if (id !== null) this.lostLedge = { id, until: this.now + RELAND_MS };
     // His snapshot of the world still has that window where it was: update it
     // (or drop it) so he doesn't land straight back on a ghost.
     if (this.world && id !== null) {
@@ -1311,6 +1316,20 @@ export class Creature {
     }
     // Thrown, dropped, or the window under him vanished.
     this.plan = null;
+    const lost = this.lostLedge;
+    if (lost && this.now < lost.until && isTop(c.surface) && c.surface.ledge.id === lost.id) {
+      // Caught again by the window he just slipped off (it's being yanked about): it may well
+      // slide away again at once, so no flash of the rest pose between two falls. Stay in
+      // the fall pose a moment and land properly only if it holds still.
+      this.event("reland");
+      this.wait(RELAND_MS, () => {
+        if (this.mode !== "stand") return;
+        this.animator.play(this.restAnim());
+        this.animator.interject((_, base) => landKeys(c.speed, base));
+        this.scheduleBrain(2500 + this.rand() * 3000);
+      });
+      return;
+    }
     if (f.canSplat && c.speed > PHYS.splat) {
       this.animator.play("splat"); // -> dizzy -> idle
       this.excitedUntil = this.now + 60_000;
