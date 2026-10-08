@@ -1,0 +1,194 @@
+name: Release
+
+# Builds a release when a version tag is pushed (git tag v0.2.0 && git push origin v0.2.0):
+# Windows NSIS installer and macOS universal .app/.dmg, updater artifacts
+# signed with the Tauri updater key, everything uploaded to a DRAFT GitHub
+# release together with latest.json. Nothing reaches users until the owner
+# presses "Publish release" (the updater reads releases/latest, and drafts
+# are never "latest").
+#
+# Secrets (Settings > Secrets and variables > Actions), see docs/RELEASING.md:
+#   required  TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+#   optional  Windows code signing, one of:
+#               AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET,
+#               AZURE_SIGNING_ENDPOINT, AZURE_SIGNING_ACCOUNT, AZURE_SIGNING_PROFILE (Azure Trusted Signing)
+#               WINDOWS_CERTIFICATE (base64 .pfx), WINDOWS_CERTIFICATE_PASSWORD (OV/EV file cert)
+#   optional  macOS signing + notarization:
+#               APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
+#               APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
+# Without the optional ones the builds are unsigned (SmartScreen / Gatekeeper
+# warnings) but still work and still update safely (the updater checks its
+# own signature, not the OS one).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v0.2.0"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.release.outputs.id }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+      - name: Tag matches the app version
+        run: |
+          v=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          p=$(node -p "require('./package.json').version")
+          c=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          echo "tag $TAG, tauri.conf $v, package.json $p, Cargo.toml $c"
+          if [ "$TAG" != "v$v" ] || [ "$p" != "$v" ] || [ "$c" != "$v" ]; then
+            echo "::error::Versions don't match the tag. Run: node scripts/bump-version.mjs ${TAG#v}"
+            exit 1
+          fi
+      - name: Updater signing key is set
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is missing. See docs/RELEASING.md, step 1."
+            exit 1
+          fi
+      - name: Release notes from CHANGELOG.md
+        run: |
+          v="${TAG#v}"
+          awk -v v="$v" '
+            $0 ~ "^## \\[?" v "\\]?" { on = 1; next }
+            on && /^## / { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then echo "Glitch $v" > notes.md; fi
+          cat notes.md
+      - name: Create the draft release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --draft --verify-tag --title "Glitch ${TAG#v}" --notes-file notes.md
+          fi
+          id=$(gh api "repos/${{ github.repository }}/releases" --paginate --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n1)
+          if [ -z "$id" ]; then echo "::error::release not found"; exit 1; fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: draft
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            args: --bundles nsis
+          - os: macos-latest
+            args: --target universal-apple-darwin --bundles app,dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+      - run: npm test
+
+      # Build-time config: updater artifacts on (needs the signing key, so it
+      # is off in tauri.conf.json for everyday builds), plus Windows code
+      # signing when its secrets exist.
+      - name: Release config (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $conf = @{ bundle = @{ createUpdaterArtifacts = $true } }
+          if ($env:AZURE_SIGNING_ENDPOINT -and $env:AZURE_SIGNING_ACCOUNT -and $env:AZURE_SIGNING_PROFILE -and $env:AZURE_CLIENT_ID) {
+            Write-Host "Windows signing: Azure Trusted Signing"
+            cargo install trusted-signing-cli --locked
+            $conf.bundle.windows = @{ signCommand = "trusted-signing-cli -e $env:AZURE_SIGNING_ENDPOINT -a $env:AZURE_SIGNING_ACCOUNT -c $env:AZURE_SIGNING_PROFILE -d Glitch %1" }
+          } elseif ($env:WINDOWS_CERTIFICATE) {
+            Write-Host "Windows signing: certificate file"
+            $pfx = Join-Path $env:RUNNER_TEMP "cert.pfx"
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+            $pw = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
+            $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $pw
+            Remove-Item $pfx
+            $conf.bundle.windows = @{ certificateThumbprint = $cert.Thumbprint; digestAlgorithm = "sha256"; timestampUrl = "http://timestamp.digicert.com" }
+          } else {
+            Write-Host "::warning::No Windows code-signing secrets: the installer is unsigned (SmartScreen will warn). See docs/RELEASING.md."
+          }
+          $conf | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 release.conf.json
+          Get-Content release.conf.json
+
+      - name: Release config (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          echo '{"bundle":{"createUpdaterArtifacts":true}}' > release.conf.json
+          # Tauri signs/notarizes when these variables exist, even if empty:
+          # pass on only the ones that are set.
+          if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "macOS signing: $APPLE_SIGNING_IDENTITY"
+            for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY; do
+              { echo "$v<<__END__"; printenv "$v"; echo "__END__"; } >> "$GITHUB_ENV"
+            done
+            if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+              echo "macOS notarization: on"
+              for v in APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+                { echo "$v<<__END__"; printenv "$v"; echo "__END__"; } >> "$GITHUB_ENV"
+              done
+            else
+              echo "::warning::No notarization secrets: Gatekeeper will warn on first open."
+            fi
+          else
+            echo "::warning::No macOS signing secrets: the app is unsigned (right-click > Open the first time). See docs/RELEASING.md."
+          fi
+
+      - name: Build, sign updater artifacts, upload to the draft release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        with:
+          releaseId: ${{ needs.draft.outputs.release_id }}
+          # latest.json for the updater; both macOS architectures point at the universal build.
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
+          args: ${{ matrix.args }} --config release.conf.json
