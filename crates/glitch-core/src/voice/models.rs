@@ -1,8 +1,8 @@
 //! Speech-to-text models (whisper.cpp "ggml" files) and which one to use.
 //!
 //! Files are the official ones from the whisper.cpp project on Hugging Face.
-//! SHA-1 checksums are from whisper.cpp's `models/README.md` (a finished
-//! download must match exactly); byte sizes are as listed on Hugging Face and
+//! SHA-256 checksums are the Git LFS object ids of these files on Hugging
+//! Face (a finished download must match exactly); byte sizes are as listed on Hugging Face and
 //! are only used for the UI and a sanity check of the server's answer.
 //! All three are multilingual. To change the choice, edit [`MODELS`].
 
@@ -19,11 +19,11 @@ pub struct SpeechModel {
     pub blurb: &'static str,
     /// File name on the server and on disk.
     pub file: &'static str,
-    /// Download size in bytes (approximate: the SHA-1 is what's checked).
+    /// Download size in bytes (approximate: the SHA-256 is what's checked).
     pub size_bytes: u64,
-    /// Lower-case hex SHA-1 of the file.
+    /// Lower-case hex SHA-256 of the file.
     #[serde(skip)]
-    pub sha1: &'static str,
+    pub sha256: &'static str,
 }
 
 impl SpeechModel {
@@ -40,7 +40,7 @@ pub const MODELS: &[SpeechModel] = &[
         blurb: "Fastest, fine for short commands",
         file: "ggml-tiny.bin",
         size_bytes: 77_691_713,
-        sha1: "bd577a113a864445d4c299885e0cb97d4ba92b5f",
+        sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
     },
     SpeechModel {
         id: "base",
@@ -48,7 +48,7 @@ pub const MODELS: &[SpeechModel] = &[
         blurb: "Good balance (recommended)",
         file: "ggml-base.bin",
         size_bytes: 147_951_465,
-        sha1: "465707469ff3a37a2b9b8d8f89f2f99de7299dac",
+        sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
     },
     SpeechModel {
         id: "small",
@@ -56,7 +56,7 @@ pub const MODELS: &[SpeechModel] = &[
         blurb: "Most accurate, slower and bigger",
         file: "ggml-small.bin",
         size_bytes: 487_601_967,
-        sha1: "55356645c2b361a969dfd0ef2c5a50d530afd8d5",
+        sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
     },
 ];
 
@@ -89,8 +89,9 @@ mod tests {
     #[test]
     fn table_is_sane() {
         for m in MODELS {
-            assert_eq!(m.sha1.len(), 40, "{}", m.id);
-            assert!(m.sha1.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+            // SHA-256, not SHA-1 (review 2026-10-08, L5).
+            assert_eq!(m.sha256.len(), 64, "{}", m.id);
+            assert!(m.sha256.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
             assert_eq!(m.file, format!("ggml-{}.bin", m.id));
         }
         // Same numbers as whisper.cpp's models/README.md.

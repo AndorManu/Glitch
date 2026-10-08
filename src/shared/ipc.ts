@@ -23,6 +23,8 @@ export interface Settings {
   voice?: VoiceSettings;
   /** "He reacts to what you're doing" (see ./context.ts). Missing from old builds: defaults. */
   context?: import("./context").ContextSettings;
+  /** "Update me" features (missing from old builds: defaults). */
+  update_me?: UpdateMeSettings;
 }
 
 export interface MemoryFact {
@@ -396,4 +398,106 @@ export const chaosApi = {
   noteMove: (x: number, y: number) => invoke<boolean>("chaos_note_move", { x, y }),
   noteClose: () => invoke<void>("chaos_note_close"),
   noteIsOpen: () => invoke<boolean>("chaos_note_open_now"),
+};
+
+// -------------------------------------------------------------- update me
+// "Update me" (src-tauri/src/update_me.rs): the local event endpoint, the
+// Claude Code buddy, the notification digest, saved reminders and the daily
+// briefing. The mascot gets "mascot-update" (UpdateAct), the bubble gets
+// "glitch-update" (UpdateSpeech). Outside text is only ever shown.
+
+export interface UpdateLocation {
+  name: string;
+  latitude: number;
+  longitude: number;
+}
+
+export interface UpdateMeSettings {
+  endpoint_enabled: boolean;
+  claude_code_enabled: boolean;
+  notifications_enabled: boolean;
+  notifications_quiet: boolean;
+  notifications_blocklist: string[];
+  reminders_enabled: boolean;
+  briefing_enabled: boolean;
+  location: UpdateLocation | null;
+}
+
+export interface ClaudeCodeStatus {
+  path: string;
+  file_exists: boolean;
+  connected: boolean;
+  outdated: boolean;
+  problem: string | null;
+  /** Exactly what "Connect" adds (pretty JSON). */
+  preview: string;
+  command: string;
+}
+
+export interface DigestGroup {
+  app: string;
+  count: number;
+}
+
+export interface ReminderView {
+  id: number;
+  text: string;
+  /** "today 17:00", "tomorrow 09:00", "Fri 9 Oct 12:00" */
+  when: string;
+}
+
+export type NotificationAccess = "allowed" | "denied" | "unspecified" | "unavailable";
+
+export interface UpdateMeStatus {
+  os: "windows" | "macos" | "linux";
+  settings: UpdateMeSettings;
+  endpoint_port: number | null;
+  endpoint_file: string;
+  claude: ClaudeCodeStatus | null;
+  claude_error: string | null;
+  notifications_access: NotificationAccess;
+  digest: DigestGroup[];
+  reminders: ReminderView[];
+}
+
+export type UpdateMePatch = Partial<Omit<UpdateMeSettings, "location">> & { location?: UpdateLocation; clear_location?: boolean };
+
+export interface UpdateChoice {
+  id: string;
+  label: string;
+}
+
+export type UpdateIcon = "reminder" | "claude" | "event" | "digest" | "briefing";
+
+/** Something Glitch tells the user by himself ("glitch-update"). */
+export interface UpdateSpeech {
+  id: string;
+  text: string;
+  icon: UpdateIcon;
+  choices: UpdateChoice[];
+}
+
+/** The mascot's little act for an update ("mascot-update"). */
+export interface UpdateAct {
+  /** "run", "knock_screen", "hold_sign" (mapped to animations with fallbacks). */
+  steps: string[];
+  sign: string | null;
+  sign_ms: number;
+}
+
+export const updateMeApi = {
+  status: () => invoke<UpdateMeStatus>("update_me_status"),
+  set: (patch: UpdateMePatch) => invoke<UpdateMeStatus>("update_me_set", { patch }),
+  claudeConnect: () => invoke<UpdateMeStatus>("claude_connect"),
+  claudeDisconnect: () => invoke<UpdateMeStatus>("claude_disconnect"),
+  deleteReminder: (id: number) => invoke<UpdateMeStatus>("reminder_delete", { id }),
+  /** An update the bubble may have missed while closed. */
+  pending: () => invoke<UpdateSpeech | null>("update_pending"),
+  seen: (id: string) => invoke<void>("update_seen", { id }),
+  choose: (id: string, choice: string) => invoke<UpdateSpeech | null>("update_choose", { id, choice }),
+  /** The daily briefing, once per day (null otherwise). */
+  briefing: () => invoke<string | null>("briefing_today"),
+  searchLocation: (query: string) => invoke<UpdateLocation[]>("location_search", { query }),
+  /** Sends a test event through the real endpoint. */
+  test: () => invoke<void>("update_me_test"),
 };

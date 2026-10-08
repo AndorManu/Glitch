@@ -672,6 +672,8 @@ mod imp {
     // ------------------------------------------------------------ the user taking over
 
     static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+    /// What stopped Glitch (1 key, 2 mouse button/wheel, 3 mouse moved), for the log.
+    static WHY: AtomicU32 = AtomicU32::new(0);
     static WATCH_THREAD: AtomicU32 = AtomicU32::new(0);
     static ANCHOR_X: AtomicI32 = AtomicI32::new(i32::MIN);
     static ANCHOR_Y: AtomicI32 = AtomicI32::new(i32::MIN);
@@ -687,7 +689,10 @@ mod imp {
             let k = &*(l as *const KBDLLHOOKSTRUCT);
             // Glitch's own SendInput is "injected"; anything else is the user (Esc included).
             if k.flags & (LLKHF_INJECTED | LLKHF_LOWER_IL_INJECTED) == 0 {
-                INTERRUPTED.store(true, Ordering::SeqCst);
+                {
+                    WHY.store(1, Ordering::SeqCst);
+                    INTERRUPTED.store(true, Ordering::SeqCst);
+                }
             }
         }
         CallNextHookEx(std::ptr::null_mut(), code, w, l)
@@ -699,7 +704,8 @@ mod imp {
             if m.flags & (LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED) == 0 {
                 match w as u32 {
                     WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_MOUSEWHEEL => {
-                        INTERRUPTED.store(true, Ordering::SeqCst)
+                        WHY.store(2, Ordering::SeqCst);
+                        INTERRUPTED.store(true, Ordering::SeqCst);
                     }
                     WM_MOUSEMOVE => {
                         let (ax, ay) = (ANCHOR_X.load(Ordering::SeqCst), ANCHOR_Y.load(Ordering::SeqCst));
@@ -707,7 +713,10 @@ mod imp {
                             ANCHOR_X.store(m.pt.x, Ordering::SeqCst);
                             ANCHOR_Y.store(m.pt.y, Ordering::SeqCst);
                         } else if (m.pt.x - ax).abs() > MOUSE_SLACK || (m.pt.y - ay).abs() > MOUSE_SLACK {
-                            INTERRUPTED.store(true, Ordering::SeqCst);
+                            {
+                                WHY.store(3, Ordering::SeqCst);
+                                INTERRUPTED.store(true, Ordering::SeqCst);
+                            }
                         }
                     }
                     _ => {}
@@ -757,7 +766,15 @@ mod imp {
     }
 
     pub fn interrupted() -> bool {
-        INTERRUPTED.load(Ordering::SeqCst)
+        let stop = INTERRUPTED.load(Ordering::SeqCst);
+        if stop {
+            let why = WHY.swap(0, Ordering::SeqCst);
+            if why != 0 {
+                let what = ["", "a key press", "a mouse click or wheel", "the mouse moving"][why as usize];
+                eprintln!("glitch: hands stopped by the user's own input ({what})");
+            }
+        }
+        stop
     }
 
     // ------------------------------------------------------------ UI Automation worker
