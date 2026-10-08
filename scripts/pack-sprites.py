@@ -22,6 +22,10 @@ ROOT = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location("sg", ROOT / "scripts" / "slice-generated.py")
 sg = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sg)
+# Per-frame art fixes from the visual QA (scripts/frame-fixes.py).
+_fx_spec = importlib.util.spec_from_file_location("frame_fixes", Path(__file__).with_name("frame-fixes.py"))
+fx = importlib.util.module_from_spec(_fx_spec)
+_fx_spec.loader.exec_module(fx)
 
 FRAMES = ROOT / "art" / "frames"
 POSES = ROOT / "art" / "puppet" / "src"
@@ -74,6 +78,16 @@ def legacy_frame(i: int) -> np.ndarray:
     a[:, :, 3] = np.where(a[:, :, 3] > 127, 255, 0)
     a = sg.trim(drop_ground_lines(a))
     return sg.place(a, sg.body_x(a, "left"))
+
+
+#: Frames with no glitch eye to glitch: seen from behind, or (pose_laugh) only loose sparks.
+EYELESS = {"turn_to_back3", "turn_to_back4", "turn_to_back5", "pose_back", "pose_laugh", "happy_spin3"}
+
+
+def has_eye(a: np.ndarray) -> bool:
+    """A drawn magenta eye (its square ring is at least ~8 px), not just a couple of sparks."""
+    r, g, b = (a[:, :, i].astype(int) for i in range(3))
+    return int(((a[:, :, 3] > 0) & (r > 150) & (b > 180) & (g < 110)).sum()) >= 8
 
 
 def eye_of(a: np.ndarray) -> tuple[int, int]:
@@ -143,6 +157,19 @@ def shift_x(a: np.ndarray, dx: int) -> np.ndarray:
     return out
 
 
+def shift_y(a: np.ndarray, dy: int) -> np.ndarray:
+    """Shift down by dy rows (up if negative), filling with transparent: no wrap-around
+    (np.roll moved the feet onto the top row: the dash over his head, visual QA S2-1)."""
+    if dy == 0:
+        return a
+    out = np.zeros_like(a)
+    if dy > 0:
+        out[dy:] = a[:-dy]
+    else:
+        out[:dy] = a[-dy:]
+    return out
+
+
 def best_shift(a: np.ndarray, ref: np.ndarray, span: int = 14) -> int:
     ma, mr = body_mask(a), body_mask(ref)
     best, best_iou = 0, -1.0
@@ -177,12 +204,12 @@ def steady(sheet: str, frames: list[np.ndarray]) -> list[np.ndarray]:
             best = -1.0
             mr = body_mask(ref)
             for d in range(-8, 9):
-                m = np.roll(body_mask(g), d, axis=0)
+                m = shift_y(body_mask(g), d)
                 u = (m | mr).sum()
                 iou = (m & mr).sum() / u if u else 0
                 if iou > best + 1e-9:
                     best, dy = iou, d
-            g = np.roll(g, dy, axis=0)
+            g = shift_y(g, dy)
         out.append(g)
     print(f"  steady {sheet}")
     return out
@@ -298,6 +325,7 @@ def main():
         while (FRAMES / f"{sheet}-{i}.png").exists():
             frames.append(np.array(Image.open(FRAMES / f"{sheet}-{i}.png").convert("RGBA")))
             i += 1
+        frames = fx.apply(sheet, frames, by_name.get)
         frames = align(sheet, frames, by_name.get)
         for i, f in enumerate(frames):
             names.append(f"{sheet}{i}")
@@ -313,7 +341,7 @@ def main():
     for k, a in enumerate(imgs):
         x, y = (k % COLS) * sg.CANVAS_W, (k // COLS) * sg.CANVAS_H
         out[y : y + sg.CANVAS_H, x : x + sg.CANVAS_W] = a
-        eyes.append(eye_of(a))
+        eyes.append(None if names[k] in EYELESS or not has_eye(a) else eye_of(a))
         heads.append(head_top(a))
     SHEET.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(out, "RGBA").save(SHEET, optimize=True)
@@ -327,7 +355,7 @@ def main():
         *[f"  {n}: {k}," for k, n in enumerate(names)],
         "};",
         "export const ANIM_EYES: Record<string, [number, number]> = {",
-        *[f"  {n}: [{e[0]}, {e[1]}]," for n, e in zip(names, eyes)],
+        *[f"  {n}: [{e[0]}, {e[1]}]," for n, e in zip(names, eyes) if e is not None],
         "};",
         "// Where a hat sits (art px in the frame): the top of the head between the ears, every frame",
         "// (upright head; upside-down or tumbling frames get a point on the head but no tilt).",
@@ -352,7 +380,7 @@ def main():
     spec = importlib.util.spec_from_file_location("clean_edges", Path(__file__).with_name("clean-edges.py"))
     ce = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(ce)
-    ce.clean(SHEET)
+    ce.clean(SHEET, (sg.CANVAS_W, sg.CANVAS_H))
     display_sheets()
 
 

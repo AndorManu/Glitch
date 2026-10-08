@@ -98,12 +98,14 @@ describe("animations", () => {
     for (const i of Object.values(RACCOON.frames)) expect(i >= 0 && i < 16).toBe(true);
   });
 
-  it("the animation sheet has every old frame name, full cycles, and an eye for each frame", () => {
+  it("the animation sheet has every old frame name, full cycles, and an eye for each frame that shows one", () => {
     for (const name of Object.keys(RACCOON.frames)) expect(GLITCH_ANIM.frames, name).toHaveProperty(name);
     const count = Object.keys(ANIM_INDEX).length;
+    // Seen from behind / hidden behind an edge: no glitch eye to glitch (visual QA S1-7).
+    const eyeless = new Set(["turn_to_back3", "turn_to_back4", "turn_to_back5", "pose_back", "pose_laugh", "happy_spin3", "peek0", "peek1", "hide_peek0", "hide_peek4"]);
     for (const [name, i] of Object.entries(GLITCH_ANIM.frames)) {
       expect(i >= 0 && i < count, name).toBe(true);
-      expect(GLITCH_ANIM.eyes?.[name], name).toBeDefined();
+      if (!eyeless.has(name) && !eyeless.has(Object.keys(ANIM_INDEX)[i])) expect(GLITCH_ANIM.eyes?.[name], name).toBeDefined();
     }
     for (const [cycle, n] of [["walk", 8], ["idle", 8], ["run", 6], ["wave", 8], ["talk", 8], ["jump", 8]] as const) {
       for (let i = 0; i < n; i++) expect(ANIM_INDEX, `${cycle}${i}`).toHaveProperty(`${cycle}${i}`);

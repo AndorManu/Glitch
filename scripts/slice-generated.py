@@ -641,6 +641,9 @@ def process(name: str, cfg: dict, report: dict) -> list[np.ndarray]:
         # (its centre is the turn's pivot), keeping the first frame where body_x put it.
         heads = [head_x(f) for f in frames]
         anchors = [anchors[0] + (hx - heads[0]) for hx in heads]
+    # Single frames nudged sideways (px, + = right) where the drawing runs off the canvas.
+    for i, dx in cfg.get("frame_shift", {}).items():
+        anchors[i] -= dx
     placed = [place(f, ax) for f, ax in zip(frames, anchors)]
     if cfg.get("cursor_clean"):
         placed, grips = clean_cursor(placed, cfg["cursor_clean"] if isinstance(cfg["cursor_clean"], str) else "grip")
@@ -709,6 +712,8 @@ for _name in ["struggle", "cling_cursor", "annoyed", "bite_cursor"]:
 # These are drawn bigger: cell set so the head is as big as in idle0 (measured in the lineup).
 for _name, _cell in {"struggle": 4.7, "bite_cursor": 4.6, "cling_cursor": 5.2, "annoyed": 3.8, "fall_flail": 5.7, "hang_ledge": 5.3, "glide": 4.9, "slide_down": 4.9, "sit_edge_swing": 4.75, "wall_jump": 4.9, "pull_up": 4.2}.items():
     SHEETS[_name]["cell"] = _cell
+# wall_jump4's long tail ran off the right edge (visual QA S1-6).
+SHEETS["wall_jump"]["frame_shift"] = {4: -4}
 # The stretch is 8 side-on frames, three pairs touching (auto-splitting can't tell).
 SHEETS["stretch"].update({"n": 8, "target": 54})
 SHEETS["sit_idle_look"]["target"] = 47

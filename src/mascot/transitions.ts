@@ -69,7 +69,9 @@ function buildEdges(): Partial<Record<Edge, Variant[]>> {
   add("front>back", "turn_to_back", 1, () => clip("turn_to_back", 85, { ease: 1 }), ["turn_to_back"]);
   add("back>front", "turn_from_back", 1, () => clip("turn_to_back", 85, { ease: 1, reverse: true }), ["turn_to_back"]);
   // Lying down to sleep / getting up.
-  add("front>curled", "lie_down", 3, () => clip("lie_down", 120, { ease: 2 }), ["lie_down"]);
+  // lie_down3 is drawn from behind (he turns round to curl up): held 220 ms so it reads as the turn, not a flash.
+  const lieDown = (keys: Keyframe[]) => keys.map((k) => (k.frame === "lie_down3" ? { ...k, ms: 220 } : k));
+  add("front>curled", "lie_down", 3, () => lieDown(clip("lie_down", 120, { ease: 2 })), ["lie_down"]);
   add("front>curled", "yawn_down", 1, () => clip("wake", 130, { reverse: true, ease: 2 }), ["wake"]);
   add("curled>front", "get_up", 2, () => clip("get_up", 110, { ease: 2 }), ["get_up"]);
   add("curled>front", "wake", 2, () => clip("wake", 120, { ease: 2 }), ["wake"]);
@@ -78,7 +80,7 @@ function buildEdges(): Partial<Record<Edge, Variant[]>> {
   add("wall>side", "off_wall", 1, () => [key("jump7", 120), key("jump7", 80)], ["jump"]);
   add("side>wall", "onto_wall", 1, () => [key("jump1", 90)], ["jump"]);
   // Sitting <-> lying down, directly.
-  add("sit>curled", "sit_to_sleep", 1, () => clip("lie_down", 120, { ease: 2, pick: [3, 4, 5, 6, 7] }), ["lie_down"]);
+  add("sit>curled", "sit_to_sleep", 1, () => lieDown(clip("lie_down", 120, { ease: 2, pick: [3, 4, 5, 6, 7] })), ["lie_down"]);
   return E;
 }
 
