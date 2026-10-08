@@ -384,12 +384,13 @@ const CURSOR_IN_PAW = (dy: number): Omit<Keyframe, "frame" | "ms"> => ({ props: 
 /** Cursor carried at the snout of the walk frames (snout ~ art (73, 63)); dy follows the body bob. */
 const CURSOR_IN_MOUTH: Extra = (dy) => ({ props: [{ name: "cursor", x: 40, y: -46 + dy, rot: 35 }] });
 
-function grabCursorKeys(rand: () => number): Keyframe[] {
+function grabCursorKeys(rand: () => number, mem: Memory = {}): Keyframe[] {
   const ground = { name: "cursor" as const, x: 40, y: -22, rot: 0 };
   const lying = { props: [ground] };
   return [
-    // Spot it (surprised), crouch, wiggle...
+    // Spot it (surprised), turn side-on to it, crouch, wiggle...
     k("surprised2", 260, { dx: -16, ...lying }),
+    ...toSide(mem, 60).map((key) => ({ ...key, dx: -16, ...lying })),
     k("jump0", 120, { dx: -16, ...lying }),
     k("jump1", 120, { dx: -16, ...lying }),
     k("jump1", 110, { dx: -15, ...lying }),
@@ -638,9 +639,20 @@ function edgeStandUp(rand: () => number, mem: Memory): Keyframe[] {
   const up = edges()["sit>front"];
   if (!up) return [];
   const last = ((mem.lastClip as Record<string, string>) ??= {});
-  const v = pickVariant(up, rand, last["sit>front"]);
+  // stand_up_paws starts from the crouch the slide ends in (the hop would pop).
+  const v = up.find((x) => x.id === "stand_up_paws") ?? pickVariant(up, rand, last["sit>front"]);
   last["sit>front"] = v.id;
-  return [...slideDy([k("sit_down7", 70), k("sit_down7", 70), k("sit_down7", 70), k("sit_down7", 70), k("sit_down7", 70)], (EDGE_DY * 5) / 6, EDGE_DY / 6), ...v.keys(rand, mem)];
+  return [...edgeSwingBack(mem), ...slideDy([k("sit_down7", 50, { glitch: 0.4, fx: "eye" }), k("sit_down7", 50, { glitch: 0.2 }), k("sit_down7", 70), k("sit_down7", 70), k("sit_down7", 70)], (EDGE_DY * 5) / 6, EDGE_DY / 6), ...v.keys(rand, mem)];
+}
+
+/** Off the edge, first the legs swing back to rest (sit_edge_swing back to frame 0 from where it is). */
+function edgeSwingBack(mem: Memory): Keyframe[] {
+  const m = /^sit_edge_swing(\d)$/.exec(String(mem.fromFrame ?? ""));
+  if (!m) return [];
+  // The swing is a cycle: the short way round to frame 0 (back down, or on through 7).
+  const at = Number(m[1]);
+  const path = at === 0 ? [] : at <= 4 ? Array.from({ length: at }, (_, j) => at - 1 - j) : [...Array.from({ length: 7 - at }, (_, j) => at + 1 + j), 0];
+  return path.map((i) => k(`sit_edge_swing${i}`, 70, { dy: EDGE_DY }));
 }
 
 /** At a window's edge: lean right over it to look down, eye flickering. */
@@ -709,7 +721,9 @@ function buildKeys(rand: () => number): Keyframe[] {
     k("point3", 150, { glitch: 0.5, fx: "eye" }),
     k("point4", 250, { fx: "sparkle", glitch: rand() < 0.5 ? 0.25 : 0 }),
     k("point5", 200, { fx: "sparkle" }),
-    ...cycle("celebrate", [2, 3, 4], 110, { fx: "sparkle" }),
+    // Into the cheer through a glitch key, and all the way down again (5-7 land the hop) before idle.
+    k("celebrate2", 60, { glitch: 0.45, fx: "eye" }),
+    ...cycle("celebrate", [2, 3, 4, 5, 6, 7], 110, { fx: "sparkle" }),
     k("idle0", 200),
   ];
 }

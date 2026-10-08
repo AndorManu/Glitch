@@ -319,6 +319,8 @@ export class Creature {
         this.pose = pose;
         this.poseTick = tick;
         this.dirty = true;
+        // The feet line follows the pose (off a window edge): ease there.
+        if (this.mode === "stand" && this.world && Math.abs(this.k - this.kTarget()) > 1e-3) this.ensureMotion();
         // While the window moves, the motion tick paints (once per tick).
         // (Also while a motion tick runs: it paints at its end.)
         if (this.motionTimer === null && !this.inTick) this.place();
@@ -840,6 +842,9 @@ export class Creature {
     if (this.surface.kind === "platform") return 0.55;
     // Sitting on an edge with his legs over it: the feet line higher, so the legs fit in the window.
     if (this.animator && (this.animator.animation === "sitEdge" || this.animator.animation === "sit_edge_swing")) return 0.2;
+    // Still getting up off the edge (its outro plays under the next animation's name): legs still over it.
+    const p = this.animator?.pose;
+    if (p && p.dy > 0 && (p.frame.startsWith("sit_edge_swing") || p.frame === "sit_down7")) return 0.2;
     return 1;
   }
 
