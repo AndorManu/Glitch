@@ -155,7 +155,8 @@ export class Accessories implements AccessoryLayer {
     if (!f.hidden) {
       // The frame's art grid: art px -> window CSS px.
       const art: Mat = mul(f.css, [f.w / ART_W, 0, 0, f.h / ART_H, -f.w / 2, -f.h]);
-      const fits = f.img.width % ART_W === 0 && f.img.height % ART_H === 0 && f.eye !== null;
+      // The animation sheet at any display scale (1 art px = 1, 1.5 or 3 sheet px).
+      const fits = Math.abs(f.img.width / ART_W - f.img.height / ART_H) < 0.01 && f.eye !== null;
       if (fits && this.eye !== "magenta") this.drawEye(f, art);
       if (fits && this.hat && this.hats) this.drawHat(f, art);
       if (fits && this.carrying) this.drawBall(f, art);
