@@ -335,6 +335,11 @@ function thinkKeys(rand: () => number): Keyframe[] {
   if (rand() < 0.55) {
     const n = 2 + Math.floor(rand() * 3);
     for (let i = 0; i < n; i++) keys.push(...cycle("typing", [0, 1, 2, 3, 4, 5, 6, 7], 220 + rand() * 40));
+    // The laptop glitches in and out of existence (no plain pop): the first and last typing keys glitch
+    // (on the existing keys, so no extra repaints).
+    const first = keys.findIndex((key) => key.frame === "typing0");
+    keys[first] = { ...keys[first], glitch: 0.4, fx: "eye" };
+    keys[keys.length - 1] = { ...keys[keys.length - 1], glitch: 0.4, fx: "eye" };
   }
   return keys;
 }
@@ -896,7 +901,8 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   // The drawn curled-up breathing (sleep0-7), one frame per 2.4 s.
   sleep: { keys: cycle("sleep", [0, 1, 2, 3, 4, 5, 6, 7], 2400, { fx: "zzz" }) },
   wake: { keys: WAKE, once: true },
-  sad: { keys: () => [...sheetOnce("sad", 140, 900)], once: true },
+  // Ends lying flat (sad7): back up the way he went down before standing again.
+  sad: { keys: () => [...sheetOnce("sad", 140, 900), ...cycle("sad", [6, 5, 4, 3, 2, 1, 0], 90)], once: true },
   angry: { keys: () => [...sheetOnce("angry", 90, 500), ...cycle("angry", [5, 6, 7], 90)], once: true },
   scared: { keys: () => sheetOnce("scared", 80, 500), once: true },
   dance: { keys: () => [...cycle("dance", [0, 1, 2, 3, 4, 5, 6, 7], 120, { fx: "sparkle" })] },
@@ -907,7 +913,8 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   glide: { keys: () => clip("glide", 110, { ease: 0 }), bridge: false },
   fall_flail: { keys: (r) => flailKeys(r), bridge: false },
   hang_ledge: { keys: (r) => [...clip("hang_ledge", 160, { ease: 0 }), k("hang_ledge0", 600 + r() * 600)], bridge: false },
-  pull_up: { keys: () => clip("pull_up", 95, { ease: 1, hold: 200 }), once: true, bridge: false },
+  // pull_up4 -> 5 jumps from hanging below the ledge to crouched on top: a glitch key hides the jump.
+  pull_up: { keys: () => clip("pull_up", 95, { ease: 1, hold: 200 }).map((key, i) => (i === 5 ? { ...key, glitch: 0.45, fx: "eye" as const } : key)), once: true, bridge: false },
   slide_down: { keys: () => clip("slide_down", 90, { ease: 0 }), bridge: false },
   sit_edge_swing: { keys: sitEdgeKeys, intro: (r, mem) => edgeSitDown(r, mem), outro: (r, mem) => edgeStandUp(r, mem) },
   // Fishing off a window edge: casts (skipping the first frame, its line encloses
