@@ -35,8 +35,29 @@ def neighbours_any(mask: np.ndarray) -> np.ndarray:
     return p[:-2, 1:-1] | p[2:, 1:-1] | p[1:-1, :-2] | p[1:-1, 2:]
 
 
-def clean(path: Path) -> None:
+def clean(path: Path, cell: tuple[int, int] | None = None) -> None:
+    """Clean a sheet in place; with `cell` = (w, h) each frame cell on its own
+    (a frame's top row must not grow outline from the feet of the frame above)."""
     im = np.array(Image.open(path).convert("RGBA"))
+    if cell:
+        cw, ch = cell
+        peeled = closed = 0
+        for y in range(0, im.shape[0], ch):
+            for x in range(0, im.shape[1], cw):
+                sub, p, c = _clean(im[y : y + ch, x : x + cw])
+                im[y : y + ch, x : x + cw] = sub
+                peeled += p
+                closed += c
+        Image.fromarray(im).save(path)
+        print(f"{path.name}: peeled {peeled} fringe px, closed outline with {closed} px (per {cw}x{ch} cell)")
+        return
+    im, peeled, closed = _clean(im)
+    Image.fromarray(im).save(path)
+    print(f"{path.name}: peeled {peeled} fringe px, closed outline with {closed} px")
+
+
+def _clean(im: np.ndarray) -> tuple[np.ndarray, int, int]:
+    im = im.copy()
     rgb = im[..., :3].astype(int)
     lum = rgb[..., 0] * 0.3 + rgb[..., 1] * 0.59 + rgb[..., 2] * 0.11
     magenta = (rgb[..., 0] > 140) & (rgb[..., 2] > 140) & (rgb[..., 1] < 120)
@@ -58,8 +79,7 @@ def clean(path: Path) -> None:
     im[close, 3] = 255
     im[~(opaque | close), :] = 0
 
-    Image.fromarray(im).save(path)
-    print(f"{path.name}: peeled {before - opaque.sum()} fringe px, closed outline with {close.sum()} px")
+    return im, int(before - opaque.sum()), int(close.sum())
 
 
 if __name__ == "__main__":

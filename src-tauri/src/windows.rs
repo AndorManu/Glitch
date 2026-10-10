@@ -192,6 +192,16 @@ pub fn show_bubble_unfocused(app: &AppHandle) {
     show_bubble_with(app, false);
 }
 
+/// Open the bubble for something Glitch says by himself, without taking the keyboard away. A bubble
+/// window created just now has no page listening yet: wait for it, or the event right after is lost.
+pub async fn show_bubble_for_message(app: &AppHandle) {
+    let fresh = app.get_webview_window(BUBBLE).is_none();
+    show_bubble_unfocused(app);
+    if fresh {
+        tokio::time::sleep(std::time::Duration::from_millis(1800)).await;
+    }
+}
+
 fn show_bubble_with(app: &AppHandle, focus: bool) {
     // The panic button: nothing pops up while Glitch is hidden / paused.
     if crate::pause::is_paused() {
