@@ -3,10 +3,8 @@
 
 import { listen } from "@tauri-apps/api/event";
 import {
-  api,
   asUiError,
   streamApi,
-  type Settings,
   type SourceStatus,
   type StreamEventKind,
   type StreamPatch,
@@ -83,10 +81,8 @@ async function render(root: HTMLElement): Promise<void> {
   let s: StreamSettings;
   let st: StreamStatus;
   try {
-    const all: Settings = await api.getSettings();
-    if (!all.stream_overlay) throw new Error("This build has no stream overlay.");
-    s = all.stream_overlay;
     st = await streamApi.status();
+    s = st.settings;
   } catch (e) {
     root.replaceChildren(h("p", { class: "hint" }, `Couldn’t load the overlay settings: ${asUiError(e).message}`));
     return;
@@ -104,7 +100,7 @@ async function render(root: HTMLElement): Promise<void> {
 
   const parts: (Node | null)[] = [
     toggleSwitch(
-      "Streaming overlay",
+      "Show Glitch on my stream",
       "Show Glitch on your stream as an OBS browser source. Runs only on this computer, nothing goes online.",
       s.enabled,
       (on) => update({ enabled: on }),

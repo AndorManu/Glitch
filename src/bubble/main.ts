@@ -90,7 +90,7 @@ void listen<UpdateStatus>("update-status", (e) =>
 // Found before this window existed (or while it was hidden).
 void updateApi.status().then(
   (st) => {
-    if (st.offer && st.available) dispatch({ type: "update_offer", version: st.available.version });
+    if (st?.offer && st.available) dispatch({ type: "update_offer", version: st.available.version });
   },
   () => {},
 );

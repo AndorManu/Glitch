@@ -435,6 +435,8 @@ export interface StreamStatus {
   viewers: number;
   streamerbot: SourceStatus;
   twitch: SourceStatus;
+  /** The overlay settings, tokens blanked. */
+  settings: StreamSettings;
 }
 
 export type StreamPatch = Partial<Omit<StreamSettings, "view_token" | "write_token">>;

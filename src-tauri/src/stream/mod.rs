@@ -57,6 +57,10 @@ pub struct StreamStatus {
     pub viewers: u64,
     pub streamerbot: SourceStatus,
     pub twitch: SourceStatus,
+    /// The overlay settings for the Settings card, tokens blanked (the panel
+    /// may not read the whole settings file; the URL and bot token are copied
+    /// from Rust).
+    pub settings: StreamSettings,
 }
 
 #[derive(Default)]
@@ -150,6 +154,7 @@ pub fn status(app: &AppHandle) -> StreamStatus {
         viewers: h.viewers.load(Ordering::Relaxed),
         streamerbot,
         twitch,
+        settings: StreamSettings { view_token: String::new(), write_token: String::new(), ..s },
     }
 }
 

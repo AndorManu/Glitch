@@ -4,7 +4,11 @@ import { serverLine, sourceLine } from "./stream";
 import { updateLine } from "./updates";
 
 const off = { state: "off" as const, detail: "" };
-const base: StreamStatus = { enabled: true, running: true, error: null, url: "u", webhook: "w", viewers: 0, streamerbot: off, twitch: off };
+const settings = {
+  enabled: true, port: 7799, view_token: "", write_token: "", mode: "mirror" as const, size: 1, position: "right" as const,
+  react: true, show_chat: true, mirror_chat: false, streamerbot: false, streamerbot_url: "ws://127.0.0.1:8080/", twitch_channel: "",
+};
+const base: StreamStatus = { enabled: true, running: true, error: null, url: "u", webhook: "w", viewers: 0, streamerbot: off, twitch: off, settings };
 
 describe("stream overlay card", () => {
   it("says where the server runs and how many pages watch", () => {

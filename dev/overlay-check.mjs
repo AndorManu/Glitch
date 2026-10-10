@@ -193,7 +193,12 @@ try {
     await mascot.evaluate(() => window.__TAURI_INTERNALS__.invoke("show_panel", { view: "settings" }));
     const panel = await until(() => cdp.contexts().flatMap((c) => c.pages()).find((p) => p.url().includes("panel.html")), 15000);
     record("Settings panel found", !!panel);
+    panel.on("pageerror", (e) => errors.push(`panel: ${e}`));
+    // The card reads its settings through stream_status: tokens never reach the page.
+    const blank = await panel.evaluate(() => window.__TAURI_INTERNALS__.invoke("stream_status").then((st) => st.settings.view_token === "" && st.settings.write_token === ""));
+    record("stream_status hides both tokens", blank);
     await panel.evaluate(() => window.__TAURI_INTERNALS__.invoke("update_stream_settings", { patch: { mode: "walk", size: 1 } }));
+    // The settings page redraws after the change: wait for the card's filled body.
     const card = await until(
       () =>
         panel.evaluate(() => {
@@ -201,19 +206,21 @@ try {
           block?.scrollIntoView({ block: "start" });
           return block?.textContent ?? "";
         }),
-      8000,
+      10000,
     );
-    record("Settings shows the Streaming overlay card", /Streaming overlay/.test(card ?? "") && /Copy OBS URL/.test(card ?? ""));
+    record("Settings shows the Streaming overlay card", /Streaming overlay/.test(card ?? "") && /walking along the bottom/.test(card ?? ""), (card ?? "").slice(0, 80));
     await sleep(400);
     await panel.screenshot({ path: path.join(OUT, "overlay-settings-card.png") });
     await panel.evaluate(() => window.__TAURI_INTERNALS__.invoke("hide_panel"));
     const walking = await until(() => obs.evaluate(() => window.__overlay?.config?.mode === "walk"), 10000);
     record("switching to walk mode reaches the page", !!walking);
+    await sleep(1500); // the page reloads and he lands first
     const p0 = await obs.evaluate(() => window.__overlay.pos);
+    // He rests 5 to 40 s between strolls.
     const moved = await until(async () => {
       const p = await obs.evaluate(() => window.__overlay.pos);
       return Math.abs(p.x - p0.x) > 20 ? p : null;
-    }, 30000);
+    }, 90000);
     const p = await obs.evaluate(() => window.__overlay.pos);
     record("walk: he moves along the bottom", !!moved && p.y >= 720 - 160 - 40, `from ${JSON.stringify(p0)} to ${JSON.stringify(p)}`);
     await obs.screenshot({ path: path.join(OUT, "overlay-walk.png"), omitBackground: true });
