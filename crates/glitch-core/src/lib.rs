@@ -5,8 +5,8 @@
 
 pub mod agent;
 pub mod ai;
-pub mod belly;
 pub mod autoupdate;
+pub mod belly;
 pub mod chaos;
 pub mod confirm;
 pub mod context;

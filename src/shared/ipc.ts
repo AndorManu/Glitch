@@ -511,6 +511,8 @@ export const playApi = {
   belly: () => invoke<{ dir: string | null; items: EatenFile[] }>("belly_list"),
   restore: (id: number) => invoke<string>("belly_restore", { id }),
   chooseBelly: () => invoke<string | null>("belly_choose_folder"),
+};
+
 // ------------------------------------------------------------------ stream
 // The OBS stream overlay (src-tauri/src/stream/). "stream-status" events
 // carry StreamStatus whenever the server or a connection changes.
