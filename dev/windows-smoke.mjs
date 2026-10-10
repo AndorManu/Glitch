@@ -22,8 +22,8 @@
 // Without Ollama (e.g. CI) the chat steps check for a clean
 // "ollama_unreachable" error instead.
 //
-// Your own settings.json / memory.json in %APPDATA%\dev.glitch.companion are
-// moved aside for the run (first-run test) and always put back afterwards.
+// The settings.json / memory.json of the test copy (--identifier, never the real
+// dev.glitch.companion) are moved aside for the run and put back afterwards.
 // Needs Node 22+ (global WebSocket). Exits 1 if any check fails.
 
 import { spawn, execFileSync } from "node:child_process";
@@ -79,7 +79,14 @@ function glitchRunning() {
 
 // ------------------------------------------------------- settings backup
 
-const APPDIR = path.join(process.env.APPDATA ?? "", "dev.glitch.companion");
+// Never the real app's folder: build the copy with its own identifier (see dev/overlay-check.mjs)
+// and pass it with --identifier. Without it this refuses to touch anything.
+const IDENTIFIER = opt("--identifier") ?? "";
+if (!IDENTIFIER || IDENTIFIER === "dev.glitch.companion") {
+  console.error("refusing to move the real app's settings: build a copy with its own identifier and pass --identifier <id> (and --exe)");
+  process.exit(2);
+}
+const APPDIR = path.join(process.env.APPDATA ?? "", IDENTIFIER);
 const OWN_FILES = ["settings.json", "memory.json"];
 const backupDir = path.join(APPDIR, `smoke-backup-${Date.now()}`);
 let backedUp = false;
