@@ -1,12 +1,14 @@
 // The panel window: setup wizard and settings. (Chat lives in the bubble.)
 
 import { emit, listen } from "@tauri-apps/api/event";
-import { api, asUiError, CHAT_CLEARED_EVENT, type PanelView, type Settings, type SetupStatus, type VoiceDownloadEvent } from "../shared/ipc";
+import { api, asUiError, CHAT_CLEARED_EVENT, type PanelView, type Settings, type SetupStatus, type TtsDownloadEvent, type VoiceDownloadEvent } from "../shared/ipc";
 import { drawAvatar } from "./avatar";
 import { h } from "./dom";
+import { onTtsDownload, onWakeStatus } from "./features/voice-extra";
 import { FEATURES } from "./features";
 import { renderMemory } from "./memory";
 import { formatGb, layout, ollamaSummary, prettyModelName, SetupView, sameModel } from "./setup";
+import { renderWardrobe } from "./features/wardrobe";
 import { busyButton, enterView, loading, settingsKey, toggleSwitch } from "./ui";
 import { onVoiceDownload, renderVoice } from "./voice";
 
@@ -169,6 +171,7 @@ async function renderSettings(): Promise<void> {
         clearChatNote,
       ),
       card("Features", ...FEATURES.map((f) => f.render(s))),
+      card("Wardrobe", renderWardrobe(s)),
       card("Voice", voiceBody),
       card("Memory", memoryBody),
       h("p", { class: `info ${ollama.state}` }, h("span", { class: "dot", "aria-hidden": "true" }), h("span", {}, ollama.text)),
@@ -197,6 +200,8 @@ async function main(): Promise<void> {
     if (current === "settings" && settingsKey(e.payload) !== shownKey) void renderSettings();
   });
   await listen<VoiceDownloadEvent>("voice-download", (e) => onVoiceDownload(e.payload));
+  await listen<TtsDownloadEvent>("tts-download", (e) => onTtsDownload(e.payload));
+  await listen("wake", () => onWakeStatus());
   await listen("memory-changed", () => {
     const body = views.settings.querySelector<HTMLElement>(".memory");
     if (current === "settings" && body) void renderMemory(body);

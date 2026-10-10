@@ -569,6 +569,32 @@ button.danger-text.armed:hover:not(:disabled) { background: var(--danger); }
 .context-details .voice-field { margin-top: 0; }
 .context-details input[type="time"] { font: inherit; padding: 4px 6px; border: 2px solid var(--outline); border-radius: 8px; background: var(--surface); color: inherit; }
 
+/* ------------------------------------------- settings: games and wardrobe */
+
+.play-feature .switch-row + .switch-row, .context-feature + .play-feature { margin-top: 10px; }
+.play-feature .switch-row { margin-top: 10px; }
+.belly { margin-top: 4px; }
+.belly code { overflow-wrap: anywhere; }
+.belly .memory-list li { align-items: flex-start; }
+.wardrobe-level { font-weight: 700; margin: 0 0 6px; }
+.wardrobe .bar { margin-bottom: 6px; }
+.wardrobe-group { border: 0; margin: 12px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+.wardrobe-group legend { font-weight: 650; font-size: 12.5px; margin-bottom: 6px; padding: 0; }
+.wardrobe-item {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 6px 4px; border: 2px solid var(--line-soft); border-radius: 10px; cursor: pointer; text-align: center; font-size: 12px;
+}
+.wardrobe-item input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+.wardrobe-item:hover { background: var(--accent-tint); }
+.wardrobe-item:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.wardrobe-item:has(input:focus-visible) { outline: 3px solid var(--ring); outline-offset: 2px; }
+.wardrobe-item.locked { cursor: not-allowed; opacity: 0.55; }
+.wardrobe-item.locked:hover { background: transparent; }
+.hat-preview { width: 56px; height: 48px; image-rendering: pixelated; }
+.hat-none { display: grid; place-items: center; width: 56px; height: 48px; font-size: 22px; color: var(--muted); }
+.eye-swatch { width: 22px; height: 22px; border: 2px solid var(--outline); box-shadow: inset 0 0 0 3px rgba(255, 255, 255, 0.35); }
+.wardrobe-name { font-weight: 600; line-height: 1.2; }
+.wardrobe .switch-row { margin-top: 12px; }
 /* ---------------------------------------------------- settings: features */
 
 .um-feature { margin-top: 14px; padding-top: 12px; border-top: 2px dashed var(--line-soft); }
@@ -595,3 +621,18 @@ button.danger-text.armed:hover:not(:disabled) { background: var(--danger); }
   white-space: pre; user-select: text;
 }
 .um-preview code { overflow-wrap: anywhere; }
+.feature-title { font-weight: 750; font-size: 13px; margin: 16px 0 4px; padding-top: 12px; border-top: 2px dashed var(--line-soft); }
+/* "Listening for Hey Glitch": a live dot, so the open mic is never subtle. */
+.wake-status { margin: 8px 0 0; }
+.wake-armed { color: var(--ok); font-weight: 600; padding-left: 16px; position: relative; }
+.wake-armed::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0.45em;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--ok-soft);
+}

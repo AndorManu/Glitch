@@ -22,7 +22,7 @@ import {
 import { canSend, updateText, type BubbleState, type Speech, type Work } from "./state";
 import { actionChip, breakChunks, centerOn, narrowestFit, tailWithin } from "./text";
 import { Typewriter } from "./typewriter";
-import { micActive, micHint, setupText, type MicState } from "./voice";
+import { ARMED_TITLE, micActive, micHint, setupText, type MicState } from "./voice";
 
 export interface ViewHandlers {
   send(text: string): void;
@@ -253,9 +253,10 @@ export class BubbleView {
   renderMic(mic: MicState, title: string): void {
     const prev = this.mic;
     this.mic = mic;
+    this.micTitle = title;
     const b = this.micButton;
     b.hidden = mic.phase === "hidden";
-    b.title = title;
+    b.title = this.armed ? ARMED_TITLE : title;
     const active = micActive(mic);
     b.disabled = !active && !!this.state?.busy;
     b.setAttribute("aria-pressed", String(mic.phase === "starting" || mic.phase === "listening"));
@@ -269,6 +270,18 @@ export class BubbleView {
       this.input.readOnly = active;
       this.input.setAttribute("aria-hidden", String(active));
     }
+  }
+
+  private armed = false;
+  private micTitle = "";
+
+  /** "Hey Glitch" is armed: the mic button wears a live dot (the microphone is open). */
+  setArmed(on: boolean): void {
+    if (on === this.armed) return;
+    this.armed = on;
+    this.pill.classList.toggle("armed", on);
+    this.micButton.title = on ? ARMED_TITLE : this.micTitle;
+    this.micButton.setAttribute("aria-description", on ? "Listening for “Hey Glitch”" : "");
   }
 
   private bindMic(b: HTMLButtonElement): void {

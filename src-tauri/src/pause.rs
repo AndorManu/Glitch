@@ -186,8 +186,11 @@ fn enter(app: &AppHandle) {
     crate::chaos::close_extras(app);
     crate::hands::hide_banner(app);
     crate::voice::cancel(app);
+    crate::voice::tts::stop(app);
+    crate::play::stop_all(app);
     crate::windows::hide_bubble(app);
     crate::stream::apply(app);
+    crate::voice::wake::sync(app);
     let _ = app.emit("mood", "idle");
     if let Some(w) = app.get_webview_window(MASCOT) {
         let _ = w.hide();
@@ -197,6 +200,7 @@ fn enter(app: &AppHandle) {
 
 fn leave(app: &AppHandle) {
     crate::stream::apply(app);
+    crate::voice::wake::sync(app);
     if let Some(w) = app.get_webview_window(MASCOT) {
         let _ = w.show();
     }

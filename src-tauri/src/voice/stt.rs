@@ -127,6 +127,9 @@ pub struct Model {
     state: Mutex<Option<whisper_rs::WhisperState>>,
     /// tiny has 4 encoder layers, base 6, small 12.
     tiny: bool,
+    /// [`WAKE_PROMPT`] as tokens (tokenized once: whisper-rs leaks a
+    /// string per `set_initial_prompt` call, and the wake check runs often).
+    wake_prompt: Vec<i32>,
 }
 
 pub fn load(path: &Path) -> Result<Model, String> {
@@ -144,7 +147,8 @@ pub fn load(path: &Path) -> Result<Model, String> {
     let mut p = params(silence.len(), Some("en"), tiny);
     p.set_max_tokens(1);
     let _ = state.full(p, &silence);
-    Ok(Model { ctx, state: Mutex::new(Some(state)), tiny })
+    let wake_prompt = ctx.tokenize(&format!(" {WAKE_PROMPT}"), 16).unwrap_or_default();
+    Ok(Model { ctx, state: Mutex::new(Some(state)), tiny, wake_prompt })
 }
 
 const SAMPLE_RATE: usize = glitch_core::voice::SAMPLE_RATE as usize;
@@ -203,6 +207,58 @@ pub fn transcribe(
     language: Option<&str>,
     abort: Arc<AtomicBool>,
 ) -> Result<String, String> {
+    run(model, samples, params(samples.len(), language, model.tiny), abort, |state| {
+        let mut text = String::new();
+        for seg in state.as_iter() {
+            if let Ok(s) = seg.to_str_lossy() {
+                text.push_str(&s);
+            }
+        }
+        text
+    })
+}
+
+/// What the wake-word check primes whisper with (see `transcribe_wake`).
+pub const WAKE_PROMPT: &str = "Hey Glitch.";
+
+/// The wake-word check: is this utterance "hey glitch ..."? English, a
+/// handful of tokens (the name and maybe a word or two after it), and the
+/// name as the prompt so whisper spells it "Glitch" rather than "glitz".
+/// Returns whisper's tokens with their probabilities (special tokens left
+/// out) so the caller can tell a clear "Hey Glitch" from a mumble.
+pub fn transcribe_wake(model: &Model, samples: &[f32], prompt: bool) -> Result<Vec<(String, f32)>, String> {
+    let mut p = params(samples.len(), Some("en"), model.tiny);
+    p.set_max_tokens(WAKE_MAX_TOKENS);
+    if prompt && !model.wake_prompt.is_empty() {
+        p.set_tokens(&model.wake_prompt);
+    }
+    run(model, samples, p, Arc::default(), |state| {
+        let mut out = vec![];
+        for seg in state.as_iter() {
+            for i in 0..seg.n_tokens() {
+                let Some(tok) = seg.get_token(i) else { continue };
+                let Ok(text) = tok.to_str_lossy() else { continue };
+                if text.starts_with("[_") || text.starts_with("<|") {
+                    continue;
+                }
+                out.push((text.into_owned(), tok.token_probability()));
+            }
+        }
+        out
+    })
+}
+
+/// Enough for "Hey Glitch, open YouTube" (~7 tokens); a long sentence is
+/// cut short, which is all the check needs.
+pub const WAKE_MAX_TOKENS: i32 = 8;
+
+fn run<T>(
+    model: &Model,
+    samples: &[f32],
+    mut p: whisper_rs::FullParams,
+    abort: Arc<AtomicBool>,
+    read: impl FnOnce(&whisper_rs::WhisperState) -> T,
+) -> Result<T, String> {
     // One voice command at a time, so the kept state is normally free; if
     // not (or a previous call failed), a fresh one works too, just slower.
     let kept = model.state.lock().unwrap().take();
@@ -210,7 +266,6 @@ pub fn transcribe(
         Some(s) => s,
         None => model.ctx.create_state().map_err(|e| e.to_string())?,
     };
-    let mut p = params(samples.len(), language, model.tiny);
     // Not `set_abort_callback_safe`: in whisper-rs 0.16 its trampoline casts
     // the user data to the wrong type, so whisper.cpp reads garbage, aborts
     // the encoder and every transcription fails with error -6 ("failed to
@@ -227,14 +282,9 @@ pub fn transcribe(
     }
     state.full(p, samples).map_err(|e| e.to_string())?;
     drop(abort);
-    let mut text = String::new();
-    for seg in state.as_iter() {
-        if let Ok(s) = seg.to_str_lossy() {
-            text.push_str(&s);
-        }
-    }
+    let out = read(&state);
     *model.state.lock().unwrap() = Some(state);
-    Ok(text)
+    Ok(out)
 }
 
 #[cfg(test)]

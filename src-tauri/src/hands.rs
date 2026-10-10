@@ -200,6 +200,7 @@ mod banner {
                 .visible(false)
                 .build();
         let Ok(win) = built.map_err(|e| eprintln!("glitch: hands banner failed: {e}")) else { return };
+        crate::windows::hide_from_switcher(&win);
         let _ = win.set_ignore_cursor_events(true);
         if let Ok(Some(m)) = win.primary_monitor() {
             let wa = m.work_area();

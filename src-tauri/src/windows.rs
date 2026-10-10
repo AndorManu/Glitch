@@ -72,8 +72,39 @@ fn emit_chat_visibility(app: &AppHandle) {
 
 /// Put Glitch in the bottom-right corner on start-up. The page shows the
 /// window itself once its first frame is drawn (avoids a blank flash).
+/// Keep one of Glitch's pet windows out of Alt+Tab and the taskbar (the tray icon stays).
+pub fn hide_from_switcher(win: &WebviewWindow) {
+    #[cfg(target_os = "windows")]
+    if let Ok(h) = win.hwnd() {
+        crate::play_native::hide_from_switcher(h.0 as isize);
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = win;
+}
+
+/// The window toolkit puts WS_EX_APPWINDOW back whenever it re-applies a
+/// window's flags (on show, always-on-top...), so the pet windows get the
+/// tool-window style again every couple of seconds. Reading and comparing one
+/// style bit per window is all it costs.
+#[cfg(target_os = "windows")]
+pub fn keep_out_of_switcher(app: &AppHandle) {
+    let app = app.clone();
+    let _ = std::thread::Builder::new().name("glitch-switcher".into()).spawn(move || loop {
+        for label in [MASCOT, BUBBLE, "pawprints", "note", "hands-banner"] {
+            if let Some(w) = app.get_webview_window(label) {
+                hide_from_switcher(&w);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn keep_out_of_switcher(_app: &AppHandle) {}
+
 pub fn place_mascot(app: &AppHandle) {
     let Some(m) = app.get_webview_window(MASCOT) else { return };
+    hide_from_switcher(&m);
     let (Some(area), Ok(scale)) = (work_area(&m), m.scale_factor()) else { return };
     // Not `outer_size()`: a window that hasn't been shown yet may report 0x0.
     let (w, h) = ((MASCOT_W * scale).round() as i32, (MASCOT_H * scale).round() as i32);
@@ -122,6 +153,7 @@ fn create_bubble(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .accept_first_mouse(true)
         .visible(false)
         .build()?;
+    hide_from_switcher(&bubble);
     let handle = app.clone();
     bubble.on_window_event(move |e| {
         if let WindowEvent::CloseRequested { api, .. } = e {

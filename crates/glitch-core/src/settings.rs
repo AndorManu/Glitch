@@ -35,6 +35,8 @@ pub struct Settings {
     pub notes_trusted: bool,
     /// Voice commands (push-to-talk). Missing in older files → defaults.
     pub voice: VoiceSettings,
+    /// Games, play and growth + the wardrobe (see play.rs). Missing in older files -> defaults.
+    pub play: crate::play::PlaySettings,
     /// Streaming overlay (OBS browser source). Off by default.
     pub stream_overlay: StreamSettings,
     /// Update checks against GitHub Releases.
@@ -207,13 +209,26 @@ pub struct VoiceSettings {
     pub model: Option<String>,
     /// "auto" or a language code from `voice::LANGUAGES`.
     pub language: String,
-    /// Read short replies aloud with the system voice.
+    /// Read short replies aloud.
     pub speak_replies: bool,
+    /// Listen for "Hey Glitch" all the time (the mic stays open while
+    /// armed). Off unless the user turns it on.
+    pub wake_word: bool,
+    /// Voice for reading aloud: "system" (the OS voice) or "glitch" (the
+    /// downloaded character voice; falls back to "system" if missing).
+    pub read_aloud_voice: String,
 }
 
 impl Default for VoiceSettings {
     fn default() -> Self {
-        Self { enabled: true, model: None, language: "auto".into(), speak_replies: false }
+        Self {
+            enabled: true,
+            model: None,
+            language: "auto".into(),
+            speak_replies: false,
+            wake_word: false,
+            read_aloud_voice: "system".into(),
+        }
     }
 }
 
@@ -230,6 +245,7 @@ impl Default for Settings {
             screen_enabled: true,
             notes_trusted: false,
             voice: VoiceSettings::default(),
+            play: crate::play::PlaySettings::default(),
             stream_overlay: StreamSettings::default(),
             auto_update: UpdateSettings::default(),
             hands_enabled: false,
@@ -433,6 +449,8 @@ mod tests {
         assert_eq!(v.model, None);
         assert_eq!(v.language, "auto");
         assert!(!v.speak_replies);
+        assert!(!v.wake_word, "the always-on mic is opt-in");
+        assert_eq!(v.read_aloud_voice, "system");
         // A settings file from before voice existed.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
@@ -454,6 +472,8 @@ mod tests {
                 model: Some("small".into()),
                 language: "de".into(),
                 speak_replies: true,
+                wake_word: true,
+                read_aloud_voice: "glitch".into(),
             },
             ..Default::default()
         };

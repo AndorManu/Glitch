@@ -85,6 +85,19 @@ export interface View {
   render(pose: Pose, tick: number): void;
 }
 
+/**
+ * Games, play and growth (src/mascot/play/) steer him through these.
+ * All optional; without them he behaves exactly as before.
+ */
+export interface CreatureHooks {
+  /** Asked before the brain picks: a plan to run now, "wait" (stay put a while), or null for the usual. */
+  nextPlan?(ctx: BrainContext): Plan | "wait" | null;
+  /** The pose he rests in when idle on the floor or a window top ("idle" -> e.g. "chubby_idle"). */
+  restAnim?(base: AnimationName): AnimationName;
+  /** Everything `event` logs ("grab", "throw:<speed>", "land:...", "plan:<name>"...). */
+  event?(what: string): void;
+}
+
 export type Mood = "thinking" | "happy" | "asking" | "idle" | "listening" | "talking" | "looking";
 const MOODS: readonly string[] = ["thinking", "happy", "asking", "idle", "listening", "talking", "looking"];
 
@@ -286,6 +299,8 @@ export class Creature {
    * pose, doesn't wander and gets up to no mischief until it's lifted.
    */
   hush: AnimationName | null = null;
+  /** See CreatureHooks. */
+  hooks: CreatureHooks = {};
   hovered = false;
   private facingLeftValue = false;
   /** Which way he faces; the animator's transition clips need it too (see transitions.ts toSide). */
@@ -1488,7 +1503,8 @@ export class Creature {
     if (this.mood === "looking") return "listen";
     if (this.mood === "talking") return "talk";
     if (this.hush && this.mode === "stand" && isStanding(this.surface)) return this.hush;
-    return isStanding(this.surface) || this.mode !== "stand" ? "idle" : "cling";
+    if (isStanding(this.surface) || this.mode !== "stand") return this.hooks.restAnim?.("idle") ?? "idle";
+    return "cling";
   }
 
   private scheduleBrain(ms: number): void {
@@ -1510,6 +1526,10 @@ export class Creature {
     if (!this.canAct()) return; // whatever blocks him reschedules when it ends
     void this.pollWorld().then(async (w) => {
       if (!w || !this.canAct()) return;
+      // A game in progress (or his mood) may decide first.
+      const game = this.hooks.nextPlan?.(this.context(w)) ?? null;
+      if (game === "wait") return this.scheduleBrain(2500);
+      if (game) return this.startPlan(game);
       // Chaos mode gets a say first (it mostly says "not now").
       if (this.director && this.chaosOn && this.movement && isStanding(this.surface)) {
         const plan = await this.director.maybe().catch(() => null);
@@ -1987,7 +2007,7 @@ export class Creature {
     this.interaction();
     if (this.mode !== "stand" || this.press || this.hold) return;
     // Mischief involving the cursor (chasing, carrying it) brings it onto him: carry on.
-    if (this.plan?.name === "mischief") return;
+    if (this.plan?.name === "mischief" || this.plan?.name === "play") return;
     // Noticed the cursor: stop and look at it.
     if (this.loco || this.plan) {
       this.interrupt();
@@ -2389,7 +2409,14 @@ export class Creature {
     void this.pollWorld();
   }
 
+  /** Repaint now (an accessory changed: a hat, sinking out of sight...). */
+  repaint(): void {
+    this.dirty = true;
+    this.place();
+  }
+
   private event(what: string): void {
     this.onEvent?.(what);
+    this.hooks.event?.(what);
   }
 }

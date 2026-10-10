@@ -97,8 +97,8 @@ const windows = () => ps("dev/win-visible.ps1", "-ProcessId", String(proc.pid)).
 let dpr = 1;
 const parsed = () =>
   windows().map((l) => {
-    const m = /^(\d+) (visible|hidden) (\d+)x(\d+) (\S+) (.*)$/.exec(l) ?? [];
-    return { visible: m[2] === "visible", w: Number(m[3]), h: Number(m[4]), cls: m[5], title: m[6] ?? "" };
+    const m = /^(\d+) (visible|hidden) (\d+)x(\d+) (.+?) ([T-][A-][N-]) (.*)$/.exec(l) ?? [];
+    return { visible: m[2] === "visible", w: Number(m[3]), h: Number(m[4]), cls: m[5], flags: m[6], title: m[7] ?? "" };
   });
 // Glitch's own window is the square one (160 CSS px); the chat bubble is 300 CSS px wide; the banner has its own title.
 const mascotVisible = () => parsed().some((x) => x.visible && Math.abs(x.w - 160 * dpr) <= 2 && Math.abs(x.h - 160 * dpr) <= 2);
@@ -177,6 +177,17 @@ try {
   check("the hotkey is registered by the app", st.hotkey.registered === true && st.hotkey.combo === "Ctrl+Alt+Shift+G", JSON.stringify(st.hotkey));
   check("not paused at the start", st.paused === false);
   await cardShot(panel, "2-card-active.png");
+
+  // ------------------------------- the pet's windows are not taskbar / Alt+Tab entries
+  await invoke(mascot, "mascot_clicked").catch(() => {});
+  await sleep(1500);
+  const pets = parsed().filter((x) => x.visible && !(x.w >= 380 && x.h >= 500) && x.w >= 100);
+  check("the mascot and the chat bubble are both on screen for this check", pets.length >= 2, JSON.stringify(pets.map((x) => [x.w, x.h, x.flags])));
+  check("every pet window is a tool window without WS_EX_APPWINDOW", pets.every((x) => x.flags[0] === "T" && x.flags[1] === "-"), pets.map((x) => `${x.w}x${x.h}:${x.flags}`).join(" "));
+  const strip = path.join(OUT, "8-taskbar.png");
+  spawnSync("python", ["dev/panic-shot.py", strip, "0", String(Math.round(1080 * 0 + (await mascot.evaluate(() => screen.height * devicePixelRatio)) - 80)), String(Math.round(await mascot.evaluate(() => screen.width * devicePixelRatio))), "80"], { stdio: "inherit" });
+  await invoke(mascot, "mascot_clicked").catch(() => {});
+  await sleep(800);
 
   // ---------------------------------------------------- the real hotkey: hide
   if (!st.hotkey.registered) throw new Error("the hotkey is not registered: not sending keys");

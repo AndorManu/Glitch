@@ -33,6 +33,11 @@
     "allow-context-status",
     "allow-context-debug",
     "allow-update-me-fake-toast",
+    "allow-pet-state",
+    "allow-pet-event",
+    "allow-ball-open",
+    "allow-ball-close",
+    "allow-ball-frame",
     "allow-stream-mirror"
   ]
 }

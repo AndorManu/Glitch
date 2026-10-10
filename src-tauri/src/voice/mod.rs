@@ -15,6 +15,9 @@
 //! * `stt`: whisper model loading/unloading and transcription
 //! * `download`: speech-model download (resume, size + SHA-256 check)
 //! * `hotkey`: the global push-to-talk shortcut
+//! * `wake`: the optional "Hey Glitch" wake word (off by default)
+//! * `tts`: Glitch's own read-aloud voice (optional Piper download)
+//! * `tray`: the tray menu's wake-word item and tooltip
 //! * `commands`: what the bubble and the settings panel can call
 
 pub mod capture;
@@ -25,11 +28,19 @@ pub mod hotkey;
 mod live_check;
 pub mod session;
 pub mod stt;
+pub mod tray;
+pub mod tts;
+pub mod wake;
+#[cfg(test)]
+mod wake_check;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+
+use tauri::menu::CheckMenuItem;
+use tauri::Wry;
 
 use glitch_core::voice::models::{self as speech_models, SpeechModel};
 use glitch_core::voice::vad::Mode;
@@ -65,18 +76,38 @@ pub struct VoiceState {
     hotkey_down: Mutex<Option<Instant>>,
     /// A "needs model" offer the bubble may have missed (it was just opened).
     offer_pending: AtomicBool,
+    /// The wake-word listener, while armed.
+    wake: Mutex<Option<wake::Listener>>,
+    wake_status: Mutex<wake::WakeStatus>,
+    /// Glitch is reading a reply aloud (the wake check plugs its ears).
+    speaking: AtomicBool,
+    /// The wake check ignores the mic until then.
+    quiet_until: Mutex<Instant>,
+    /// Tray "Listen for “Hey Glitch”" item.
+    tray_item: Mutex<Option<CheckMenuItem<Wry>>>,
+    pub tts: tts::TtsState,
+    /// The last command heard after "Hey Glitch" (and when): a chat
+    /// message containing it is outside content (see `origin_of`).
+    wake_heard: Mutex<Option<(String, Instant)>>,
 }
 
 impl VoiceState {
     fn new(models_dir: PathBuf) -> Self {
         Self {
-            models_dir,
+            models_dir: models_dir.clone(),
             phase: Mutex::default(),
             stt: Arc::new(stt::Keeper::new(stt::KEEP_ALIVE)),
             download: Mutex::default(),
             hotkey: Mutex::default(),
             hotkey_down: Mutex::default(),
             offer_pending: AtomicBool::new(false),
+            wake: Mutex::default(),
+            wake_status: Mutex::default(),
+            speaking: AtomicBool::new(false),
+            quiet_until: Mutex::new(Instant::now()),
+            tray_item: Mutex::default(),
+            tts: tts::TtsState::new(models_dir.with_file_name("voices")),
+            wake_heard: Mutex::default(),
         }
     }
 
@@ -132,6 +163,9 @@ pub fn setup(app: &AppHandle) {
         .join("speech-models");
     app.manage(VoiceState::new(dir));
     hotkey::sync(app);
+    // Opening the microphone can take a moment: not on the startup path.
+    let app = app.clone();
+    let _ = std::thread::Builder::new().name("glitch-wake-arm".into()).spawn(move || wake::sync(&app));
 }
 
 fn emit(app: &AppHandle, e: &VoiceEvent) {
@@ -141,14 +175,30 @@ fn emit(app: &AppHandle, e: &VoiceEvent) {
 /// Start listening. Does nothing if a voice command is already running.
 /// Everything that happens next arrives as "voice" events.
 pub fn start(app: &AppHandle, mode: Mode) {
+    start_with(app, Control::new(mode));
+}
+
+/// "Hey Glitch" was heard: open the chat and take the command hands-free
+/// (the wake listener hands over its stream). `false` if it didn't start.
+pub fn start_from_wake(app: &AppHandle, has_command: bool) -> bool {
+    tts::stop(app);
+    let started = start_with(app, Control::from_wake(has_command));
+    if started {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move { crate::commands::open_chat(&app, false) });
+    }
+    started
+}
+
+fn start_with(app: &AppHandle, ctl: Control) -> bool {
     // The panic button: the microphone stays off.
     if crate::pause::is_paused() {
-        return;
+        return false;
     }
     let vs = app.state::<VoiceState>();
     let settings = app.state::<AppState>().settings();
     if !settings.voice.enabled {
-        return;
+        return false;
     }
     if let Some(reason) = unavailable_reason() {
         let message = match reason {
@@ -156,20 +206,20 @@ pub fn start(app: &AppHandle, mode: Mode) {
             _ => "voice isn't available on this system",
         };
         emit(app, &VoiceEvent::Error { code: "voice_unsupported", message: message.into() });
-        return;
+        return false;
     }
     let model = current_model(app);
     if !vs.is_downloaded(model) {
         vs.offer_pending.store(true, Ordering::SeqCst);
         emit(app, &VoiceEvent::NeedsModel { model: *model });
-        return;
+        return false;
     }
     let ctl = {
         let mut phase = vs.phase.lock().unwrap();
         if !matches!(*phase, Phase::Idle) {
-            return;
+            return false;
         }
-        let ctl = Arc::new(Control::new(mode));
+        let ctl = Arc::new(ctl);
         *phase = Phase::Listening(ctl.clone());
         ctl
     };
@@ -191,7 +241,9 @@ pub fn start(app: &AppHandle, mode: Mode) {
         struct Reset(AppHandle);
         impl Drop for Reset {
             fn drop(&mut self) {
-                *self.0.state::<VoiceState>().phase.lock().unwrap() = Phase::Idle;
+                let vs = self.0.state::<VoiceState>();
+                *vs.phase.lock().unwrap() = Phase::Idle;
+                wake::quiet_for_a_moment(&vs);
             }
         }
         let _reset = Reset(app.clone());
@@ -200,8 +252,9 @@ pub fn start(app: &AppHandle, mode: Mode) {
         session::run(
             &ctl,
             |on_audio, on_error| {
-                capture::open(on_audio, on_error).map(|m| {
-                    let rate = m.sample_rate;
+                // The wake word's open stream if armed (no warm-up), else a fresh one.
+                wake::open_for_command(&app, on_audio, on_error).map(|(m, rate, pre)| {
+                    ctl.set_preroll(pre);
                     (m, rate)
                 })
             },
@@ -221,6 +274,9 @@ pub fn start(app: &AppHandle, mode: Mode) {
                     VoiceEvent::Idle { .. } | VoiceEvent::Error { .. } => {
                         let _ = app.emit("mood", "idle");
                     }
+                    VoiceEvent::Heard { text } if ctl.is_from_wake() => {
+                        *vs.wake_heard.lock().unwrap() = Some((text.clone(), Instant::now()));
+                    }
                     // "heard": the bubble sends it right away, which sets
                     // the mood to "thinking" again (no flicker in between).
                     _ => {}
@@ -232,6 +288,27 @@ pub fn start(app: &AppHandle, mode: Mode) {
     if let Err(e) = spawned {
         *vs.phase.lock().unwrap() = Phase::Idle;
         emit(app, &VoiceEvent::Error { code: "mic_failed", message: e.to_string() });
+        return false;
+    }
+    true
+}
+
+/// How long a wake-word transcript marks the chat message carrying it.
+const WAKE_MESSAGE_WINDOW: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// Where a chat message came from. A message that contains the latest
+/// wake-word transcript is [`Origin::WakeWord`] (outside content: every side
+/// effect asks first), even if the user typed more around it. Decided here
+/// in Rust, so the webview can't mark a wake-word message as trusted.
+pub fn origin_of(app: &AppHandle, message: &str) -> glitch_core::agent::Origin {
+    let vs = app.state::<VoiceState>();
+    let mut heard = vs.wake_heard.lock().unwrap();
+    match heard.as_ref() {
+        Some((text, at)) if at.elapsed() < WAKE_MESSAGE_WINDOW && message.contains(text.as_str()) => {
+            *heard = None;
+            glitch_core::agent::Origin::WakeWord
+        }
+        _ => glitch_core::agent::Origin::Typed,
     }
 }
 

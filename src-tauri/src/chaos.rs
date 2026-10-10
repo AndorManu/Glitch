@@ -298,7 +298,7 @@ pub fn close_extras(app: &AppHandle) {
 
 /// Show one of Glitch's extra windows without taking the keyboard focus
 /// from whatever the user is doing.
-fn show_quietly(win: &tauri::WebviewWindow) {
+pub(crate) fn show_quietly(win: &tauri::WebviewWindow) {
     #[cfg(target_os = "windows")]
     if let Ok(h) = win.hwnd() {
         if native::show_no_activate(h.0 as usize as u64) {
@@ -345,7 +345,10 @@ pub async fn chaos_paws(app: AppHandle, paws: Vec<Paw>) {
                 .visible(false)
                 .build();
             match built {
-                Ok(w) => w,
+                Ok(w) => {
+                    crate::windows::hide_from_switcher(&w);
+                    w
+                }
                 Err(e) => {
                     eprintln!("glitch: paw-print overlay failed: {e}");
                     return;
@@ -416,6 +419,7 @@ pub async fn chaos_note_open(app: AppHandle, line: u32, x: i32, y: i32) -> Optio
         .build()
         .map_err(|e| eprintln!("glitch: note failed: {e}"))
         .ok()?;
+    crate::windows::hide_from_switcher(&win);
     let scale = win.scale_factor().unwrap_or(1.0);
     let _ = win.set_position(PhysicalPosition::new(x, y));
     show_quietly(&win);

@@ -6,6 +6,7 @@
 pub mod agent;
 pub mod ai;
 pub mod autoupdate;
+pub mod belly;
 pub mod chaos;
 pub mod confirm;
 pub mod context;
@@ -14,6 +15,7 @@ pub mod hands;
 pub mod memory;
 pub mod models;
 pub mod platform;
+pub mod play;
 pub mod safety;
 pub mod settings;
 pub mod stream;

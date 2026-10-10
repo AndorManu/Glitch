@@ -186,9 +186,19 @@ pub async fn send_message(app: AppHandle, state: State<'_, AppState>, text: Stri
         return Err(UiError::new("too_long", "That's a lot of text! Could you make it shorter?"));
     }
     paused_check()?;
+    // "let's play", "hide and seek": a game, no model needed (play.rs).
+    if let Some(step) = crate::play::chat_hook(&app, text) {
+        crate::play::record(&app, glitch_core::play::PetEvent::Chat);
+        return Ok(step);
+    }
     let model = state.settings().model.ok_or_else(|| UiError::new("no_model", "Pick a model in settings first"))?;
     let _ = app.emit("mood", "thinking");
-    let result = state.agent.lock().await.send(&model, text).await;
+    // Typed or push-to-talk: trusted. Heard after "Hey Glitch": outside content.
+    let origin = crate::voice::origin_of(&app, text);
+    let result = state.agent.lock().await.send_with(&model, text, origin).await;
+    if result.is_ok() {
+        crate::play::record(&app, glitch_core::play::PetEvent::Chat);
+    }
     let _ = app.emit("mood", mood_after(&result));
     after_turn(&app, &model, &result);
     result.map_err(UiError::from)
@@ -494,6 +504,16 @@ pub fn show_panel_view(app: &AppHandle, view: &str) {
 
 #[tauri::command]
 pub async fn mascot_clicked(app: AppHandle) {
+    // A double-click starts fetch when it is on (the first click already
+    // opened the chat; start_game closes it again). Otherwise it is a click.
+    static LAST_CLICK: std::sync::Mutex<Option<u64>> = std::sync::Mutex::new(None);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+    let prev = LAST_CLICK.lock().unwrap().replace(now);
+    if glitch_core::play::is_double_click(prev, now) && app.state::<AppState>().settings().play.fetch {
+        *LAST_CLICK.lock().unwrap() = None;
+        crate::play::start_game(&app, glitch_core::play::Game::Fetch);
+        return;
+    }
     open_chat(&app, true);
 }
 

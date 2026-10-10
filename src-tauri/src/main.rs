@@ -23,6 +23,8 @@ mod ledge_watch;
 mod notify_win;
 mod os;
 mod pause;
+mod play;
+mod play_native;
 mod state;
 mod stream;
 #[cfg(all(test, target_os = "windows"))]
@@ -52,12 +54,18 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     )?;
     let chaos = CheckMenuItem::with_id(app, "chaos", "Chaos mode", true, state.settings().chaos_enabled, None::<&str>)?;
     let focus = context::tray_item(app)?;
+    let wake = voice::tray::menu_item(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Glitch", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let sep_top = PredefinedMenuItem::separator(app)?;
+    let fetch = MenuItem::with_id(app, "play_fetch", "Play fetch", true, None::<&str>)?;
+    let hide = MenuItem::with_id(app, "play_hide", "Play hide and seek", true, None::<&str>)?;
     // The panic button, first: "Hide Glitch / Pause everything" <-> "Show Glitch".
     let pause = pause::tray_items(app, chat.clone())?;
-    let menu = Menu::with_items(app, &[&pause, &sep_top, &chat, &wander, &chaos, &focus, &settings, &sep, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&pause, &sep_top, &chat, &fetch, &hide, &wander, &chaos, &focus, &wake, &settings, &sep, &quit],
+    )?;
     *state.wander_item.lock().unwrap() = Some(wander);
     *state.chaos_item.lock().unwrap() = Some(chaos);
 
@@ -93,7 +101,10 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                         pause::toggle(&app);
                     });
                 }
+                "play_fetch" => play::start_game(app, glitch_core::play::Game::Fetch),
+                "play_hide" => play::start_game(app, glitch_core::play::Game::HideSeek),
                 "focus" => context::tray_toggle(app),
+                voice::tray::MENU_ID => voice::wake::toggle(app),
                 "quit" => {
                     let app = app.clone();
                     tauri::async_runtime::spawn(async move { commands::quit_app(&app).await });
@@ -125,7 +136,10 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         // Voice push-to-talk hotkey (registered by voice::setup, not here).
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // Glitch's belly: folder picker + "eat this?" (used from Rust only).
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            app.manage(play::PlayState::new(&app.path().app_config_dir()?));
             app.manage(AppState::new(app.handle(), app.path().app_config_dir()?));
             pause::setup(app.handle());
             autostart::sync_on_start(app.handle());
@@ -139,11 +153,15 @@ fn main() {
             hover::start(app.handle().clone());
             os::configure(app);
             build_tray(app.handle())?;
+            // The wake word may have armed before the tray existed.
+            voice::tray::show_wake(app.handle(), &voice::wake::status(app.handle()));
             // The mascot page shows itself once drawn, and opens the setup
             // wizard on first run (so the panel can be placed next to it).
             // Dragging Glitch keeps the chat bubble attached (see place_mascot).
             windows::place_mascot(app.handle());
+            windows::keep_out_of_switcher(app.handle());
             pause::after_windows(app.handle());
+            play::watch_drops(app.handle());
             chaos::debug_trigger(app.handle());
             context::start(app.handle());
             context::debug_trigger(app.handle());
@@ -196,6 +214,19 @@ fn main() {
             pause::safety_set_paused,
             pause::safety_set_hotkey,
             pause::safety_set_autostart,
+            play::pet_state,
+            play::pet_event,
+            play::update_play_settings,
+            play::ball_open,
+            play::ball_frame,
+            play::playfield_ready,
+            play::playfield_idle,
+            play::ball_hold,
+            play::ball_close,
+            play::growth_greeting,
+            play::belly_list,
+            play::belly_restore,
+            play::belly_choose_folder,
             context::context_status,
             context::focus_start,
             context::update_context_settings,
@@ -213,6 +244,13 @@ fn main() {
             voice::commands::voice_cancel_download,
             voice::commands::voice_delete_model,
             voice::commands::voice_open_mic_settings,
+            voice::commands::voice_speaking,
+            voice::commands::voice_tts_prepare,
+            voice::commands::voice_tts_speak,
+            voice::commands::voice_tts_stop,
+            voice::commands::voice_tts_download,
+            voice::commands::voice_tts_cancel_download,
+            voice::commands::voice_tts_delete,
             stream::stream_status,
             stream::update_stream_settings,
             stream::stream_new_token,
@@ -242,6 +280,11 @@ fn main() {
         .run(|app, event| {
             // Any way of exiting (tray Quit, OS logout, last window closed):
             // save the chat/memory. (Quit from the UI also unloads the model.)
+            if let tauri::RunEvent::Exit = event {
+                // Close the always-on microphone and any voice playback.
+                voice::wake::shutdown(app);
+                voice::tts::stop(app);
+            }
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 update_me::shutdown(app);
                 if let Ok(mut agent) = app.state::<AppState>().agent.try_lock() {
