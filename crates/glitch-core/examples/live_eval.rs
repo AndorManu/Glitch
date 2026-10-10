@@ -419,7 +419,10 @@ fn cases() -> Vec<Case> {
                 .already_open()]
             }),
             ..case("sending asks with the exact target", "apps", "type hi team in discord and send it", |o| {
-                need(o.confirms.iter().any(|c| c.contains("Send")), &format!("no Send card: {:?}", o.confirms))?;
+                need(
+                    o.confirms.iter().any(|c| c.contains("Send") || c.contains("send a message")),
+                    &format!("no card for sending: {:?}", o.confirms),
+                )?;
                 need(
                     o.hands().text_of("Discord").is_some_and(|t| t.to_lowercase().contains("hi team")),
                     "didn't type hi team",

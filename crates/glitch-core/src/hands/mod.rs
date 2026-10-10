@@ -968,6 +968,18 @@ impl Driver {
                 let before = self.sig_of(win);
                 match self.hands.click(win, el) {
                     Ok(how) => {
+                        // Opening an item ("Late Night Drive, Playlist"): what's
+                        // shown next is about it, so rank by its name ("Play
+                        // Late Night Drive" before the player's plain "Play").
+                        if matches!(
+                            el.role.as_str(),
+                            "list item" | "row" | "link" | "tab item" | "tree item" | "data item"
+                        ) {
+                            let head = el.name.split([',', '\u{2022}', '|']).next().unwrap_or("").trim();
+                            if head.chars().count() >= 3 {
+                                self.s.lock().unwrap().queries.insert(win.id, head.to_string());
+                            }
+                        }
                         let mut v = json!({"ok": true, "did": format!("clicked [{id}] {} \u{201c}{}\u{201d} ({how})", el.role, short(&el.name, 60))});
                         v["verify"] = self.verify(win, before);
                         v["next"] = json!(NEXT_AFTER_ACTION);
