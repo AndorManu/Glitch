@@ -1,12 +1,14 @@
 // The panel window: setup wizard and settings. (Chat lives in the bubble.)
 
-import { listen } from "@tauri-apps/api/event";
-import { api, asUiError, type PanelView, type Settings, type SetupStatus, type VoiceDownloadEvent } from "../shared/ipc";
+import { emit, listen } from "@tauri-apps/api/event";
+import { api, asUiError, CHAT_CLEARED_EVENT, type PanelView, type Settings, type SetupStatus, type VoiceDownloadEvent } from "../shared/ipc";
 import { drawAvatar } from "./avatar";
 import { h } from "./dom";
+import { FEATURES } from "./features";
 import { renderMemory } from "./memory";
 import { formatGb, layout, ollamaSummary, prettyModelName, SetupView, sameModel } from "./setup";
-import { loading, toggleSwitch } from "./ui";
+import { renderWardrobe } from "./features/wardrobe";
+import { busyButton, enterView, loading, settingsKey, toggleSwitch } from "./ui";
 import { onVoiceDownload, renderVoice } from "./voice";
 
 type View = PanelView;
@@ -24,12 +26,17 @@ const subtitle = document.getElementById("subtitle")!;
 let current: View = "setup";
 
 function showView(v: View): void {
+  const changed = v !== current || views[v].hidden;
   current = v;
   for (const [name, el] of Object.entries(views)) el.hidden = name !== v;
+  if (changed) enterView(views[v]);
   settingsButton.hidden = v === "settings";
   subtitle.textContent = subtitles[v];
   if (v === "setup") void setup.refresh();
-  if (v === "settings") void renderSettings();
+  if (v === "settings") {
+    shownKey = null;
+    void renderSettings();
+  }
 }
 
 const setup = new SetupView(views.setup, {
@@ -42,13 +49,21 @@ function card(title: string, ...children: (Node | null)[]): HTMLElement {
   return h("section", { class: "card" }, h("h3", { class: "card-title" }, title), ...children);
 }
 
+/** What the settings page currently shows (see settingsKey). */
+let shownKey: string | null = null;
+
 async function renderSettings(): Promise<void> {
   const root = views.settings;
-  layout(root, [loading("Loading…")]);
+  // Re-renders (a setting changed elsewhere) keep the old page up and the
+  // scroll position; only the first render shows "Loading…".
+  const scroller = root.querySelector<HTMLElement>(":scope > .scroll");
+  const scrollTop = shownKey !== null && scroller ? scroller.scrollTop : 0;
+  if (shownKey === null) layout(root, [loading("Loading…")]);
   let status: SetupStatus;
   try {
     status = await api.setupStatus();
   } catch (e) {
+    shownKey = null;
     layout(
       root,
       [h("div", { class: "callout error", role: "alert" }, h("b", {}, "Couldn’t load the settings."), h("span", {}, asUiError(e).message))],
@@ -57,6 +72,7 @@ async function renderSettings(): Promise<void> {
     return;
   }
   const s = status.settings;
+  shownKey = settingsKey(s);
 
   const select = h("select", { "aria-label": "Brain (AI model)" });
   const names = status.installed.map((m) => m.name);
@@ -77,9 +93,28 @@ async function renderSettings(): Promise<void> {
     toolWarning.hidden = status.installed.find((m) => m.name === select.value)?.supports_tools !== false;
   };
   updateWarning();
+  // "Clear chat" always clears; if folding the old chat into memory or saving
+  // failed, say so here instead of failing silently.
+  const clearChatNote = h("p", { class: "callout warn", role: "status", hidden: true });
+  const clearChat = async (): Promise<void> => {
+    clearChatNote.hidden = true;
+    try {
+      await api.resetChat();
+    } catch (e) {
+      clearChatNote.textContent = asUiError(e).message;
+      clearChatNote.hidden = false;
+      return; // keep the panel open so the note can be read
+    }
+    await emit(CHAT_CLEARED_EVENT).catch(() => {});
+    await api.showBubble();
+  };
   select.addEventListener("change", async () => {
     updateWarning();
-    await api.updateSettings({ model: select.value });
+    s.model = select.value;
+    shownKey = settingsKey(s);
+    // On failure, redraw from what Rust actually has (and don't leave an
+    // unhandled rejection or a key that hides the next real change).
+    await api.updateSettings({ model: select.value }).catch(() => renderSettings());
   });
 
   const ollama = ollamaSummary(status);
@@ -101,16 +136,41 @@ async function renderSettings(): Promise<void> {
       ),
       card(
         "Glitch",
-        toggleSwitch("Let Glitch walk around", "Off: Glitch stays where you put it.", s.movement_enabled, (on) =>
-          void api.updateSettings({ movement_enabled: on }),
+        toggleSwitch("Let Glitch walk around", "Off: Glitch stays where you put it.", s.movement_enabled, (on) => {
+          s.movement_enabled = on;
+          shownKey = settingsKey(s);
+          void api.updateSettings({ movement_enabled: on }).catch(() => renderSettings());
+        }),
+        toggleSwitch(
+          "Chaos mode",
+          "Harmless mischief: nudges your windows a little, plays with the cursor, leaves paw prints and notes. Never while you type or game.",
+          s.chaos_enabled ?? true,
+          (on) => {
+            s.chaos_enabled = on;
+            shownKey = settingsKey(s);
+            void api.updateSettings({ chaos_enabled: on }).catch(() => renderSettings());
+          },
+        ),
+        toggleSwitch(
+          "Let Glitch see the screen",
+          "Only when you ask about something on it. The screenshot stays on this computer, is never saved, and password fields are covered.",
+          s.screen_enabled ?? true,
+          (on) => {
+            s.screen_enabled = on;
+            shownKey = settingsKey(s);
+            void api.updateSettings({ screen_enabled: on }).catch(() => renderSettings());
+          },
         ),
         h(
           "div",
           { class: "row" },
-          h("button", { class: "secondary small", type: "button", onclick: async () => { await api.resetChat(); await api.showBubble(); } }, "Clear chat"),
+          busyButton("Clear chat", "Clearing…", clearChat),
           h("button", { class: "secondary small", type: "button", onclick: () => showView("setup") }, "Run setup again"),
         ),
+        clearChatNote,
       ),
+      card("Features", ...FEATURES.map((f) => f.render(s))),
+      card("Wardrobe", renderWardrobe(s)),
       card("Voice", voiceBody),
       card("Memory", memoryBody),
       h("p", { class: `info ${ollama.state}` }, h("span", { class: "dot", "aria-hidden": "true" }), h("span", {}, ollama.text)),
@@ -123,6 +183,8 @@ async function renderSettings(): Promise<void> {
       h("button", { class: "danger", type: "button", onclick: () => void api.quit() }, "Quit Glitch"),
     ],
   );
+  const scroll = root.querySelector<HTMLElement>(":scope > .scroll");
+  if (scroll && scrollTop) scroll.scrollTop = scrollTop;
 }
 
 async function main(): Promise<void> {
@@ -131,8 +193,10 @@ async function main(): Promise<void> {
     if (e.key === "Escape") void api.hidePanel();
   });
   await listen<PanelView>("panel-view", (e) => showView(e.payload));
-  await listen<Settings>("settings-changed", () => {
-    if (current === "settings") void renderSettings();
+  await listen<Settings>("settings-changed", (e) => {
+    // Our own toggles already show the new value (and the voice and memory
+    // cards redraw themselves): only redraw for changes made elsewhere.
+    if (current === "settings" && settingsKey(e.payload) !== shownKey) void renderSettings();
   });
   await listen<VoiceDownloadEvent>("voice-download", (e) => onVoiceDownload(e.payload));
   await listen("memory-changed", () => {

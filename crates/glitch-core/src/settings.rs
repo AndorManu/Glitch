@@ -7,6 +7,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::ai::ollama;
+use crate::context::ContextSettings;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -15,6 +16,10 @@ pub struct Settings {
     pub model: Option<String>,
     /// Whether Glitch wanders around the screen.
     pub movement_enabled: bool,
+    /// Chaos mode: harmless mischief (dragging other apps' windows a bit,
+    /// playing with the cursor, footprints, sticky notes). Only while
+    /// `movement_enabled` is on too. Missing in older files → on.
+    pub chaos_enabled: bool,
     /// Set once the first-run wizard has been completed.
     pub onboarding_done: bool,
     pub ollama_url: String,
@@ -22,8 +27,69 @@ pub struct Settings {
     pub keep_alive: String,
     /// Whether Glitch remembers things between chats (memory.json).
     pub memory_enabled: bool,
+    /// "Let Glitch see the screen": the look_at_screen tool. Missing in older
+    /// files -> on (it only ever runs when a request needs it).
+    pub screen_enabled: bool,
+    /// The user allowed take_note once; later notes don't ask again.
+    pub notes_trusted: bool,
     /// Voice commands (push-to-talk). Missing in older files → defaults.
     pub voice: VoiceSettings,
+    /// Games, play and growth + the wardrobe (see play.rs). Missing in older files -> defaults.
+    pub play: crate::play::PlaySettings,
+    /// "He reacts to what you're doing" (music, coding, games, focus...).
+    /// Missing in older files -> defaults (all on except focus auto-suggest).
+    pub context: ContextSettings,
+    /// "Update me": the local event endpoint, Claude Code buddy, the
+    /// notification reader, reminders and the daily briefing.
+    pub update_me: UpdateMeSettings,
+}
+
+/// "Update me" features. Each one has its own switch in Settings → Features.
+/// Connected or privacy-sensitive ones (Claude Code, notifications) start off.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdateMeSettings {
+    /// Local event endpoint (127.0.0.1 + per-install token) for scripts,
+    /// builds and the Claude Code hook.
+    pub endpoint_enabled: bool,
+    /// React to Claude Code hook events (needs "Connect Claude Code" too).
+    pub claude_code_enabled: bool,
+    /// Read Windows' notification feed and offer a digest.
+    pub notifications_enabled: bool,
+    /// Quiet mode: collect the digest, but don't walk over with a sign.
+    pub notifications_quiet: bool,
+    /// Extra app names (case-insensitive substrings) never read, on top of
+    /// the built-in banking / authenticator list.
+    pub notifications_blocklist: Vec<String>,
+    /// "Remind me to X at 5": saved reminders that survive restarts.
+    pub reminders_enabled: bool,
+    /// A short briefing on the first chat of the day.
+    pub briefing_enabled: bool,
+    /// Where the briefing's weather is for (`None`: no weather).
+    pub location: Option<Location>,
+}
+
+/// A place picked in Settings (from Open-Meteo's geocoder).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Location {
+    pub name: String,
+    pub latitude: f64,
+    pub longitude: f64,
+}
+
+impl Default for UpdateMeSettings {
+    fn default() -> Self {
+        Self {
+            endpoint_enabled: true,
+            claude_code_enabled: false,
+            notifications_enabled: false,
+            notifications_quiet: false,
+            notifications_blocklist: Vec::new(),
+            reminders_enabled: true,
+            briefing_enabled: true,
+            location: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -51,11 +117,17 @@ impl Default for Settings {
         Self {
             model: None,
             movement_enabled: true,
+            chaos_enabled: true,
             onboarding_done: false,
             ollama_url: ollama::DEFAULT_URL.to_string(),
             keep_alive: ollama::DEFAULT_KEEP_ALIVE.to_string(),
             memory_enabled: true,
+            screen_enabled: true,
+            notes_trusted: false,
             voice: VoiceSettings::default(),
+            play: crate::play::PlaySettings::default(),
+            context: ContextSettings::default(),
+            update_me: UpdateMeSettings::default(),
         }
     }
 }
@@ -95,6 +167,8 @@ mod tests {
         let s = Settings::load(&dir.path().join("nope.json"));
         assert_eq!(s, Settings::default());
         assert!(s.movement_enabled);
+        assert!(s.chaos_enabled);
+        assert!(s.screen_enabled && !s.notes_trusted);
         assert_eq!(s.keep_alive, "2m");
     }
 
@@ -133,6 +207,20 @@ mod tests {
     }
 
     #[test]
+    fn update_defaults_and_old_files() {
+        let u = Settings::default().update_me;
+        // Connected / privacy-sensitive: off. Local and harmless: on.
+        assert!(!u.claude_code_enabled && !u.notifications_enabled && !u.notifications_quiet);
+        assert!(u.endpoint_enabled && u.reminders_enabled && u.briefing_enabled);
+        assert_eq!(u.location, None);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, r#"{"model":"qwen3.5:4b","update_me":{"notifications_enabled":true}}"#).unwrap();
+        let s = Settings::load(&path);
+        assert!(s.update_me.notifications_enabled && s.update_me.reminders_enabled);
+    }
+
+    #[test]
     fn voice_defaults_and_old_files() {
         let v = Settings::default().voice;
         assert!(v.enabled);
@@ -146,6 +234,7 @@ mod tests {
         let s = Settings::load(&path);
         assert!(s.onboarding_done && !s.memory_enabled);
         assert_eq!(s.voice, VoiceSettings::default());
+        assert_eq!(s.context, ContextSettings::default());
         // Partial voice section: the rest falls back to defaults.
         std::fs::write(&path, r#"{"voice":{"model":"tiny","future":1}}"#).unwrap();
         let s = Settings::load(&path);

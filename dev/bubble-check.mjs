@@ -1,9 +1,9 @@
 // Behaviour smoke test of the chat bubble in a real browser, Tauri IPC mocked.
-// Needs the Vite dev server: npx vite --port 1420 --strictPort
+// Needs the Vite dev server: npx vite --port 1420 --strictPort (or set GLITCH_DEV_URL)
 // Usage: node dev/bubble-check.mjs
-import { chromium } from "playwright";
+import { BASE, launch } from "./browser.mjs";
 
-const URL = "http://localhost:1420/bubble.html";
+const URL = `${BASE}/bubble.html`;
 
 function mock() {
   const callbacks = new Map();
@@ -50,7 +50,7 @@ function check(name, ok, extra = "") {
   if (!ok) failures++;
 }
 
-const browser = await chromium.launch({ executablePath: "/opt/pw-browsers/chromium" });
+const browser = await launch();
 const page = await browser.newPage({ viewport: { width: 300, height: 420 } });
 page.on("pageerror", (e) => check(`no page errors: ${e.message}`, false));
 await page.addInitScript(mock);
@@ -58,6 +58,15 @@ await page.goto(URL);
 
 const calls = (cmd) => page.evaluate((c) => window.__calls.filter(([n]) => n === c).map(([, a]) => a), cmd);
 const running = () => page.evaluate(() => document.getAnimations().filter((a) => a.playState === "running").length);
+/** What's running, for failure messages. */
+const runningNames = () =>
+  page.evaluate(() =>
+    document
+      .getAnimations()
+      .filter((a) => a.playState === "running")
+      .map((a) => `${a.animationName ?? a.transitionProperty}@${a.effect?.target?.getAttribute?.("class") ?? a.effect?.target?.tagName}`)
+      .join(", "),
+  );
 const push = (r) => page.evaluate((x) => window.__results.push(x), r);
 const focused = () => page.evaluate(() => document.activeElement?.className || document.activeElement?.tagName);
 
@@ -74,7 +83,7 @@ check("copying a reply doesn't duplicate it", await page.evaluate(() => {
 check("welcome is shown", (await page.textContent(".balloon .say")).includes("Hi, I'm Glitch"));
 check("input focused on start", (await focused()) === "input");
 check("caret gone after typing", (await page.locator(".caret").count()) === 0);
-check("no animations while idle", (await running()) === 0, `${await running()} running`);
+check("no animations while idle", (await running()) === 0, await runningNames());
 check("reported its height", (await calls("resize_bubble")).length > 0);
 
 await page.keyboard.press("Enter");
@@ -92,7 +101,7 @@ check("cloud is animating", (await running()) > 0);
 await page.waitForTimeout(500);
 check("confirm question", (await page.textContent(".balloon .say .sr")) === "Can I open the app “Spotify”?");
 check("Allow is focused", (await focused()).includes("yes"));
-check("cloud animations stopped", (await running()) <= 1, `${await running()} running`);
+check("cloud animations stopped", (await running()) <= 1, await runningNames());
 await page.keyboard.type("n");
 check("typing on a button moves to the input", (await focused()) === "input");
 await page.fill("textarea", "");
@@ -148,19 +157,22 @@ await page.waitForTimeout(50);
 check("tail up from event", await page.evaluate(() => document.getElementById("root").classList.contains("up")));
 check("× moves away from the tail", await page.evaluate(() => document.getElementById("root").classList.contains("close-left")));
 
-// hide / show
+// hide / show (mouse off the gear, which it clicked above)
+await page.mouse.move(1, 1);
 await page.focus("textarea");
 await page.keyboard.press("Escape");
-check("Esc hides", (await calls("hide_bubble")).length === 1);
 check("faded out", await page.evaluate(() => document.getElementById("root").classList.contains("away")));
+check("close animation plays before the window hides", (await calls("hide_bubble")).length === 0);
+await page.waitForTimeout(220);
+check("Esc hides", (await calls("hide_bubble")).length === 1);
 await page.evaluate(() => { const real = Date.now; Date.now = () => real() + 5 * 60_000; });
 await page.evaluate(() => window.__emit("bubble-shown", null));
 await page.waitForTimeout(50);
 check("back in", !(await page.evaluate(() => document.getElementById("root").classList.contains("away"))));
 check("input focused on show", (await focused()) === "input");
 check("old speech collapsed after a long time away", (await page.locator(".balloon").count()) === 0);
-await page.waitForTimeout(400);
-check("idle again: no animations", (await running()) === 0);
+await page.waitForTimeout(650);
+check("idle again: no animations", (await running()) === 0, await runningNames());
 
 // multi-line
 await page.fill("textarea", "");
@@ -169,6 +181,41 @@ await page.keyboard.press("Shift+Enter");
 await page.keyboard.type("line two");
 check("Shift+Enter makes a new line", (await page.inputValue("textarea")) === "line one\nline two");
 check("pill grows", await page.evaluate(() => document.querySelector(".pill").classList.contains("multi")));
+
+// long replies: typing stops at the bottom of the scroll box, which stays at the top
+await page.fill("textarea", "");
+await push({ step: { type: "reply", text: Array.from({ length: 30 }, (_, i) => `Line ${i + 1} of a long answer.`).join(String.fromCharCode(10)), actions: [] } });
+await page.fill("textarea", "long please");
+await page.keyboard.press("Enter");
+await page.waitForTimeout(700);
+check("long reply: typing done before the end of the text", (await page.locator(".caret").count()) === 0);
+check("long reply: still scrolled to the top", (await page.evaluate(() => document.querySelector(".balloon .scroll").scrollTop)) === 0);
+check("long reply: whole text there", (await page.locator(".balloon .say [aria-hidden]").textContent()).includes("Line 30"));
+
+// links wrap at their separators
+await push({ step: { type: "reply", text: "Look: https://example.com/a/very/long/path?with=query&and=more", actions: [] } });
+await page.fill("textarea", "link");
+await page.keyboard.press("Enter");
+await page.waitForTimeout(1300);
+check("links get wrap points", (await page.locator(".balloon .say wbr").count()) >= 5);
+check("copying a link gives it back intact", (await page.evaluate(() => {
+  const r = document.createRange();
+  r.selectNodeContents(document.querySelector(".say"));
+  getSelection().removeAllRanges();
+  getSelection().addRange(r);
+  return getSelection().toString();
+})).includes("https://example.com/a/very/long/path?with=query&and=more"));
+
+// "Clear chat" in Settings: a fresh start, and a late answer from before is dropped
+await push({ hang: true });
+await page.fill("textarea", "something slow");
+await page.keyboard.press("Enter");
+await page.waitForTimeout(50);
+await page.evaluate(() => window.__emit("chat-cleared", null));
+await page.waitForTimeout(100);
+check("cleared: no thought cloud", (await page.locator(".thought").count()) === 0);
+check("cleared: fresh start line", (await page.textContent(".balloon .say .sr")).includes("Fresh start"));
+check("cleared: can send again", !(await page.isDisabled(".send")) || (await page.inputValue("textarea")) === "");
 
 // reduced motion: no typing, no animations
 const calm = await browser.newPage({ viewport: { width: 300, height: 420 }, reducedMotion: "reduce" });

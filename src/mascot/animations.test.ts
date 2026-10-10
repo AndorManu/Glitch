@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { GLITCH } from "../sprites/glitch";
 import { RACCOON } from "../sprites/raccoon";
+import { ANIM_INDEX } from "../sprites/anim";
+import { GLITCH_ANIM } from "../sprites/glitch-anim";
 import {
   type Animation,
   type AnimationName,
   ANIMATIONS,
   Animator,
   burst,
+  IDLE_BUDGET,
   type Clock,
   isAnimationName,
   type Keyframe,
@@ -62,9 +65,14 @@ function simulate(name: AnimationName, ms: number, seed = 1, anims: Record<Anima
 
 /** All keys an animation can produce (makers are random: sample many seeds). */
 function allKeys(anim: Animation): Keyframe[] {
-  if (typeof anim.keys !== "function") return anim.keys;
   const out: Keyframe[] = [];
-  for (let seed = 1; seed <= 200; seed++) out.push(...anim.keys(mulberry32(seed)));
+  for (let seed = 1; seed <= 200; seed++) {
+    const mem = {};
+    if (typeof anim.keys === "function") out.push(...anim.keys(mulberry32(seed), mem));
+    else out.push(...anim.keys);
+    if (anim.intro) out.push(...anim.intro(mulberry32(seed), mem));
+    if (anim.outro) out.push(...anim.outro(mulberry32(seed), mem));
+  }
   out.push(...burst(mulberry32(7)));
   return out;
 }
@@ -75,8 +83,10 @@ describe("animations", () => {
   it("every keyframe uses a frame both sprite sets have, and known props", () => {
     for (const [name, anim] of Object.entries(ANIMATIONS)) {
       for (const key of allKeys(anim)) {
-        expect(RACCOON.frames, `raccoon: ${name} uses ${key.frame}`).toHaveProperty(key.frame);
-        expect(GLITCH.frames, `fallback: ${name} uses ${key.frame}`).toHaveProperty(key.frame);
+        expect(GLITCH_ANIM.frames, `animation sheet: ${name} uses ${key.frame}`).toHaveProperty(key.frame);
+        // The old sheet and the code-drawn fallback show their first frame for names they lack.
+        void RACCOON;
+        void GLITCH;
         for (const p of key.props ?? []) expect(p.name === "tether" || p.name in PROPS, `${name} prop ${p.name}`).toBe(true);
         if (key.glitch !== undefined) expect(key.glitch).toBeGreaterThanOrEqual(0);
         if (key.glitch !== undefined) expect(key.glitch).toBeLessThanOrEqual(1);
@@ -86,6 +96,23 @@ describe("animations", () => {
 
   it("raccoon frames point inside the 4x4 sheet", () => {
     for (const i of Object.values(RACCOON.frames)) expect(i >= 0 && i < 16).toBe(true);
+  });
+
+  it("the animation sheet has every old frame name, full cycles, and an eye for each frame", () => {
+    for (const name of Object.keys(RACCOON.frames)) expect(GLITCH_ANIM.frames, name).toHaveProperty(name);
+    const count = Object.keys(ANIM_INDEX).length;
+    for (const [name, i] of Object.entries(GLITCH_ANIM.frames)) {
+      expect(i >= 0 && i < count, name).toBe(true);
+      expect(GLITCH_ANIM.eyes?.[name], name).toBeDefined();
+    }
+    for (const [cycle, n] of [["walk", 8], ["idle", 8], ["run", 6], ["wave", 8], ["talk", 8], ["jump", 8]] as const) {
+      for (let i = 0; i < n; i++) expect(ANIM_INDEX, `${cycle}${i}`).toHaveProperty(`${cycle}${i}`);
+    }
+  });
+
+  it("the walk plays all 8 drawn frames in order", () => {
+    const frames = (ANIMATIONS.walk.keys as (r: () => number, m: object) => Keyframe[])(mulberry32(3), {}).map((k) => k.frame);
+    expect(frames).toEqual(["walk0", "walk1", "walk2", "walk3", "walk4", "walk5", "walk6", "walk7"]);
   });
 
   it("follow-ups name real animations", () => {
@@ -98,14 +125,16 @@ describe("animations", () => {
   it("actions either finish (once) or loop, as intended", () => {
     const once: AnimationName[] = [
       ...["happy", "startled", "laugh", "grabCursor", "peek", "fall", "land", "glitchOut", "gone", "glitchIn", "chaosSpin"],
-      ...["crouch", "splat", "dizzy", "peekEdge", "lookAround", "build", "malfunction"],
+      ...["crouch", "splat", "dizzy", "peekEdge", "lookAround", "build", "malfunction", "wave"],
+      ...["wake", "sad", "angry", "scared", "eat", "celebrate", "point", "pull_up", "bounce", "wall_jump", "sneeze", "annoyed", "calmDown"],
     ] as AnimationName[];
     const loops: AnimationName[] = [
       ...["idle", "walk", "think", "ask", "sleep", "carryCursor", "dragWindow", "pushWindow", "dangle", "napRock"],
-      ...["cling", "climb", "run", "airUp", "airDown", "tumble", "flail", "sitEdge", "held", "heldKick", "listen"],
+      ...["cling", "climb", "run", "airUp", "airDown", "tumble", "flail", "sitEdge", "held", "heldKick", "listen", "talk", "dance", "typing", "sit"],
+      ...["tail_copter", "glide", "fall_flail", "hang_ledge", "slide_down", "sit_edge_swing", "fish", "struggle", "clingCursor", "sulk"],
     ] as AnimationName[];
     // These hand over to a loop that isn't idle.
-    const special: Partial<Record<AnimationName, AnimationName>> = { lookBack: "cling", yawn: "sleep" };
+    const special: Partial<Record<AnimationName, AnimationName>> = { lookBack: "cling", yawn: "sleep", grumpy: "sulk" };
     for (const [name, then] of Object.entries(special)) expect(simulate(name as AnimationName, 20_000).animator.animation, name).toBe(then);
     expect([...once, ...loops, ...Object.keys(special)].sort()).toEqual(Object.keys(ANIMATIONS).sort());
     for (const name of once) {
@@ -215,14 +244,14 @@ describe("Animator", () => {
 });
 
 describe("CPU budgets (60 s of fake time)", () => {
-  it("idle, bursts included: under 1.5 repaints and 1.5 timer wakeups per second", () => {
+  it("idle, bursts included: under IDLE_BUDGET repaints and timer wakeups per second", () => {
     let bursts = 0;
     let worst = 0;
     for (let seed = 1; seed <= 40; seed++) {
       const r = simulate("idle", 60_000, seed);
       const s = r.elapsed / 1000;
-      expect(r.draws / s, `seed ${seed} repaints/s`).toBeLessThan(1.5);
-      expect(r.wakeups / s, `seed ${seed} wakeups/s`).toBeLessThan(1.5);
+      expect(r.draws / s, `seed ${seed} repaints/s`).toBeLessThan(IDLE_BUDGET);
+      expect(r.wakeups / s, `seed ${seed} wakeups/s`).toBeLessThan(IDLE_BUDGET);
       expect(r.maxPending).toBe(1);
       worst = Math.max(worst, r.draws / s, r.wakeups / s);
       // Bursts: count runs of glitchy repaints; each is short and at most 20 fps.

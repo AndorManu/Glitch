@@ -114,15 +114,85 @@ pub fn cpu_supported() -> bool {
     }
 }
 
-pub type Model = whisper_rs::WhisperContext;
+/// A loaded speech model plus one reusable whisper state (its buffers).
+///
+/// The state is kept because whisper.cpp's language detection (the default
+/// "auto" setting) encodes with the *previous* call's encoder window, and a
+/// fresh state has none, so it ran the full 30 s window: base took ~1.2 s
+/// per command instead of ~0.3 s. [`load`] warms the state up with a short
+/// window (while the user is still talking), and every call leaves its own
+/// window behind for the next detection.
+pub struct Model {
+    ctx: whisper_rs::WhisperContext,
+    state: Mutex<Option<whisper_rs::WhisperState>>,
+    /// tiny has 4 encoder layers, base 6, small 12.
+    tiny: bool,
+}
 
 pub fn load(path: &Path) -> Result<Model, String> {
     static QUIET: std::sync::Once = std::sync::Once::new();
     // whisper.cpp logs a lot to stderr; route it to nowhere.
     QUIET.call_once(whisper_rs::install_logging_hooks);
     // CPU only (no GPU backends are compiled in): small, predictable, works everywhere.
-    whisper_rs::WhisperContext::new_with_params(path, whisper_rs::WhisperContextParameters::default())
-        .map_err(|e| e.to_string())
+    let ctx = whisper_rs::WhisperContext::new_with_params(path, whisper_rs::WhisperContextParameters::default())
+        .map_err(|e| e.to_string())?;
+    let tiny = ctx.model_n_audio_layer() <= 4;
+    let mut state = ctx.create_state().map_err(|e| e.to_string())?;
+    // Warm-up: 1 s of silence with a fixed language and the smallest window
+    // (also allocates the compute buffers now instead of on the first use).
+    let silence = vec![0.0f32; SAMPLE_RATE];
+    let mut p = params(silence.len(), Some("en"), tiny);
+    p.set_max_tokens(1);
+    let _ = state.full(p, &silence);
+    Ok(Model { ctx, state: Mutex::new(Some(state)), tiny })
+}
+
+const SAMPLE_RATE: usize = glitch_core::voice::SAMPLE_RATE as usize;
+
+fn params<'a>(samples: usize, language: Option<&'a str>, tiny: bool) -> whisper_rs::FullParams<'a, 'a> {
+    use whisper_rs::{FullParams, SamplingStrategy};
+    let mut p = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    p.set_n_threads(threads());
+    p.set_language(Some(language.unwrap_or("auto")));
+    p.set_translate(false);
+    p.set_no_context(true);
+    p.set_no_timestamps(true);
+    // whisper's encoder always works on a 30 s window; for a 2 s command
+    // that's ~90 % wasted. Shrinking the window to the audio's length (plus
+    // margin) makes a command several times faster on CPU.
+    p.set_audio_ctx(audio_ctx(samples, tiny));
+    p.set_single_segment(true);
+    p.set_max_tokens(max_tokens(samples));
+    // No temperature fallback: on noise whisper otherwise re-decodes up to
+    // five times; a command is short, one greedy pass is right or the user
+    // just says it again.
+    p.set_temperature_inc(0.0);
+    p.set_suppress_blank(true);
+    p.set_suppress_nst(true);
+    p.set_print_special(false);
+    p.set_print_progress(false);
+    p.set_print_realtime(false);
+    p.set_print_timestamps(false);
+    p
+}
+
+/// The encoder window (whisper's `audio_ctx`) for `samples` of 16 kHz audio:
+/// one position per 20 ms (320 samples) plus ~2.5 s of margin, rounded up to
+/// 64, at most the full 30 s (1500). Measured on SAPI speech: base and
+/// bigger are right from 256 up, but the `tiny` model mishears and loops
+/// ("Elon Musk's cage cage cage...") below 768 (half the window), so it gets
+/// at least that; tiny is fast enough for it not to matter.
+pub fn audio_ctx(samples: usize, tiny: bool) -> i32 {
+    let needed = samples.div_ceil(320) + 128;
+    let min = if tiny { 768 } else { 384 };
+    (needed.div_ceil(64) * 64).clamp(min, 1500) as i32
+}
+
+/// A cap on the tokens whisper may produce for `samples` of audio (people
+/// say at most ~4 words a second, ~1.5 tokens per word): stops a rare
+/// repetition loop from running for seconds.
+pub fn max_tokens(samples: usize) -> i32 {
+    (samples / 16_000 * 8 + 24) as i32
 }
 
 /// Run whisper on 16 kHz mono audio. `language`: `None` = detect.
@@ -133,28 +203,37 @@ pub fn transcribe(
     language: Option<&str>,
     abort: Arc<AtomicBool>,
 ) -> Result<String, String> {
-    use whisper_rs::{FullParams, SamplingStrategy};
-    let mut state = model.create_state().map_err(|e| e.to_string())?;
-    let mut p = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-    p.set_n_threads(threads());
-    p.set_language(Some(language.unwrap_or("auto")));
-    p.set_translate(false);
-    p.set_no_context(true);
-    p.set_no_timestamps(true);
-    p.set_suppress_blank(true);
-    p.set_suppress_nst(true);
-    p.set_print_special(false);
-    p.set_print_progress(false);
-    p.set_print_realtime(false);
-    p.set_print_timestamps(false);
-    p.set_abort_callback_safe(move || abort.load(Ordering::Relaxed));
+    // One voice command at a time, so the kept state is normally free; if
+    // not (or a previous call failed), a fresh one works too, just slower.
+    let kept = model.state.lock().unwrap().take();
+    let mut state = match kept {
+        Some(s) => s,
+        None => model.ctx.create_state().map_err(|e| e.to_string())?,
+    };
+    let mut p = params(samples.len(), language, model.tiny);
+    // Not `set_abort_callback_safe`: in whisper-rs 0.16 its trampoline casts
+    // the user data to the wrong type, so whisper.cpp reads garbage, aborts
+    // the encoder and every transcription fails with error -6 ("failed to
+    // encode"). A plain C callback reading our AtomicBool instead; `abort`
+    // outlives the `full` call below, which is the only user of the pointer.
+    unsafe extern "C" fn should_abort(user_data: *mut std::ffi::c_void) -> bool {
+        // SAFETY: user_data is `&*abort` (an AtomicBool), alive for the call.
+        unsafe { (*(user_data as *const AtomicBool)).load(Ordering::Relaxed) }
+    }
+    // SAFETY: see above; the pointer is only read during `state.full`.
+    unsafe {
+        p.set_abort_callback(Some(should_abort));
+        p.set_abort_callback_user_data(Arc::as_ptr(&abort) as *mut std::ffi::c_void);
+    }
     state.full(p, samples).map_err(|e| e.to_string())?;
+    drop(abort);
     let mut text = String::new();
     for seg in state.as_iter() {
         if let Ok(s) = seg.to_str_lossy() {
             text.push_str(&s);
         }
     }
+    *model.state.lock().unwrap() = Some(state);
     Ok(text)
 }
 
@@ -261,6 +340,33 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(k.loaded_path().is_none(), "model freed after keep-alive");
+    }
+
+    #[test]
+    fn encoder_window() {
+        // Short commands: a small window; tiny at least half.
+        assert_eq!(audio_ctx(0, false), 384);
+        assert_eq!(audio_ctx(32_000, false), 384);
+        assert_eq!(audio_ctx(32_000, true), 768);
+        // 10 s: 500 positions + margin.
+        assert_eq!(audio_ctx(16_000 * 10, false), 640);
+        // 20 s: 1000 positions + margin.
+        assert_eq!(audio_ctx(16_000 * 20, true), 1152);
+        for tiny in [false, true] {
+            let ctx = |s: usize| audio_ctx(s * 16_000, tiny);
+            assert!((1..28).all(|s| ctx(s) as usize >= s * 50 + 100));
+            // Long recordings get the full window, never more.
+            assert_eq!(ctx(30), 1500);
+            assert_eq!(ctx(60), 1500);
+            assert!((0..40).all(|s| ctx(s) % 64 == 0 || ctx(s) == 1500));
+        }
+    }
+
+    #[test]
+    fn token_cap() {
+        // "Open Twitter on Elon Musk's page." is ~10 tokens in 2.6 s.
+        assert!(max_tokens(41_600) >= 30);
+        assert_eq!(max_tokens(16_000 * 30), 264);
     }
 
     #[test]

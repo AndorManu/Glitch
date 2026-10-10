@@ -2,13 +2,19 @@
 //!
 //! The 160x160 mascot window is mostly transparent. The page tells us where
 //! the body is (`set_hitbox`); a tiny background thread checks the cursor
-//! (10 times a second near Glitch, ~3 times a second when the cursor is far
+//! (25 times a second near Glitch, ~8 times a second when the cursor is far
 //! away) and makes the window ignore the mouse whenever the cursor isn't over
 //! the body, so clicks reach whatever is underneath. It also tells the page
 //! when the cursor arrives/leaves ("mascot-hover").
 //!
+//! Latency matters: until the poller notices the cursor, a click on Glitch
+//! falls through to the desktop. Even when the cursor is flicked onto him
+//! from far away, he is clickable within `FAR_POLL` (120 ms).
+//!
 //! The window's position/size/scale are cached from window events, so each
-//! tick costs a single cursor query.
+//! tick costs a single cursor query. On Windows that is a direct
+//! `GetCursorPos` call (a few microseconds), not a round trip through the
+//! main thread's event loop.
 
 use std::sync::Mutex;
 use std::thread;
@@ -42,11 +48,32 @@ pub struct Geometry {
 pub struct Hitbox {
     /// `None` = the whole window catches the mouse (e.g. while dragging).
     pub body: Mutex<Option<LocalRect>>,
+    /// The last real body box, kept while `body` is `None` (walking, held,
+    /// flying): the chat bubble still points at his head, not the window top.
+    pub last_body: Mutex<Option<LocalRect>>,
     pub geometry: Mutex<Option<Geometry>>,
 }
 
-const NEAR_POLL: Duration = Duration::from_millis(100);
-const FAR_POLL: Duration = Duration::from_millis(300);
+const NEAR_POLL: Duration = Duration::from_millis(40);
+const FAR_POLL: Duration = Duration::from_millis(120);
+/// "Near" = within this many CSS px of the window's centre.
+const NEAR_RADIUS_CSS: f64 = 500.0;
+
+/// Global cursor position in physical px.
+#[cfg(target_os = "windows")]
+fn cursor_position(_app: &AppHandle) -> Option<(f64, f64)> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    let mut p = POINT { x: 0, y: 0 };
+    // SAFETY: plain out-parameter call. The process is per-monitor DPI aware
+    // (tao sets it), so these are physical px like the window positions.
+    (unsafe { GetCursorPos(&mut p) } != 0).then_some((p.x as f64, p.y as f64))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn cursor_position(app: &AppHandle) -> Option<(f64, f64)> {
+    app.cursor_position().ok().map(|p| (p.x, p.y))
+}
 /// Grace margin around the body so the edges aren't fiddly to grab.
 const MARGIN_CSS: f64 = 4.0;
 
@@ -93,21 +120,22 @@ pub fn start(app: AppHandle) {
                 }
                 continue;
             };
-            let Ok(cursor) = app.cursor_position() else { continue };
+            let Some(cursor) = cursor_position(&app) else { continue };
             let body = *state.body.lock().unwrap();
             let (cursor, window, scale) = if cfg!(target_os = "macos") {
                 (
-                    (cursor.x / primary_scale, cursor.y / primary_scale),
+                    (cursor.0 / primary_scale, cursor.1 / primary_scale),
                     (g.x / g.scale, g.y / g.scale, g.w / g.scale, g.h / g.scale),
                     1.0,
                 )
             } else {
-                ((cursor.x, cursor.y), (g.x, g.y, g.w, g.h), g.scale)
+                (cursor, (g.x, g.y, g.w, g.h), g.scale)
             };
             let over = hit(cursor, window, body, scale);
             // Poll faster only while the cursor is near Glitch.
             let (cx, cy) = (window.0 + window.2 / 2.0, window.1 + window.3 / 2.0);
-            let near = (cursor.0 - cx).abs() < 400.0 * scale && (cursor.1 - cy).abs() < 400.0 * scale;
+            let r = NEAR_RADIUS_CSS * scale;
+            let near = (cursor.0 - cx).abs() < r && (cursor.1 - cy).abs() < r;
             wait = if near { NEAR_POLL } else { FAR_POLL };
             if last != Some(over) {
                 let Some(win) = app.get_webview_window(MASCOT) else { continue };
@@ -128,7 +156,7 @@ pub fn start(app: AppHandle) {
 /// Body rect in physical screen px, for placing the chat bubble.
 pub fn body_rect(app: &AppHandle) -> Option<crate::layout::Rect> {
     let state = app.state::<Hitbox>();
-    let body = (*state.body.lock().unwrap())?;
+    let body = (*state.body.lock().unwrap()).or(*state.last_body.lock().unwrap())?;
     let g = (*state.geometry.lock().unwrap())?;
     Some(crate::layout::Rect {
         x: (g.x + body.x * g.scale) as i32,

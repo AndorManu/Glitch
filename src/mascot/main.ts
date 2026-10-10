@@ -3,11 +3,12 @@
 // windows (api.world), the click-through hitbox, the mouse, and the events
 // from Rust (moods, chat open, settings, actions).
 //
-// CPU budget: no requestAnimationFrame. Resting = about one repaint and one
-// timer wakeup per second; asleep = one per 2.4 s and no polling at all.
+// CPU budget: no requestAnimationFrame. Resting = under 2.5 repaints and 2.5
+// timer wakeups per second (IDLE_BUDGET); asleep = one per 2.4 s and no polling at all.
 // The window only moves while he walks/climbs (30 Hz) or flies / is carried
 // (60 Hz); otherwise no movement timer runs. See creature.ts.
 
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   currentMonitor,
@@ -16,14 +17,17 @@ import {
   PhysicalPosition,
   primaryMonitor,
 } from "@tauri-apps/api/window";
-import { api, type Settings, type WorldSnapshot } from "../shared/ipc";
-import { GLITCH } from "../sprites/glitch";
-import { loadSprites } from "../sprites/load";
-import { RACCOON } from "../sprites/raccoon";
+import { api, chaosApi, type LedgeEvent, MASCOT_TALK_EVENT, type Settings, type UpdateAct, type WorldSnapshot } from "../shared/ipc";
+import { loadGlitchSprites } from "../sprites/glitch-sprites";
+import { contextApi, type ContextStatus, type Reaction } from "../shared/context";
+import { type CountdownLabel, ContextReactor, debugReaction } from "./context";
 import type { AnimationName } from "./animations";
 import { Creature, type Host } from "./creature";
 import { WIN, type Vec } from "./physics";
+import type { Play } from "./play/games";
+import { initPlay } from "./play/index";
 import { Renderer } from "./render";
+import { domSignStage, UpdateActor } from "./update-act";
 
 const win = getCurrentWindow();
 const canvas = document.getElementById("glitch") as HTMLCanvasElement;
@@ -66,9 +70,48 @@ const host: Host = {
   ),
   setHitbox: (rect) => void api.setHitbox(rect).catch(() => {}),
   clicked: () => void api.mascotClicked(),
+  watchLedge: (id) => api.ledgeWatch(id).catch(() => null),
+  ledgeFrame: (id) => api.ledgeFrame(id),
+  chaos: {
+    status: () => chaosApi.status(),
+    windows: () => chaosApi.windows().catch(() => []),
+    grabWindow: (id) => chaosApi.grabWindow(id).catch(() => null),
+    dragWindow: (dx, dy) => chaosApi.dragWindow(dx, dy).then((r) => (r ? { x: r[0], y: r[1] } : null), () => null),
+    releaseWindow: () => void chaosApi.releaseWindow().catch(() => {}),
+    grabCursor: () => chaosApi.grabCursor().then((p) => (p ? { x: p[0], y: p[1] } : null), () => null),
+    dragCursor: (x, y) => chaosApi.dragCursor(x, y).catch(() => false),
+    releaseCursor: () => void chaosApi.releaseCursor().catch(() => {}),
+    paws: (paws) => void chaosApi.paws(paws).catch(() => {}),
+    noteOpen: (line, x, y) => chaosApi.noteOpen(line, x, y).catch(() => null),
+    noteMove: (x, y) => void chaosApi.noteMove(x, y).catch(() => {}),
+    noteIsOpen: () => chaosApi.noteIsOpen(),
+  },
 };
 
 let creature: Creature | null = null;
+let reactor: ContextReactor | null = null;
+let playGames: Play | null = null;
+
+/** The tiny focus countdown above his head (shown while hovering him). */
+function countdownLabel(): CountdownLabel {
+  const el = document.createElement("div");
+  el.setAttribute("role", "timer");
+  el.setAttribute("aria-label", "Focus time left");
+  el.style.cssText =
+    "position:fixed;left:50%;top:6px;transform:translateX(-50%);padding:1px 6px;border-radius:6px;" +
+    "font:600 11px/16px ui-monospace,Consolas,monospace;color:#fff;background:rgba(20,16,40,.82);" +
+    "pointer-events:none;white-space:nowrap;display:none";
+  document.body.append(el);
+  return {
+    show: (text) => {
+      el.textContent = text;
+      el.style.display = "block";
+    },
+    hide: () => {
+      el.style.display = "none";
+    },
+  };
+}
 
 // ----------------------------------------------------------- the mouse
 // Our own drag (not the OS one): pointer capture keeps the events coming
@@ -114,24 +157,30 @@ export function playAction(name: unknown): boolean {
 
 function applySettings(s: Settings): void {
   creature?.setMovement(s.movement_enabled);
+  creature?.setChaos(s.chaos_enabled ?? true);
 }
 
 async function main(): Promise<void> {
   // The raccoon sheet; the tiny code-drawn creature only if the PNG fails.
-  const sprites = await loadSprites(RACCOON).catch((e) => {
-    console.error("sprite sheet failed to load, using fallback art", e);
-    return loadSprites(GLITCH);
-  });
+  const sprites = await loadGlitchSprites();
   const renderer = new Renderer(canvas, sprites);
   const c = new Creature(host, renderer);
   creature = c;
+  // Debug builds (`tauri dev` / `tauri build --debug`): creature events on the Rust console.
+  if (import.meta.env.DEV || import.meta.env.TAURI_ENV_DEBUG === "true") {
+    c.onEvent = (what) => void invoke("chaos_debug_log", { what }).catch(() => {});
+  }
   let settings: Settings | null = null;
   try {
     settings = await api.getSettings();
     c.movement = settings.movement_enabled;
+    c.chaosOn = settings.chaos_enabled ?? true;
   } catch (e) {
     console.error("could not load settings", e);
   }
+  // Games, play and growth: hats, mood, fetch, hide and seek, eating (play/).
+  const { play } = await initPlay(c, renderer, () => Promise.resolve(host.cursor()), settings);
+  playGames = play;
   const pos = await win.outerPosition().catch(() => ({ x: 0, y: 0 }));
   await c.start({ x: pos.x, y: pos.y });
 
@@ -139,9 +188,29 @@ async function main(): Promise<void> {
   await listen<boolean>("panel-visibility", (e) => c.setPanelOpen(e.payload));
   // Unknown moods fall back to idle inside setMood.
   await listen<string>("mood", (e) => c.setMood(e.payload));
-  await listen<boolean>("mascot-hover", (e) => c.setHovered(e.payload));
+  await listen<boolean>("mascot-hover", (e) => {
+    c.setHovered(e.payload);
+    reactor?.setHovered(e.payload);
+  });
+  // The window he stands on moved / closed / got covered (src-tauri/src/ledge_watch.rs).
+  await listen<LedgeEvent>("ledge-event", (e) => c.ledgeEvent(e.payload));
   // For behaviours driven from Rust or other windows; unknown names are ignored.
   await listen<string>("mascot-action", (e) => void playAction(e.payload));
+  // He reacts to what the user is doing (src-tauri/src/context.rs).
+  const r = new ContextReactor(c, { now: () => performance.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (id) => clearTimeout(id as ReturnType<typeof setTimeout>) }, Math.random, countdownLabel());
+  reactor = r;
+  if (c.onEvent) r.onEvent = (what) => c.onEvent?.(`context:${what}`);
+  await listen<Reaction>("context", (e) => void r.handle(e.payload));
+  await listen<ContextStatus>("focus", (e) => r.status(e.payload));
+  void contextApi.status().then((s) => r.status(s), () => {});
+  // "Update me": run over, knock on the screen, hold up a sign (update-act.ts).
+  const actor = new UpdateActor(
+    { play: playAction, setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (t) => clearTimeout(t as ReturnType<typeof setTimeout>) },
+    domSignStage(document.body),
+  );
+  await listen<UpdateAct>("mascot-update", (e) => actor.run(e.payload));
+  // The bubble shows a reply: he says it (mouth moving while it appears).
+  await listen<number>(MASCOT_TALK_EVENT, (e) => c.talk(Number(e.payload) || 0));
   window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener("change", () => renderer.redraw());
   // Show only now that the first frame is drawn (no blank/white flash).
   await win.show();
@@ -149,11 +218,19 @@ async function main(): Promise<void> {
   if (settings && !settings.onboarding_done) void api.showPanel();
 }
 
-// Dev/testing hook: trigger animations, behaviours and moods from the console or Playwright.
-if (import.meta.env.DEV) {
+// Dev/testing hook (dev server and debug builds only): trigger animations, behaviours and moods, read the state (CDP, Playwright).
+if (import.meta.env.DEV || import.meta.env.TAURI_ENV_DEBUG === "true") {
   (window as unknown as { __glitch: object }).__glitch = {
     play: playAction,
+    /** A chaos act now: "window", "push", "chase", "note", "peek", "knock", "paws". */
+    chaos: (act: string) => creature?.forceChaos(act),
     mood: (m: string) => creature?.setMood(m),
+    /** A context reaction now: "dance", "glasses", "watch", "night", "morning", "battery", "cpu", "quiet", "unquiet", "suggest", "focus", "unfocus". */
+    react: (what: string) =>
+      contextApi.debug(what).catch(() => {
+        const r = debugReaction(what);
+        return r ? (reactor?.handle(r, true) ?? false) : false;
+      }),
     burst: (ms?: number) => creature?.animator.glitchBurst(ms),
     face: (left: boolean) => {
       if (!creature) return;
@@ -162,6 +239,14 @@ if (import.meta.env.DEV) {
     },
     get creature() {
       return creature;
+    },
+    get reactor() {
+      return reactor;
+    },
+    /** Games: "play:fetch", "play:hide", "play:stop". */
+    game: (name: string) => playGames?.action(name) ?? false,
+    get games() {
+      return playGames;
     },
     get animation(): AnimationName | undefined {
       return creature?.animation;

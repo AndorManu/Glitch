@@ -19,6 +19,7 @@ pub mod macos;
 pub mod windows;
 
 use std::io;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -42,6 +43,12 @@ pub trait Platform: Send + Sync {
     /// Folders `search_files` looks in.
     fn search_roots(&self) -> Vec<PathBuf>;
     fn home_dir(&self) -> Option<PathBuf>;
+    /// The addresses a host name points to (DNS), to tell whether a web page
+    /// is really on the local network. Blocking; may take a few seconds.
+    fn resolve_host(&self, host: &str) -> io::Result<Vec<IpAddr>> {
+        use std::net::ToSocketAddrs;
+        Ok((host, 443).to_socket_addrs()?.map(|a| a.ip()).collect())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,13 +84,25 @@ impl Platform for SystemPlatform {
     }
 
     fn launch_app(&self, app: &AppEntry) -> io::Result<()> {
+        // Packaged Windows apps (Calculator, Photos, Store apps).
+        if let Some(id) = windows::packaged_app_id(&app.launch_path) {
+            return Command::new("explorer.exe")
+                .arg(format!("{}{id}", windows::APPS_FOLDER_PREFIX))
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map(|_| ());
+        }
         // Opening a .lnk (Windows) or .app bundle (macOS) launches the app.
         open::that_detached(&app.launch_path)
     }
 
     fn installed_apps(&self) -> Vec<AppEntry> {
         match Os::current() {
-            Os::Windows => windows::installed_apps(&windows::start_menu_dirs()),
+            Os::Windows => {
+                windows::merge_apps(windows::installed_apps(&windows::start_menu_dirs()), packaged_windows_apps())
+            }
             Os::MacOs => macos::installed_apps(&macos::app_dirs(dirs::home_dir().as_deref())),
             Os::Linux => linux::installed_apps(),
         }
@@ -96,6 +115,47 @@ impl Platform for SystemPlatform {
     fn home_dir(&self) -> Option<PathBuf> {
         dirs::home_dir()
     }
+}
+
+/// Packaged Windows apps via PowerShell's `Get-StartApps` (~0.7 s), cached
+/// for a few minutes so a chat doesn't pay that on every `open_app`. Empty
+/// on other OSes or if PowerShell fails (the shortcut scan still works).
+fn packaged_windows_apps() -> Vec<AppEntry> {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    const TTL: Duration = Duration::from_secs(300);
+    static CACHE: Mutex<Option<(Instant, Vec<AppEntry>)>> = Mutex::new(None);
+    if !cfg!(target_os = "windows") {
+        return Vec::new();
+    }
+    if let Some((at, apps)) = &*CACHE.lock().unwrap() {
+        if at.elapsed() < TTL {
+            return apps.clone();
+        }
+    }
+    let mut cmd = Command::new("powershell.exe");
+    cmd.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        windows::PACKAGED_APPS_SCRIPT,
+    ])
+    .stdin(Stdio::null())
+    .stderr(Stdio::null());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let apps = match cmd.output() {
+        Ok(out) if out.status.success() => windows::parse_packaged_apps(&String::from_utf8_lossy(&out.stdout)),
+        _ => Vec::new(),
+    };
+    *CACHE.lock().unwrap() = Some((Instant::now(), apps.clone()));
+    apps
 }
 
 /// Desktop, Documents, Downloads, Pictures, Music, Videos/Movies (the ones that exist).
@@ -178,4 +238,22 @@ pub(crate) fn dedupe_apps(mut apps: Vec<AppEntry>) -> Vec<AppEntry> {
     apps.sort_by_key(|a| a.name.to_lowercase());
     apps.dedup_by(|a, b| normalise_name(&a.name) == normalise_name(&b.name));
     apps
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_live_tests {
+    use super::*;
+
+    /// Runs the real `Get-StartApps` query. Hosted CI images may lack the
+    /// inbox apps, so only the shape is checked; on a desktop Windows 11
+    /// this finds Calculator.
+    #[test]
+    fn packaged_apps_query_works() {
+        let apps = packaged_windows_apps();
+        assert!(apps.iter().all(|a| windows::packaged_app_id(&a.launch_path).is_some()));
+        if let Some(calc) = apps.iter().find(|a| a.name == "Calculator") {
+            assert!(calc.launch_path.to_string_lossy().contains("WindowsCalculator"));
+        }
+        eprintln!("{} packaged apps, calculator: {}", apps.len(), apps.iter().any(|a| a.name == "Calculator"));
+    }
 }

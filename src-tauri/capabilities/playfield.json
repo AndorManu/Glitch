@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "playfield",
+  "description": "The play overlay (fetch ball): says when it has drawn / is done, and when the ball is pressed or let go. Nothing else.",
+  "windows": [
+    "playfield"
+  ],
+  "permissions": [
+    "allow-playfield-ready",
+    "allow-playfield-idle",
+    "allow-ball-hold"
+  ]
+}

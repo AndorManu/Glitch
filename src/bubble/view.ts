@@ -1,8 +1,9 @@
 // Draws the bubble: Glitch's speech (or thought cloud) above a compose pill.
 // All decisions live in state.ts; this file only turns state into DOM.
 
-import { askPermission, PLACEHOLDER, THINKING } from "../shared/chat-text";
-import type { BubbleLayout } from "../shared/ipc";
+import { askPermission, lookingText, plainText, PLACEHOLDER, THINKING } from "../shared/chat-text";
+import type { BubbleLayout, UpdateIcon } from "../shared/ipc";
+import { allowAccepted, CONFIRM_CHOICES, defaultChoice } from "./choices";
 import { h, svg } from "./dom";
 import {
   CLOUD,
@@ -18,8 +19,8 @@ import {
   TRAIL,
   TRAIL_W,
 } from "./shapes";
-import { canSend, type BubbleState, type Speech } from "./state";
-import { actionChip, breakChunks, centerOn, tailWithin } from "./text";
+import { canSend, type BubbleState, type Speech, type Work } from "./state";
+import { actionChip, breakChunks, centerOn, narrowestFit, tailWithin } from "./text";
 import { Typewriter } from "./typewriter";
 import { micActive, micHint, setupText, type MicState } from "./voice";
 
@@ -31,6 +32,8 @@ export interface ViewHandlers {
   openSetup(): void;
   /** The current speech has been fully revealed on screen. */
   seen(): void;
+  /** Glitch starts "saying" a reply or question of `chars` characters (he moves his mouth). */
+  talk?(chars: number, opened: boolean): void;
   /** Mic button pressed / released (pointer or keyboard). */
   micDown(): void;
   micUp(): void;
@@ -39,7 +42,18 @@ export interface ViewHandlers {
   voiceDismiss(): void;
   voiceCancelDownload(): void;
   openMicSettings(): void;
+  /** A button on an "Update me" speech (Done, Snooze, Tell me...). */
+  choose?(id: string, choice: string): void;
 }
+
+/** The little round badge in front of an update. */
+const UPDATE_GLYPHS: Record<UpdateIcon, string> = {
+  reminder: "⏰",
+  claude: "✦",
+  event: "✓",
+  digest: "✉",
+  briefing: "☀",
+};
 
 /** Transparent gap kept around the shapes for their shadow and focus ring. */
 const SIDE = 6;
@@ -57,10 +71,15 @@ type SpeechShown = {
   balloon: HTMLElement;
   tail: SVGSVGElement;
   choices: HTMLButtonElement[];
+  /** An Allow / Nope card. */
+  confirm: boolean;
   /** Voice setup offer: progress bar, status line, and its button rows. */
   setup?: { bar: HTMLElement; fill: HTMLElement; note: HTMLElement; pct: HTMLElement; offer: HTMLElement; running: HTMLElement };
 };
-type Shown = { kind: "cloud"; el: HTMLElement } | SpeechShown;
+/** While busy: the thought cloud (no text yet) or the reply streaming in. Both carry the step list. */
+type CloudShown = { kind: "cloud"; el: HTMLElement; work: HTMLElement };
+type LiveShown = { kind: "live"; el: HTMLElement; balloon: HTMLElement; tail: SVGSVGElement; work: HTMLElement; say: HTMLElement; scroll: HTMLElement };
+type Shown = CloudShown | LiveShown | SpeechShown;
 
 export class BubbleView {
   readonly root: HTMLElement;
@@ -147,7 +166,20 @@ export class BubbleView {
     this.root.setAttribute("aria-busy", String(state.busy));
 
     if (state.busy) {
-      if (this.shown?.kind !== "cloud") this.replace({ kind: "cloud", el: this.buildCloud() });
+      if (state.work.text) {
+        if (this.shown?.kind !== "live") this.replace(this.buildLive());
+        const live = this.shown as LiveShown;
+        const text = plainText(state.work.text);
+        if (live.say.textContent !== text) {
+          live.say.textContent = text;
+          live.scroll.scrollTop = live.scroll.scrollHeight;
+        }
+      } else if (this.shown?.kind !== "cloud") {
+        const work = this.buildWork();
+        this.replace({ kind: "cloud", el: this.buildCloud(work), work });
+      }
+      const shown = this.shown as CloudShown | LiveShown;
+      renderWork(shown.work, state.work);
     } else if (state.speech) {
       const s = this.shown;
       if (s?.kind === "speech" && s.rev === state.rev) this.updateSpeech(s, state.speech);
@@ -184,7 +216,10 @@ export class BubbleView {
   /** Put the keyboard where it's most useful right now. */
   focus(): void {
     const s = this.shown;
-    if (s?.kind === "speech" && s.choices.length && !s.choices[0].disabled && !this.input.value) s.choices[0].focus();
+    // A confirmation card focuses "Nope", so a stray Enter can't approve.
+    const i = s?.kind === "speech" ? defaultChoice(s.confirm ? "confirm" : "other", s.choices.length) : null;
+    const button = s?.kind === "speech" && i !== null ? s.choices[i] : undefined;
+    if (button && !button.disabled && !this.input.value) button.focus();
     else this.input.focus();
   }
 
@@ -306,20 +341,43 @@ export class BubbleView {
   private showSpeech(speech: Speech, rev: number): void {
     const { shown, typed, text } = this.buildSpeech(speech, rev);
     this.replace(shown);
-    const typer = new Typewriter(typed, text, () => this.on.seen());
+    const typer = new Typewriter(typed, text, () => this.on.seen(), shown.balloon.querySelector<HTMLElement>(".scroll"));
     this.typer = typer;
     snugWidth(shown.balloon);
     const scroll = shown.balloon.querySelector<HTMLElement>(".scroll");
     if (scroll) this.markOverflow(scroll);
-    if (this.live) queueMicrotask(() => typer.start());
+    // Text that already streamed in is shown at once, not typed again.
+    if (speech.kind === "reply" && speech.instant) typer.finish();
+    else if (this.live) queueMicrotask(() => typer.start());
+    if (this.live && (speech.kind === "reply" || speech.kind === "confirm" || speech.kind === "update") && text.trim()) {
+      // He opened a site or an app for you: he points at it first, then says it.
+      const opened = speech.kind === "reply" && speech.actions.some((a) => a.startsWith("Opened"));
+      this.on.talk?.(text.length, opened);
+    }
   }
 
-  private buildCloud(): HTMLElement {
+  private buildCloud(work: HTMLElement): HTMLElement {
     const dots = h("div", { class: "dots" }, h("i"), h("i"), h("i"));
     const cloud = h("div", { class: "cloud" }, h("div", { class: "glitchy" }, svg(CLOUD, "cloud-shape"), dots));
     const trail = h("div", { class: "trail" });
     trail.append(svg(TRAIL));
-    return h("div", { class: "thought" }, h("span", { class: "sr" }, THINKING), cloud, trail);
+    return h("div", { class: "thought" }, h("span", { class: "sr" }, THINKING), work, cloud, trail);
+  }
+
+  /** The step list and the "looking at your screen" badge (filled by renderWork). */
+  private buildWork(): HTMLElement {
+    return h("div", { class: "work", "aria-live": "polite" });
+  }
+
+  /** The reply as it streams in: a speech balloon without typing. */
+  private buildLive(): LiveShown {
+    const work = this.buildWork();
+    const say = h("p", { class: "say" });
+    const scroll = h("div", { class: "scroll" }, say);
+    const tail = svg(TAIL, "tail");
+    const balloon = h("div", { class: "balloon reply live" }, work, scroll, tail);
+    const el = h("div", { class: "speech" }, balloon);
+    return { kind: "live", el, balloon, tail, work, say, scroll };
   }
 
   private buildSpeech(speech: Speech, rev: number): { shown: SpeechShown; typed: HTMLElement; text: string } {
@@ -336,6 +394,7 @@ export class BubbleView {
       scroll.prepend(h("span", { class: "glyph", "aria-hidden": "true" }, "!"));
     }
     if (speech.kind === "voice_setup") scroll.prepend(h("span", { class: "glyph mic-glyph", "aria-hidden": "true" }, svg(ICON_MIC)));
+    if (speech.kind === "update") scroll.prepend(h("span", { class: `glyph update-glyph ${speech.icon}`, "aria-hidden": "true" }, UPDATE_GLYPHS[speech.icon]));
     if (main) balloon.append(scroll);
 
     if (speech.kind === "confirm" && speech.detail) {
@@ -349,8 +408,13 @@ export class BubbleView {
 
     const choices: HTMLButtonElement[] = [];
     if (speech.kind === "confirm") {
-      const allow = h("button", { type: "button", class: "choice yes", onclick: () => this.on.answer(true) }, "Allow");
-      const nope = h("button", { type: "button", class: "choice no", onclick: () => this.on.answer(false) }, "Nope");
+      const shownAt = performance.now();
+      const allow = h(
+        "button",
+        { type: "button", class: "choice yes", onclick: () => allowAccepted(shownAt, performance.now()) && this.on.answer(true) },
+        CONFIRM_CHOICES[0],
+      );
+      const nope = h("button", { type: "button", class: "choice no", onclick: () => this.on.answer(false) }, CONFIRM_CHOICES[1]);
       choices.push(allow, nope);
       const row = h("div", { class: "choices", role: "group", "aria-label": "Allow this?" }, allow, nope);
       // Typing while a button is focused goes to the message box instead.
@@ -358,6 +422,13 @@ export class BubbleView {
         if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && e.key !== " ") this.input.focus();
       });
       balloon.append(row);
+    }
+    if (speech.kind === "update" && speech.choices.length) {
+      speech.choices.forEach((c, i) => {
+        const b = h("button", { type: "button", class: `choice ${i === 0 ? "yes" : "no"}`, onclick: () => this.on.choose?.(speech.id, c.id) }, c.label);
+        choices.push(b);
+      });
+      balloon.append(h("div", { class: "choices", role: "group" }, ...choices));
     }
     if (speech.kind === "error" && speech.offerSetup) {
       balloon.append(h("div", { class: "choices" }, h("button", { type: "button", class: "choice yes", onclick: () => this.on.openSetup() }, "Fix it")));
@@ -394,7 +465,7 @@ export class BubbleView {
 
     scroll.addEventListener("scroll", () => this.markOverflow(scroll), { passive: true });
 
-    const shown: SpeechShown = { kind: "speech", rev, el, balloon, tail, choices, setup };
+    const shown: SpeechShown = { kind: "speech", rev, el, balloon, tail, choices, confirm: speech.kind === "confirm", setup };
     this.updateSpeech(shown, speech);
     return { shown, typed, text: main };
   }
@@ -434,6 +505,10 @@ export class BubbleView {
       if (offer.firstElementChild && offer.firstElementChild.textContent !== label) offer.firstElementChild.textContent = label;
       return;
     }
+    if (speech.kind === "update") {
+      for (const b of s.choices) b.disabled = speech.answered;
+      return;
+    }
     if (speech.kind !== "confirm") return;
     const done = speech.answer !== null;
     for (const b of s.choices) b.disabled = done;
@@ -455,7 +530,7 @@ export class BubbleView {
     if (pillW) this.pillTail.style.left = `${tailWithin(tx, SIDE, pillW, PILL_TAIL_INSET) - TAIL_TIP - BORDER}px`;
 
     const s = this.shown;
-    if (s?.kind === "speech") {
+    if (s?.kind === "speech" || s?.kind === "live") {
       const w = s.balloon.offsetWidth;
       const left = centerOn(tx, w, width, SIDE);
       s.balloon.style.marginLeft = `${left}px`;
@@ -491,12 +566,33 @@ function snugWidth(balloon: HTMLElement): void {
     lo = Math.max(lo, el.scrollWidth + frame);
   });
   if (lo >= full - 4) return;
-  let hi = full;
-  while (hi - lo > 2) {
-    const mid = Math.floor((lo + hi) / 2);
-    balloon.style.width = `${mid}px`;
-    if (balloon.offsetHeight > height) lo = mid;
-    else hi = mid;
+  // offsetWidth is rounded: the natural width may be a fraction wider, so
+  // allow one extra pixel and let narrowestFit test it.
+  const best = narrowestFit(lo, full + 1, (w) => {
+    balloon.style.width = `${w}px`;
+    return balloon.offsetHeight <= height;
+  });
+  balloon.style.width = best === null ? "" : `${best}px`;
+}
+
+const STEP_ICON: Record<"running" | "done" | "failed", string> = { running: "", done: "\u2713", failed: "\u00D7" };
+
+/** Draw the live step list ("1. Looking at your screen ✓") and the looking badge. */
+function renderWork(el: HTMLElement, work: Work): void {
+  const key = JSON.stringify([work.steps, work.looking]);
+  if (el.dataset.key === key) return;
+  el.dataset.key = key;
+  const parts: HTMLElement[] = [];
+  if (work.looking) parts.push(h("div", { class: "looking", role: "status" }, lookingText(work.looking)));
+  // While the badge shows, the screenshot step it stands for isn't listed twice.
+  const steps = work.steps.filter((st) => !(work.looking && st.tool === "look_at_screen" && st.state === "running"));
+  if (steps.length) {
+    const list = h("ol", { class: "steps", "aria-label": "What I'm doing" });
+    for (const st of steps) {
+      list.append(h("li", { class: `step ${st.state}` }, h("span", { class: "icon", "aria-hidden": "true" }, STEP_ICON[st.state]), h("span", { class: "label" }, st.label)));
+    }
+    parts.push(list);
   }
-  balloon.style.width = `${hi}px`;
+  el.replaceChildren(...parts);
+  el.hidden = parts.length === 0;
 }

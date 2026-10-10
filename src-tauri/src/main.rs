@@ -1,11 +1,24 @@
 // No console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(test)]
+mod capabilities_check;
+mod chaos;
+mod chaos_native;
 mod commands;
+mod context;
+mod context_native;
+mod desktop;
 mod hover;
 mod layout;
+mod ledge_watch;
+#[cfg(target_os = "windows")]
+mod notify_win;
 mod os;
+mod play;
+mod play_native;
 mod state;
+mod update_me;
 mod voice;
 mod windows;
 mod world_native;
@@ -28,10 +41,15 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         state.settings().movement_enabled,
         None::<&str>,
     )?;
+    let chaos = CheckMenuItem::with_id(app, "chaos", "Chaos mode", true, state.settings().chaos_enabled, None::<&str>)?;
+    let focus = context::tray_item(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Glitch", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&chat, &wander, &settings, &sep, &quit])?;
+    let fetch = MenuItem::with_id(app, "play_fetch", "Play fetch", true, None::<&str>)?;
+    let hide = MenuItem::with_id(app, "play_hide", "Play hide and seek", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&chat, &fetch, &hide, &wander, &chaos, &focus, &settings, &sep, &quit])?;
     *state.wander_item.lock().unwrap() = Some(wander);
+    *state.chaos_item.lock().unwrap() = Some(chaos);
 
     let mut tray =
         TrayIconBuilder::with_id("glitch").tooltip("Glitch").menu(&menu).show_menu_on_left_click(true).on_menu_event(
@@ -47,8 +65,21 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 }
                 "wander" => {
                     let s = app.state::<AppState>().update_settings(|s| s.movement_enabled = !s.movement_enabled);
+                    if !s.movement_enabled {
+                        chaos::stop_all(app);
+                    }
                     let _ = app.emit("settings-changed", &s);
                 }
+                "chaos" => {
+                    let s = app.state::<AppState>().update_settings(|s| s.chaos_enabled = !s.chaos_enabled);
+                    if !s.chaos_enabled {
+                        chaos::stop_all(app);
+                    }
+                    let _ = app.emit("settings-changed", &s);
+                }
+                "play_fetch" => play::start_game(app, glitch_core::play::Game::Fetch),
+                "play_hide" => play::start_game(app, glitch_core::play::Game::HideSeek),
+                "focus" => context::tray_toggle(app),
                 "quit" => {
                     let app = app.clone();
                     tauri::async_runtime::spawn(async move { commands::quit_app(&app).await });
@@ -64,6 +95,12 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn main() {
+    let context = tauri::generate_context!();
+    // `glitch --notify "build done"` / the Claude Code hook: send the event
+    // to the running Glitch and exit, no windows.
+    if let Some(code) = update_me::cli(&context.config().identifier) {
+        std::process::exit(code);
+    }
     tauri::Builder::default()
         // A second launch just opens the chat of the running Glitch.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -72,9 +109,15 @@ fn main() {
         }))
         // Voice push-to-talk hotkey (registered by voice::setup, not here).
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // Glitch's belly: folder picker + "eat this?" (used from Rust only).
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            app.manage(AppState::new(app.path().app_config_dir()?));
+            app.manage(play::PlayState::new(&app.path().app_config_dir()?));
+            app.manage(AppState::new(app.handle(), app.path().app_config_dir()?));
+            update_me::setup(app.handle(), app.path().app_config_dir()?);
             app.manage(hover::Hitbox::default());
+            app.manage(chaos::ChaosState::default());
+            app.manage(context::ContextState::default());
             voice::setup(app.handle());
             hover::start(app.handle().clone());
             os::configure(app);
@@ -83,8 +126,13 @@ fn main() {
             // wizard on first run (so the panel can be placed next to it).
             // Dragging Glitch keeps the chat bubble attached (see place_mascot).
             windows::place_mascot(app.handle());
+            play::watch_drops(app.handle());
+            chaos::debug_trigger(app.handle());
+            context::start(app.handle());
+            context::debug_trigger(app.handle());
             Ok(())
         })
+        // A new command also goes into build.rs and a window's capabilities/ file.
         .invoke_handler(tauri::generate_handler![
             commands::setup_status,
             commands::start_ollama,
@@ -93,11 +141,14 @@ fn main() {
             commands::send_message,
             commands::confirm_action,
             commands::reset_chat,
+            commands::warm_model,
+            commands::cool_model,
             commands::get_settings,
             commands::update_settings,
             commands::mascot_clicked,
             commands::show_bubble,
             commands::hide_bubble,
+            commands::bubble_closing,
             commands::resize_bubble,
             commands::show_panel,
             commands::panel_view,
@@ -109,6 +160,40 @@ fn main() {
             commands::world_snapshot,
             commands::set_hitbox,
             commands::quit,
+            chaos::chaos_status,
+            chaos::chaos_windows,
+            chaos::chaos_grab_window,
+            chaos::chaos_drag_window,
+            chaos::chaos_release_window,
+            chaos::chaos_grab_cursor,
+            chaos::chaos_drag_cursor,
+            chaos::chaos_release_cursor,
+            chaos::chaos_paws,
+            chaos::chaos_paws_idle,
+            chaos::chaos_note_open,
+            chaos::chaos_note_move,
+            chaos::chaos_note_close,
+            chaos::chaos_note_open_now,
+            chaos::chaos_debug_log,
+            play::pet_state,
+            play::pet_event,
+            play::update_play_settings,
+            play::ball_open,
+            play::ball_frame,
+            play::playfield_ready,
+            play::playfield_idle,
+            play::ball_hold,
+            play::ball_close,
+            play::growth_greeting,
+            play::belly_list,
+            play::belly_restore,
+            play::belly_choose_folder,
+            context::context_status,
+            context::focus_start,
+            context::update_context_settings,
+            context::context_debug,
+            ledge_watch::ledge_watch,
+            ledge_watch::ledge_frame,
             voice::commands::voice_status,
             voice::commands::update_voice_settings,
             voice::commands::voice_start,
@@ -120,13 +205,26 @@ fn main() {
             voice::commands::voice_cancel_download,
             voice::commands::voice_delete_model,
             voice::commands::voice_open_mic_settings,
+            update_me::update_me_status,
+            update_me::update_me_set,
+            update_me::claude_connect,
+            update_me::claude_disconnect,
+            update_me::reminder_delete,
+            update_me::update_pending,
+            update_me::update_seen,
+            update_me::update_choose,
+            update_me::briefing_today,
+            update_me::location_search,
+            update_me::update_me_test,
+            update_me::update_me_fake_toast,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building Glitch")
         .run(|app, event| {
             // Any way of exiting (tray Quit, OS logout, last window closed):
             // save the chat/memory. (Quit from the UI also unloads the model.)
             if let tauri::RunEvent::ExitRequested { .. } = event {
+                update_me::shutdown(app);
                 if let Ok(mut agent) = app.state::<AppState>().agent.try_lock() {
                     agent.persist();
                 }

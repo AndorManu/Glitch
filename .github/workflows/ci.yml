@@ -67,6 +67,16 @@ jobs:
         run: cargo test --workspace
       - name: Build the app
         run: npx tauri build ${{ matrix.args }}
+      # Launches the built exe and drives it over WebView2's DevTools port:
+      # first run, setup, bubble, mascot clicks, settings, quit, and checks
+      # IPC never stalls (the old build deadlocked on window creation). No
+      # Ollama on the runner, so chat must fail cleanly instead.
+      # continue-on-error until it has proven stable on hosted runners.
+      - name: Smoke test the built app (Windows)
+        if: matrix.os == 'windows-latest'
+        continue-on-error: true
+        timeout-minutes: 5
+        run: node dev/windows-smoke.mjs --exe target/release/glitch.exe
       - name: Zip the macOS app (artifact uploads drop the executable bit)
         if: matrix.os == 'macos-latest'
         run: ditto -c -k --keepParent target/universal-apple-darwin/release/bundle/macos/Glitch.app Glitch-macos.zip
