@@ -172,6 +172,9 @@ pub struct Agent {
     offered_control: bool,
     /// The "it IS open" correction was used this turn.
     guard_used: bool,
+    /// The model looked at an app it never opened this turn, and found no
+    /// window (the app to open, for the correction).
+    looked_unopened: Option<String>,
     /// Turns "Let Glitch control apps" on (saves the setting) and returns
     /// the hands to use; set by the app shell.
     enabler: Option<HandsEnabler>,
@@ -544,6 +547,7 @@ impl Agent {
             turn_text: String::new(),
             offered_control: false,
             guard_used: false,
+            looked_unopened: None,
             enabler: None,
         }
     }
@@ -789,6 +793,7 @@ impl Agent {
         self.turn_text = text.to_string();
         self.offered_control = false;
         self.guard_used = false;
+        self.looked_unopened = None;
         self.turn_model = model.to_string();
         if let Some(d) = self.hands.clone() {
             d.new_task(text);
@@ -1235,11 +1240,20 @@ impl Agent {
                 .unwrap_or_else(|e| Err(e.to_string()));
         self.emit(Progress::Looking { active: false, target, app: Some(name.clone()) });
         match shot {
-            Err(e) => tools::Outcome {
-                for_model: json!({ "ok": false, "error": e }).to_string(),
-                summary: format!("Couldn't see {name}'s window"),
-                ..Default::default()
-            },
+            Err(mut e) => {
+                if opened.is_none() {
+                    self.looked_unopened = Some(name.clone());
+                    // Not opened in this message: that may be the reason.
+                    e.push_str(&format!(
+                        " You didn't open {name} in this message: if the user asked you to open it, call open_app first."
+                    ));
+                }
+                tools::Outcome {
+                    for_model: json!({ "ok": false, "error": e }).to_string(),
+                    summary: format!("Couldn't see {name}'s window"),
+                    ..Default::default()
+                }
+            }
             Ok(shot) => {
                 let still_blank = shot.still_blank;
                 let mut outcome = tools::look_outcome(target, Some(&name), shot.capture);
@@ -1576,6 +1590,24 @@ impl Agent {
             self.queue.extend(reply.tool_calls.iter().cloned());
             let text = reply.content.clone();
             self.history.push(reply);
+            if self.queue.is_empty()
+                && !self.guard_used
+                && self.opened_app.is_none()
+                && opens_something(&self.turn_text)
+            {
+                if let Some(app) = self.looked_unopened.take() {
+                    // The user asked to open it, but the model went straight
+                    // to looking (an earlier turn "opened" it) and now says
+                    // it isn't there: it must call open_app first.
+                    self.guard_used = true;
+                    self.history.pop();
+                    self.history.push(Message::system(format!(
+                        "Correction: you have not opened {app} in this message, and the user asked you to. Call \
+                         open_app with {app} now, then look at it."
+                    )));
+                    continue;
+                }
+            }
             if self.queue.is_empty() && !self.guard_used && claims_not_open(&text) {
                 if let Some(o) = self.opened_app.clone().filter(|o| o.ready) {
                     // The model says the app isn't open, but its window was
@@ -2939,6 +2971,29 @@ mod tests {
             assert_eq!(fix.role, Role::System);
             assert!(fix.content.contains("Spotify IS open"), "{}", fix.content);
             assert!(!seen[2].iter().any(|m| m.content.contains("isn't even open")), "the wrong answer is dropped");
+        }
+
+        #[tokio::test]
+        async fn looking_at_an_app_that_was_never_opened_sends_the_model_to_open_it() {
+            let (d, clock) = world(Some(1), vec![90]);
+            // Spotify's window comes 1 s after it is launched, so it isn't there yet.
+            d.scripted.lock().unwrap().retain(|(_, w)| w.id != 2);
+            let model = ScriptedModel::new(vec![
+                calls("look_at_screen", json!({"target": "app", "app": "Spotify"})),
+                Message::assistant("Spotify isn't open yet."),
+                calls("open_app", json!({"name": "spotify"})),
+                Message::assistant("Opened it."),
+            ]);
+            let (mut a, _) = agent(model.clone(), d, clock);
+            let step = a.send("m", "open spotify and tell me what you see").await.unwrap();
+            let Step::Confirm { title, .. } = step else {
+                panic!("the correction should lead to the open card: {step:?}")
+            };
+            assert!(title.contains("Spotify"));
+            let seen = model.seen.lock().unwrap();
+            let fix = seen[2].last().unwrap();
+            assert!(fix.content.contains("you have not opened Spotify"), "{}", fix.content);
+            assert!(!seen[2].iter().any(|m| m.content.contains("isn't open yet")));
         }
 
         #[tokio::test]

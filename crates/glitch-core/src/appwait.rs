@@ -12,7 +12,8 @@
 //!    started after it, whose parent programs match the app name (a stub),
 //! 4. a window that did not exist before the launch with the app name in its
 //!    title (weakest: windows that were already open never match this way,
-//!    so a code editor with "spotify" in its title is not "Spotify").
+//!    and neither does a look at an app that was not just launched, so a
+//!    code editor with "spotify" in its title is not "Spotify").
 //!
 //! Time goes through [`Clock`] so tests run instantly.
 
@@ -148,7 +149,9 @@ impl AppMatcher {
         {
             return Some(MatchKind::Launcher);
         }
-        if is_new && !generic && self.key.len() >= 3 && title.contains(&self.key) {
+        // Only for a window that appeared after a launch: without one, any
+        // window with the name in its title (an editor, a browser tab) would match.
+        if self.baseline.is_some() && is_new && !generic && self.key.len() >= 3 && title.contains(&self.key) {
             return Some(MatchKind::Title);
         }
         None
