@@ -7,6 +7,14 @@ export interface Settings {
   movement_enabled: boolean;
   /** Chaos mode (window mischief, cursor play, paw prints, notes). Missing from old builds: on. */
   chaos_enabled?: boolean;
+  /** How wild chaos mode is (chaos_enabled false = off). Missing from old builds: gentle. */
+  chaos_level?: ChaosLevel;
+  /** The one-time Full Virus confirmation was given. */
+  chaos_full_confirmed?: boolean;
+  /** "Reduce effects": null / missing follows the OS animation setting. */
+  reduce_effects?: boolean | null;
+  /** Chaos mode may run while the stream overlay is on (default off). */
+  chaos_during_stream?: boolean;
   onboarding_done: boolean;
   ollama_url: string;
   keep_alive: string;
@@ -234,7 +242,7 @@ export const api = {
   /** The chat closed: back to the short keep-alive. */
   coolModel: () => invoke<void>("cool_model"),
   getSettings: () => invoke<Settings>("get_settings"),
-  updateSettings: (patch: Partial<Pick<Settings, "model" | "movement_enabled" | "chaos_enabled" | "onboarding_done" | "memory_enabled" | "screen_enabled" | "hands_enabled">> & { hands_model?: string }) =>
+  updateSettings: (patch: Partial<Pick<Settings, "model" | "movement_enabled" | "chaos_enabled" | "chaos_level" | "chaos_full_confirmed" | "reduce_effects" | "chaos_during_stream" | "onboarding_done" | "memory_enabled" | "screen_enabled" | "hands_enabled">> & { hands_model?: string }) =>
     invoke<Settings>("update_settings", { patch }),
   /** Click on Glitch: toggles the chat bubble (or opens setup on first run). */
   mascotClicked: () => invoke<void>("mascot_clicked"),
@@ -484,6 +492,81 @@ export const chaosApi = {
   noteMove: (x: number, y: number) => invoke<boolean>("chaos_note_move", { x, y }),
   noteClose: () => invoke<void>("chaos_note_close"),
   noteIsOpen: () => invoke<boolean>("chaos_note_open_now"),
+};
+
+// ------------------------------------------------------- chaos mode 2
+// "Old virus style" chaos (src-tauri/src/chaos2.rs, crates/glitch-core/src/chaos2.rs):
+// the hook, cursor classics, screen effects, swarm, popups, the minimise prank.
+// Rust re-checks level, safety gate, cooldowns and the global rate limit on every call.
+
+export type ChaosLevel = "off" | "gentle" | "mischief" | "full_virus";
+
+export type Fx = "hook" | "orbit" | "jitter" | "hops" | "trail" | "matrix" | "scanlines" | "melt" | "bugs" | "swarm" | "popup" | "yoink" | "dance";
+
+export type Blocked =
+  | "level"
+  | "paused"
+  | "chat"
+  | "voice"
+  | "hands"
+  | "quiet"
+  | "focus"
+  | "stream"
+  | "screen_share"
+  | "user_busy"
+  | "user_active"
+  | "reduce_effects"
+  | "rate_limit"
+  | "cooling_down"
+  | "unsafe";
+
+export interface Chaos2Status {
+  level: ChaosLevel;
+  label: string;
+  reduce_effects: boolean;
+  /** Acts that could start right now. */
+  ready: Fx[];
+  blocked: Blocked | null;
+  idle_ms: number;
+  /** [min, max] ms to the next act. */
+  gap_ms: [number, number] | null;
+}
+
+export type HookStyle = "pull" | "circle" | "figure8" | "bounce";
+export type CursorAct = { kind: "hook"; style: HookStyle } | { kind: "orbit" } | { kind: "jitter" } | { kind: "hops" };
+export type AbortReason = "stopped" | "esc" | "button" | "user_input" | "user_moved" | "lost";
+export type DanceKind = "wobble" | "edge_slide" | "quake" | "run_away";
+export type FxKind = "trail" | "matrix" | "scanlines" | "melt" | "bugs" | "swarm";
+export type PopupKind = "ram" | "raccoons" | "adopted";
+
+export interface CursorOutcome {
+  aborted: AbortReason | null;
+  travel: number;
+  ms: number;
+}
+
+export interface FxStarted {
+  ms: number;
+  tops: { id: number; x0: number; x1: number; y: number }[];
+}
+
+export const chaos2Api = {
+  status: () => invoke<Chaos2Status>("chaos2_status"),
+  /** Hook / orbit / jitter / hop the cursor. Resolves when it ends (or the user takes the mouse back). Rejects with a Blocked. */
+  cursorAct: (act: CursorAct, rodX: number, rodY: number) => invoke<CursorOutcome>("chaos2_cursor_act", { act, rodX, rodY }),
+  fxStart: (kind: FxKind) => invoke<FxStarted>("chaos2_fx_start", { kind }),
+  fxSquash: (x: number, y: number) => invoke<void>("chaos2_fx_squash", { x, y }),
+  fxIdle: () => invoke<void>("chaos2_fx_idle"),
+  popup: (kind: PopupKind) => invoke<void>("chaos2_popup", { kind }),
+  popupClose: () => invoke<void>("chaos2_popup_close"),
+  dance: (id: number, kind: DanceKind) => invoke<{ aborted: AbortReason | null; ms: number }>("chaos2_dance", { id, kind }),
+  yoink: () => invoke<{ id: number; frame: ScreenRect; deadline_ms: number }>("chaos2_yoink"),
+  yoinkedCount: () => invoke<number>("chaos2_yoinked_count"),
+  abort: () => invoke<void>("chaos2_abort"),
+  /** Settings: stop everything now (and put minimised windows back). */
+  stop: () => invoke<void>("chaos2_stop"),
+  /** Settings: one harmless sample (a popup and a little cursor trail). */
+  test: () => invoke<void>("chaos2_test"),
 };
 
 // ------------------------------------------------------------------- play

@@ -59,6 +59,14 @@ export type Step =
    * plan; a list of steps = do these next; true = carry on.
    */
   | { do: "call"; run: () => boolean | Step[] | Promise<boolean | Step[]> }
+  /**
+   * Play `anim` (a loop, or a one-shot that then rests) while something runs in
+   * Rust (chaos mode 2: the hook drags the cursor, a window dances...).
+   * `until()` is started with the step: it resolves to the steps to do next
+   * (or true = carry on, false = abandon the plan). `onTick` runs every 50 ms
+   * meanwhile; `cancel` runs if the plan is interrupted or `maxMs` runs out.
+   */
+  | { do: "hold"; anim: AnimationName; maxMs: number; until: () => Promise<boolean | Step[]>; onTick?: () => void; cancel?: () => void }
   /** Turn the corner at this end of the current surface onto the next screen edge. */
   | { do: "corner"; end: -1 | 1 }
   /** Play an animation: one-shots until they end, loops for `ms`. */
