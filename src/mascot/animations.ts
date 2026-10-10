@@ -633,14 +633,23 @@ function dangleKeys(rand: () => number): Keyframe[] {
   return cycle("dangle", [0, 1, 2, 3, 4, 5, 6, 7], 120);
 }
 
-function glitchOutKeys(): Keyframe[] {
+/**
+ * The teleport frames are front-facing: rotated onto a wall or the ceiling they would lie sideways
+ * and then cut to the side-on cling pose. `mem.onWall` (set by the creature) swaps them for the
+ * climbing pose, so a glitch-out or -in there stays in one family.
+ */
+function teleFrame(mem: Memory, i: number): string {
+  return mem.onWall ? "climb0" : `teleport${Math.min(7, i)}`;
+}
+
+function glitchOutKeys(_rand?: () => number, mem: Memory = {}): Keyframe[] {
   // Teleport out: the drawn teleport frames, glitch ramping up, then dissolve into a line.
   const keys: Keyframe[] = [];
   const n = 12;
   for (let i = 0; i < n; i++) {
     const t = i / (n - 1);
     keys.push(
-      k(`teleport${Math.min(7, Math.floor(i * 0.75))}`, MIN_KEY_MS, {
+      k(teleFrame(mem, Math.floor(i * 0.75)), MIN_KEY_MS, {
         glitch: 0.3 + 0.7 * t,
         dissolve: Math.max(0, (t - 0.3) / 0.7),
         sx: 1 + 0.35 * t * t,
@@ -653,10 +662,11 @@ function glitchOutKeys(): Keyframe[] {
   return keys;
 }
 
-function glitchInKeys(): Keyframe[] {
+function glitchInKeys(rand?: () => number, mem: Memory = {}): Keyframe[] {
   // The same, backwards, then a little landing squash.
-  const keys = glitchOutKeys().reverse();
-  return [...keys, k("idle0", 80, { sx: 1.06, sy: 0.94, glitch: 0.15 }), k("idle0", 100, { fx: "eye" })];
+  const keys = glitchOutKeys(rand, mem).reverse();
+  const rest = mem.onWall ? "climb0" : "idle0";
+  return [...keys, k(rest, 80, { sx: 1.06, sy: 0.94, glitch: 0.15 }), k(rest, 100, { fx: "eye" })];
 }
 
 function chaosSpinKeys(rand: () => number): Keyframe[] {
@@ -1236,7 +1246,7 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   },
   glitchOut: { keys: glitchOutKeys, once: true, next: "gone" },
   // Invisible for a moment (the window can move now), then glitch back in.
-  gone: { keys: [k("idle0", 900, { dissolve: 1 })], once: true, next: "glitchIn" },
+  gone: { keys: (_r, mem) => [k(mem.onWall ? "climb0" : "idle0", 900, { dissolve: 1 })], once: true, next: "glitchIn" },
   glitchIn: { keys: glitchInKeys, once: true },
   chaosSpin: { keys: chaosSpinKeys, once: true },
   // Dozing off sitting up (the end of the drawn sit-down: eyes closing), sat into and stood out of through the clips.

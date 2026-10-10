@@ -167,15 +167,17 @@ export function pickVariant(vs: Variant[], rand: () => number, last?: string): V
 export function turnKeys(fam: Family, toLeft: boolean, next: string): Keyframe[] {
   if (fam === "front") return [];
   if (fam === "wall") {
-    // On a wall or the ceiling there is no drawn turn: he swings round on the
-    // spot (a quick rotation through the wall's normal), never a mirror flip.
+    // On a wall or the ceiling there is no drawn turn. Mirroring the horizontal
+    // climbing pose in one frame makes the head jump from one side of the body to
+    // the other, so he squashes along the body (like a card turning over, under a
+    // little glitch) and unfolds the other way round: never a one-frame mirror flip.
     const frame = next.startsWith("climb") ? next : "climb0";
     return [
-      key(frame, 60, { flip: true, rot: 40, pivot: 0.45 }),
-      key(frame, 60, { flip: true, rot: 85, pivot: 0.45 }),
-      key(frame, 60, { rot: -85, pivot: 0.45 }),
-      key(frame, 60, { rot: -40, pivot: 0.45 }),
-      key(frame, 70, { rot: -10, pivot: 0.45 }),
+      key(frame, 55, { flip: true, sx: 0.62, glitch: 0.25 }),
+      key(frame, 55, { flip: true, sx: 0.2, glitch: 0.5, fx: "eye" }),
+      key(frame, 55, { sx: 0.2, glitch: 0.5, fx: "eye" }),
+      key(frame, 55, { sx: 0.62, glitch: 0.25 }),
+      key(frame, 60, { sx: 0.9 }),
     ];
   }
   if (fam === "side") {

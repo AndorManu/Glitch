@@ -363,6 +363,21 @@ describe("creature: reactions", () => {
     expect(t.rec.moves.length).toBe(n);
   });
 
+  it("movement on: never stays on the ceiling for minutes (the brain lets go)", async () => {
+    const t = setup({ seed: 2 });
+    await t.c.start({ x: 1700, y: 880 });
+    const kind = () => t.c.surface.kind as string;
+    t.c.playAction("teleport");
+    for (let i = 0; i < 20 && kind() !== "ceiling"; i++) {
+      await t.fc.run(4000);
+      if (kind() !== "ceiling") t.c.playAction("teleport");
+    }
+    expect(kind()).toBe("ceiling");
+    await t.fc.run(120_000);
+    expect(kind()).not.toBe("ceiling");
+    t.c.dispose();
+  });
+
   it("a plain click calls mascotClicked; the hitbox opens up while a drag could start", async () => {
     const t = setup();
     await t.c.start({ x: 1700, y: 880 });

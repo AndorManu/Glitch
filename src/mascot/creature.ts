@@ -1445,15 +1445,20 @@ export class Creature {
     let a1 = surfaceAngle(next.surface.kind);
     while (a1 - a0 > 180) a1 -= 360;
     while (a1 - a0 < -180) a1 += 360;
-    this.corner = { from: { x: this.body.x, y: this.body.y }, to, a0, a1, t0: this.now, next };
+    // Starting to climb from a front-facing rest pose (idle, a look around): turn side-on first
+    // (the drawn turn), standing still, and only then swing round the corner.
+    const shown = this.animator.pose?.frame ?? "idle0";
+    const lead = this.animator.animation !== "climb" && familyOf(shown) !== "wall" ? bridge(shown, "climb0", this.rand, this.animator.mem as { lastClip?: Record<string, string> }) : [];
+    const wait = lead.reduce((t, k) => t + k.ms, 0);
+    this.corner = { from: { x: this.body.x, y: this.body.y }, to, a0, a1, t0: this.now + wait, next };
     this.mode = "corner";
-    if (this.animator.animation !== "climb") this.animator.play("climb");
+    if (this.animator.animation !== "climb") this.animator.play("climb", undefined, lead);
     this.ensureMotion();
   }
 
   private stepCorner(now: number): void {
     const c = this.corner!;
-    const t = Math.min(1, (now - c.t0) / (c.ms ?? CORNER_MS));
+    const t = Math.max(0, Math.min(1, (now - c.t0) / (c.ms ?? CORNER_MS)));
     const e = t * t * (3 - 2 * t);
     this.body.x = c.from.x + (c.to.x - c.from.x) * e;
     this.body.y = c.from.y + (c.to.y - c.from.y) * e;
@@ -2054,6 +2059,7 @@ export class Creature {
           this.doTeleport();
           this.waitFor("gone", () => this.waitFor("glitchIn", () => this.nextStep()));
         });
+        this.animator.mem.onWall = !isStanding(this.surface);
         this.animator.play("glitchOut");
         return;
       case "build": {
@@ -2095,6 +2101,7 @@ export class Creature {
     this.body = { x: c.x, y: c.y, vx: 0, vy: 0, angle: surfaceAngle(t.surface.kind), spin: 0 };
     this.k = 1;
     this.facingLeft = this.rand() < 0.5;
+    this.animator.mem.onWall = !isStanding(t.surface);
     this.event(isTop(t.surface) ? `teleport:${t.surface.kind}:${t.surface.ledge.id}@${t.surface.ledge.x},${t.surface.ledge.y}` : `teleport:${t.surface.kind}`);
     this.place();
     this.armLedgeWatch();
@@ -2327,6 +2334,7 @@ export class Creature {
       if (this.actionTimer !== null) this.clock.clearTimeout(this.actionTimer);
       this.actionTimer = null;
       if (name !== "sleep") this.asleep = false;
+      this.animator.mem.onWall = !isStanding(this.surface);
       this.animator.play(name, ANIMATIONS[name].next ?? this.restAnim());
       if (!ANIMATIONS[name].once && !["idle", "sleep", "napRock", "think", "ask", "listen", "cling"].includes(name)) {
         this.actionTimer = this.clock.setTimeout(() => {
