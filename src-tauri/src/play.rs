@@ -330,6 +330,27 @@ pub fn playfield_ready(app: AppHandle, window: Window) {
     if let Some(m) = app.get_webview_window(windows::MASCOT) {
         let _ = m.set_always_on_top(true);
     }
+    // The very first time the window is created its own set-up (it was built hidden) can
+    // land after this call and hide it again, then the ball never shows. Re-assert shortly.
+    let app = app.clone();
+    std::thread::spawn(move || {
+        for ms in [150u64, 450, 1200] {
+            std::thread::sleep(Duration::from_millis(ms));
+            if !app.state::<PlayState>().ball.lock().unwrap().shown {
+                return;
+            }
+            let Some(win) = app.get_webview_window(PLAYFIELD) else { return };
+            if win.is_visible().unwrap_or(true) {
+                continue;
+            }
+            let _ = win.set_ignore_cursor_events(true);
+            crate::chaos::show_quietly(&win);
+            #[cfg(target_os = "windows")]
+            if let Ok(h) = win.hwnd() {
+                crate::play_native::make_tool_window(h.0 as isize);
+            }
+        }
+    });
 }
 
 /// The ball has popped away: hide the overlay, stop watching the mouse.

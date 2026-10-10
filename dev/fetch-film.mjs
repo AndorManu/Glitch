@@ -27,7 +27,7 @@ writeFileSync(
   path.join(conf, "settings.json"),
   JSON.stringify({ onboarding_done: true, movement_enabled: true, chaos_enabled: false, memory_enabled: true, voice: { enabled: false }, play: { hat: "wizard", eye: "gold" } }),
 );
-writeFileSync(path.join(conf, "pet.json"), JSON.stringify({ energy: 90, energy_at: now, xp: 900, day: today, day_start: now, xp_today: 0, fed_today: 1 }));
+writeFileSync(path.join(conf, "pet.json"), JSON.stringify({ energy: 90, energy_at: now, xp: 5000, day: today, day_start: now, xp_today: 0, fed_today: 1 }));
 
 const proc = spawn(exe, [], {
   env: { ...process.env, GLITCH_DRY_RUN_ACTIONS: "1", WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${PORT}` },
@@ -43,7 +43,7 @@ const page = async (part) => {
   throw new Error(`no ${part} page`);
 };
 const audit = () => {
-  const raw = execFileSync("powershell", ["-NoProfile", "-File", path.join(here, "window-audit.ps1"), String(proc.pid)], { encoding: "utf8" });
+  const raw = execFileSync("python", [path.join(here, "window-audit.py"), String(proc.pid)], { encoding: "utf8" });
   return JSON.parse(raw.trim() || "[]");
 };
 try {
@@ -68,8 +68,8 @@ try {
   }
   // ---- eye colours
   for (const eye of ["magenta", "cyan", "green", "gold"]) {
-    await g(`window.__glitch.games.env.acc.eye = ${JSON.stringify(eye)}; window.__glitch.creature.repaint()`);
-    await sleep(250);
+    await g(`window.__glitch.games.env.acc.eye = ${JSON.stringify(eye)}; window.__glitch.creature.animator.play("idle"); window.__glitch.creature.repaint()`);
+    await sleep(900);
     await shot(m, `eye-${eye}`);
   }
   await g(`window.__glitch.games.env.acc.eye = "gold"; window.__glitch.creature.animator.play("idle"); window.__glitch.creature.repaint()`);
@@ -78,13 +78,13 @@ try {
   console.log("pet view", JSON.stringify(view));
   await shot(m, "chubby");
   await g(`window.__glitch.games.hover(true)`);
-  await sleep(1400);
+  await sleep(750);
   await shot(m, "hearts-on-hover");
   await g(`window.__glitch.games.hover(false)`);
   await sleep(1800);
 
   // ---- the film of a whole fetch round on the real desktop
-  film = spawn("powershell", ["-NoProfile", "-File", path.join(here, "screen-film.ps1"), path.join(out, "film"), "75", "6"], { stdio: "ignore" });
+  film = spawn("python", [path.join(here, "screen-film.py"), path.join(out, "film"), "62", "8"], { stdio: "ignore" });
   await sleep(1200);
   await g(`window.__glitch.game("play:fetch")`);
   let mode = "";
@@ -93,9 +93,14 @@ try {
     mode = await g(`window.__glitch.games.fetch.sim?.mode`);
   }
   await sleep(600);
-  writeFileSync(path.join(out, "windows-during-fetch.json"), JSON.stringify(audit(), null, 1));
-  console.log(JSON.stringify(audit()));
-  await g(`(() => { const f = window.__glitch.games.fetch; f.grab(); f.sim.mode = "air"; const u = window.__glitch.creature.world.scale; f.sim.vx = -1500 * u; f.sim.vy = -1000 * u; f.held = false; f.poke(); f.loop(); f.watch(); })()`).catch(() => {});
+  let during = audit();
+  for (let i = 0; i < 25 && !during.some((w) => w.title === "Glitch play" && w.visible); i++) {
+    await sleep(200);
+    during = audit();
+  }
+  writeFileSync(path.join(out, "windows-during-fetch.json"), JSON.stringify(during, null, 1));
+  console.log(JSON.stringify(during.filter((w) => w.title === "Glitch play")));
+  await g(`(() => { const f = window.__glitch.games.fetch; f.grab(); f.sim.mode = "air"; const u = window.__glitch.creature.world.scale; f.sim.vx = -950 * u; f.sim.vy = -700 * u; f.held = false; f.poke(); f.loop(); f.watch(); })()`).catch(() => {});
   const t0 = Date.now();
   let carried = false;
   while (Date.now() - t0 < 40000) {
