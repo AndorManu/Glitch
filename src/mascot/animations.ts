@@ -8,6 +8,7 @@
 
 import type { GridPropName } from "./props";
 import { bridge, clip, edges, familyOf, framesOf, glanceFrames, has, pickVariant, toFront, toSide } from "./transitions";
+import { IDLE_TAIL_SYNC, SIT_TAIL_SYNC } from "../sprites/anim";
 
 /** Animations that are a way of moving along: walking hands over to these without stopping first. */
 const GAITS = ["walk", "run", "climb", "carryCursor", "dragWindow", "pushWindow", "cling"];
@@ -179,9 +180,23 @@ function tail(mem: Memory, body: string, ms: number, o: Omit<Keyframe, "frame" |
   return keys;
 }
 
+/**
+ * Run the tail on until it is at `sync` (the loop frame whose tail matches the
+ * plain idle0 / sit0 drawing): the drawn fidgets start and end on those, so
+ * leaving the loop there (and coming back in there) the tail never jumps.
+ */
+function tailTo(mem: Memory, body: string, sync: number): Keyframe[] {
+  const n = framesOf(body).length;
+  const keys: Keyframe[] = [];
+  while (n && (((mem.tailPhase as number) ?? 0) % n) !== sync % n) keys.push(...tail(mem, body, TAIL_MS));
+  return keys;
+}
+
 /** The living sit: the tail curling around his feet, tapping, blinks every 2-6 s, a look around. */
 function sitTailLoop(rand: () => number, mem: Memory): Keyframe[] {
   const keys: Keyframe[] = [];
+  // Sat down on sit0's drawing: the tail carries on from there.
+  if (!String(mem.lastTail ?? "").startsWith("idle_tail_sit")) mem.tailPhase = SIT_TAIL_SYNC;
   const until = 5000 + rand() * 4000;
   let t = 0;
   let nextBlink = 1200 + rand() * 3000;
@@ -194,7 +209,11 @@ function sitTailLoop(rand: () => number, mem: Memory): Keyframe[] {
     keys.push(...step);
     t += sum(step);
   }
-  if (has("sit_idle_look") && rand() < 0.4) keys.push(...clip("sit_idle_look", 160, { ease: 2, hold: 600 }));
+  if (has("sit_idle_look") && rand() < 0.4) {
+    keys.push(...tailTo(mem, "idle_tail_sit", SIT_TAIL_SYNC), ...clip("sit_idle_look", 160, { ease: 2, hold: 600 }));
+    mem.tailPhase = SIT_TAIL_SYNC;
+  } else keys.push(...tailTo(mem, "idle_tail_sit", SIT_TAIL_SYNC)); // ready for the stand-up (drawn from sit0)
+  mem.lastTail = "idle_tail_sit";
   return keys;
 }
 
@@ -352,6 +371,9 @@ function micro(rand: () => number, mem: Memory): Keyframe[] {
  */
 function livingIdleKeys(rand: () => number, mem: Memory): Keyframe[] {
   const keys: Keyframe[] = [];
+  // Coming back from a drawn fidget (ends on idle0) or another animation: the tail carries on from idle0's.
+  if (mem.lastTail !== "idle_tail") mem.tailPhase = IDLE_TAIL_SYNC;
+  mem.lastTail = "idle_tail";
   const until = 15000 + rand() * 25000;
   let t = 0;
   let nextBlink = 1500 + rand() * 3500;
@@ -368,6 +390,11 @@ function livingIdleKeys(rand: () => number, mem: Memory): Keyframe[] {
       nextBlink = t + sum(step) + 2000 + rand() * 4000;
     } else if (t >= nextMicro) {
       step = micro(rand, mem);
+      if (step.length && !step[0].frame.startsWith("idle_tail")) {
+        // A look / glance drawn on its own frames: leave the tail loop where its tail matches idle0's, come back there.
+        step = [...tailTo(mem, "idle_tail", IDLE_TAIL_SYNC), ...step];
+        mem.tailPhase = IDLE_TAIL_SYNC;
+      }
       nextMicro = t + sum(step) + 4000 + rand() * 4000;
       nextBlink = Math.max(nextBlink, t + sum(step) + 600);
     } else {
@@ -381,8 +408,10 @@ function livingIdleKeys(rand: () => number, mem: Memory): Keyframe[] {
     keys.push(...step);
     t += sum(step);
   }
-  keys.push(...fidget(rand, mem, true));
+  keys.push(...tailTo(mem, "idle_tail", IDLE_TAIL_SYNC), ...fidget(rand, mem, true));
   if (rand() < 0.7) keys.push(...burst(rand, { frame: keys[keys.length - 1].frame }));
+  // The next loop picks the tail up from idle0's (where the fidget ended).
+  mem.lastTail = null;
   return keys;
 }
 

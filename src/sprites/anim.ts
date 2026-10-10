@@ -2185,6 +2185,10 @@ export const ANIM_HEADS: Record<string, [number, number]> = {
   pose_think: [42, 55],
   pose_chaos: [70, 53],
 };
+// The tail-loop frame whose tail is closest to the plain idle0 / sit0 tail: the living idle
+// meets the drawn fidgets (which start and end on idle0 / sit0) there, so the tail never jumps.
+export const IDLE_TAIL_SYNC = 8;
+export const SIT_TAIL_SYNC = 1;
 // Where the cursor tip is held (art px in the frame), for frames drawn holding on to the cursor.
 export const ANIM_GRIPS: Record<string, [number, number]> = {
   cling_cursor0: [49, 36],

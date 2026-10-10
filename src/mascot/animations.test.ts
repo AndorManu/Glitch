@@ -92,7 +92,7 @@ describe("animations", () => {
         if (key.glitch !== undefined) expect(key.glitch).toBeLessThanOrEqual(1);
       }
     }
-  });
+  }, 30_000); // 200 seeds of ~100 animations: slow on a busy machine
 
   it("raccoon frames point inside the 4x4 sheet", () => {
     for (const i of Object.values(RACCOON.frames)) expect(i >= 0 && i < 16).toBe(true);

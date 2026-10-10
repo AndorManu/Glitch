@@ -299,6 +299,27 @@ def head_top(a: np.ndarray) -> tuple[int, int]:
     return (hx, int(rows.min()) if len(rows) else top)
 
 
+def tail_sync(by_name: dict, loop: str, ref: str, rects) -> int:
+    """Phase of `loop` whose tail (opaque pixels in `rects`) overlaps `ref`'s best."""
+    r = by_name.get(ref)
+    if r is None or f"{loop}0" not in by_name:
+        return 0
+    R = np.zeros(r.shape[:2], bool)
+    for x0, y0, x1, y1 in rects:
+        R[y0:y1, x0:x1] = True
+    mr = (r[:, :, 3] > 0) & R
+    best, bi = -1.0, 0
+    i = 0
+    while f"{loop}{i}" in by_name:
+        m = (by_name[f"{loop}{i}"][:, :, 3] > 0) & R
+        iou = (m & mr).sum() / max(1, (m | mr).sum())
+        if iou > best:
+            best, bi = iou, i
+        i += 1
+    print(f"  tail sync {loop}: phase {bi} (IoU {best:.2f} with {ref})")
+    return bi
+
+
 def grip_lines(sheets: tuple[str, ...]) -> list[str]:
     """Grip points saved by slice-generated.py (art/frames/<sheet>-grips.json)."""
     import json
@@ -362,6 +383,10 @@ def main():
         "export const ANIM_HEADS: Record<string, [number, number]> = {",
         *[f"  {n}: [{h[0]}, {h[1]}]," for n, h in zip(names, heads)],
         "};",
+        "// The tail-loop frame whose tail is closest to the plain idle0 / sit0 tail: the living idle",
+        "// meets the drawn fidgets (which start and end on idle0 / sit0) there, so the tail never jumps.",
+        f"export const IDLE_TAIL_SYNC = {tail_sync(by_name, 'idle_tail', 'idle0', [(0, 0, 28, 90), (28, 70, 34, 90)])};",
+        f"export const SIT_TAIL_SYNC = {tail_sync(by_name, 'idle_tail_sit', 'sit0', [(0, 64, 26, 90), (26, 69, 30, 90), (30, 74, 33, 90)])};",
         "// Where the cursor tip is held (art px in the frame), for frames drawn holding on to the cursor.",
         "export const ANIM_GRIPS: Record<string, [number, number]> = {",
         *grip_lines(("cling_cursor",)),
