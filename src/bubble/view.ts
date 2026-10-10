@@ -26,7 +26,7 @@ import { ARMED_TITLE, micActive, micHint, setupText, type MicState } from "./voi
 
 export interface ViewHandlers {
   send(text: string): void;
-  answer(approved: boolean): void;
+  answer(approved: boolean, auto?: boolean): void;
   hide(): void;
   openSettings(): void;
   openSetup(): void;
@@ -47,6 +47,8 @@ export interface ViewHandlers {
   updateLater(): void;
   /** A button on an "Update me" speech (Done, Snooze, Tell me...). */
   choose?(id: string, choice: string): void;
+  /** "Undo last Glitch action" under a reply. */
+  undo?(): void;
 }
 
 /** The little round badge in front of an update. */
@@ -275,6 +277,20 @@ export class BubbleView {
   private armed = false;
   private micTitle = "";
 
+  /**
+   * "Undo last Glitch action": a small button under a finished reply while
+   * a file move or window move can be put back. `label` null removes it.
+   */
+  setUndo(label: string | null): void {
+    const s = this.shown;
+    if (s?.kind !== "speech") return;
+    s.balloon.querySelector(".undo-row")?.remove();
+    if (!label || !this.on.undo) return;
+    const undo = this.on.undo;
+    const button = h("button", { type: "button", class: "choice no undo", title: label, onclick: () => undo() }, "\u21A9 Undo last Glitch action");
+    s.balloon.append(h("div", { class: "choices undo-row" }, button));
+  }
+
   /** "Hey Glitch" is armed: the mic button wears a live dot (the microphone is open). */
   setArmed(on: boolean): void {
     if (on === this.armed) return;
@@ -441,6 +457,16 @@ export class BubbleView {
       const nope = h("button", { type: "button", class: "choice no", onclick: () => this.on.answer(false) }, speech.deny ?? CONFIRM_CHOICES[1]);
       choices.push(allow, nope);
       const row = h("div", { class: "choices", role: "group", "aria-label": "Allow this?" }, allow, nope);
+      // Desktop control's step card: a third button runs the rest of the task without asking.
+      if (speech.auto) {
+        const auto = h(
+          "button",
+          { type: "button", class: "choice auto", onclick: () => allowAccepted(shownAt, performance.now()) && this.on.answer(true, true) },
+          speech.auto,
+        );
+        choices.push(auto);
+        row.append(auto);
+      }
       // Typing while a button is focused goes to the message box instead.
       row.addEventListener("keydown", (e) => {
         if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && e.key !== " ") this.input.focus();

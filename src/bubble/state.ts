@@ -12,7 +12,7 @@ export type Answer = "allowed" | "denied" | "stale";
 export type Speech =
   /** `instant`: the text already streamed in live, so it isn't typed again. */
   | { kind: "reply"; text: string; actions: string[]; instant?: boolean }
-  | { kind: "confirm"; id: string; title: string; detail: string; actions: string[]; answer: Answer | null; allow?: string; deny?: string }
+  | { kind: "confirm"; id: string; title: string; detail: string; actions: string[]; answer: Answer | null; allow?: string; deny?: string; auto?: string }
   | { kind: "error"; text: string; offerSetup: boolean }
   /** Voice: a hint or a microphone problem (optionally with an "Open settings" button). */
   | { kind: "notice"; text: string; tone: "info" | "error"; action: "mic-settings" | null }
@@ -59,7 +59,8 @@ export interface BubbleState {
 
 export type BubbleEvent =
   | { type: "send"; text: string }
-  | { type: "answer"; approved: boolean }
+  /** `auto`: "Auto for this task" on a desktop-control step card. */
+  | { type: "answer"; approved: boolean; auto?: boolean }
   | { type: "step"; step: Step }
   | { type: "failed"; error: UiError }
   | { type: "seen" }
@@ -87,7 +88,7 @@ export type BubbleEvent =
   | { type: "voice_download"; state: "running" | "done" | "failed" | "cancelled"; percent: number | null; failed: string | null; ready: string };
 
 /** Work for the caller to start after a transition. */
-export type Request = { kind: "send"; text: string } | { kind: "confirm"; id: string; approved: boolean };
+export type Request = { kind: "send"; text: string } | { kind: "confirm"; id: string; approved: boolean; auto?: boolean };
 
 export interface Transition {
   state: BubbleState;
@@ -123,10 +124,11 @@ function speak(s: BubbleState, speech: Speech | null): BubbleState {
 
 function fromStep(step: Step, streamed: string): Speech {
   if (step.type === "confirm") {
-    const { id, title, detail, actions, allow, deny } = step;
+    const { id, title, detail, actions, allow, deny, auto } = step;
     const speech: Speech = { kind: "confirm", id, title, detail, actions, answer: null };
     if (allow) speech.allow = allow;
     if (deny) speech.deny = deny;
+    if (auto) speech.auto = auto;
     return speech;
   }
   const text = step.text.trim();
@@ -170,7 +172,7 @@ export function transition(s: BubbleState, e: BubbleEvent): Transition {
       const pending = pendingConfirm(s);
       if (!pending || s.busy) return none(s);
       const speech: Speech = { ...pending, answer: e.approved ? "allowed" : "denied" };
-      return { state: { ...s, busy: true, speech, work: { ...s.work, text: "" } }, request: { kind: "confirm", id: pending.id, approved: e.approved } };
+      return { state: { ...s, busy: true, speech, work: { ...s.work, text: "" } }, request: { kind: "confirm", id: pending.id, approved: e.approved, ...(e.auto ? { auto: true } : {}) } };
     }
     case "step":
       return none(speak(s, fromStep(e.step, s.work.text)));

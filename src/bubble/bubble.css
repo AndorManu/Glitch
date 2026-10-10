@@ -465,6 +465,8 @@ button:focus:not(:focus-visible) { outline: none; }
 
 .choices {
   display: flex;
+  flex-wrap: wrap;
+  row-gap: 6px;
   justify-content: flex-end;
   margin: 8px -4px 1px 0;
 }
@@ -483,6 +485,11 @@ button:focus:not(:focus-visible) { outline: none; }
 .choice.yes:hover:not(:disabled) { background: var(--accent-hover); }
 .choice.no { background: var(--paper-2); color: var(--text); }
 .choice.no:hover:not(:disabled) { background: var(--accent-soft); }
+/* Desktop control step card: "Auto for this task" is the quiet third choice. */
+.choice.auto { background: var(--paper-2); color: var(--text); border-style: dashed; }
+.choice.auto:hover:not(:disabled) { background: var(--accent-soft); }
+.choices.undo-row { margin-top: 6px; }
+.choice.undo { font-weight: 600; }
 .choice:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 0 0 var(--ink); }
 .choice + .choice { margin-left: 6px; }
 .choice:disabled { opacity: 0.45; cursor: default; }

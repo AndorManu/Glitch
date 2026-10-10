@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BRAIN_HINT, brainChoices, HANDS_HINT } from "./hands";
+import { BRAIN_HINT, brainChoices, DESKTOP_CARD, DESKTOP_HINT, HANDS_HINT } from "./hands";
 import { FEATURES } from "./index";
 
 describe("app control feature card", () => {
@@ -22,5 +22,15 @@ describe("app control feature card", () => {
 
   it("never uses em or en dashes", () => {
     for (const t of [HANDS_HINT, BRAIN_HINT]) expect(t).not.toMatch(new RegExp(`[${String.fromCharCode(0x2013, 0x2014)}]`));
+  });
+
+  it("explains Desktop control plainly: what it does, and the things it never does", () => {
+    const all = [DESKTOP_HINT, DESKTOP_CARD.title, ...DESKTOP_CARD.does, ...DESKTOP_CARD.never].join(" ");
+    expect(all).not.toContain("—");
+    for (const word of ["Esc", "undone", "ring"]) expect(all).toContain(word);
+    const never = DESKTOP_CARD.never.join(" ").toLowerCase();
+    for (const word of ["close windows", "delete", "password", "unsaved", "send", "type anything you did not say"]) {
+      expect(never).toContain(word);
+    }
   });
 });

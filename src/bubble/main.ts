@@ -48,7 +48,11 @@ let state = initialState(pickGreeting(browserStore()));
 
 const view = new BubbleView(root, {
   send: (text) => dispatch({ type: "send", text }),
-  answer: (approved) => dispatch({ type: "answer", approved }),
+  answer: (approved, auto) => dispatch({ type: "answer", approved, ...(auto ? { auto: true } : {}) }),
+  undo: () => void api.undoLast().then(refreshUndo, (e: { message?: string }) => {
+    dispatch({ type: "notice", text: e?.message ?? "Couldn't undo that.", tone: "error", action: null });
+    refreshUndo();
+  }),
   hide: () => hide(),
   openSettings: () => void api.showPanel("settings").catch(() => {}),
   openSetup: () => void api.showPanel("setup").catch(() => {}),
@@ -123,7 +127,7 @@ let epoch = 0;
 async function perform(r: Request): Promise<void> {
   const mine = epoch;
   try {
-    const step = r.kind === "send" ? await api.sendMessage(r.text) : await api.confirmAction(r.id, r.approved);
+    const step = r.kind === "send" ? await api.sendMessage(r.text) : await api.confirmAction(r.id, r.approved, r.auto === true);
     if (mine !== epoch) return;
     dispatch({ type: "step", step });
     if (step.type === "reply") speakReply(step.text);
@@ -134,6 +138,15 @@ async function perform(r: Request): Promise<void> {
   view.setEcho(null);
   if (visible) view.focus();
 }
+
+/** "Undo last Glitch action" under a finished reply, while there is something to put back. */
+function refreshUndo(): void {
+  void api.undoStatus().then(
+    (u) => view.setUndo(state.speech?.kind === "reply" ? u.label : null),
+    () => {},
+  );
+}
+void listen("undo-changed", () => setTimeout(refreshUndo, 500));
 
 // Live progress while Glitch works: steps, "looking at your screen", and
 // the reply streaming in.

@@ -636,3 +636,21 @@ button.danger-text.armed:hover:not(:disabled) { background: var(--danger); }
   background: var(--ok);
   box-shadow: 0 0 0 3px var(--ok-soft);
 }
+
+/* ------------------------------------------------ settings: desktop control */
+
+.desktop-card {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 2px solid var(--ink, #2a1840);
+  border-radius: 10px;
+  background: var(--paper-2, #f6efe3);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.desktop-card strong { display: block; margin: 0 0 4px; }
+.desktop-card strong:not(:first-child) { margin-top: 8px; }
+.desktop-card ul { margin: 0; padding-left: 18px; }
+.desktop-card li + li { margin-top: 3px; }
+.desktop-card .never li::marker { color: var(--danger, #c62828); }
+.undo-field { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 10px; }

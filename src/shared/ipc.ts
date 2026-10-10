@@ -17,6 +17,8 @@ export interface Settings {
   hands_enabled?: boolean;
   /** "Smarter brain for app control": a bigger model only for app tasks (null: the normal brain). */
   hands_model?: string | null;
+  /** Sub-level "Desktop control" (pointer, windows, files). Off by default; needs hands_enabled. */
+  hands_desktop_enabled?: boolean;
   /** The user allowed notes once; later notes don't ask. */
   notes_trusted?: boolean;
   /** Voice commands (see the voice section at the end of this file). */
@@ -85,9 +87,12 @@ export interface SetupStatus {
   settings: Settings;
 }
 
+/** What "Undo last Glitch action" would do. */
+export type UndoStatus = { label: string | null; count: number };
+
 export type Step =
   | { type: "reply"; text: string; actions: string[] }
-  | { type: "confirm"; id: string; title: string; detail: string; actions: string[]; allow?: string; deny?: string };
+  | { type: "confirm"; id: string; title: string; detail: string; actions: string[]; allow?: string; deny?: string; auto?: string };
 
 export interface UiError {
   code: string;
@@ -229,14 +234,17 @@ export const api = {
     return invoke<void>("pull_model", { name, onProgress: channel });
   },
   sendMessage: (text: string) => invoke<Step>("send_message", { text }),
-  confirmAction: (id: string, approved: boolean) => invoke<Step>("confirm_action", { id, approved }),
+  confirmAction: (id: string, approved: boolean, auto = false) => invoke<Step>("confirm_action", { id, approved, auto }),
+  /** "Undo last Glitch action": what it would do (label null: nothing to undo). */
+  undoStatus: () => invoke<UndoStatus>("undo_status"),
+  undoLast: () => invoke<string>("undo_last_action"),
   resetChat: () => invoke<void>("reset_chat"),
   /** The chat is open: load the model and keep it loaded (call again every few minutes). */
   warmModel: () => invoke<void>("warm_model"),
   /** The chat closed: back to the short keep-alive. */
   coolModel: () => invoke<void>("cool_model"),
   getSettings: () => invoke<Settings>("get_settings"),
-  updateSettings: (patch: Partial<Pick<Settings, "model" | "movement_enabled" | "chaos_enabled" | "onboarding_done" | "memory_enabled" | "screen_enabled" | "hands_enabled">> & { hands_model?: string }) =>
+  updateSettings: (patch: Partial<Pick<Settings, "model" | "movement_enabled" | "chaos_enabled" | "onboarding_done" | "memory_enabled" | "screen_enabled" | "hands_enabled" | "hands_desktop_enabled">> & { hands_model?: string }) =>
     invoke<Settings>("update_settings", { patch }),
   /** Click on Glitch: toggles the chat bubble (or opens setup on first run). */
   mascotClicked: () => invoke<void>("mascot_clicked"),

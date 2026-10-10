@@ -168,4 +168,21 @@ describe("live progress", () => {
     const busy = run(initialState(), { type: "send", text: "hi" });
     expect(transition(busy, { type: "reminder", text: "x" }).state).toBe(busy);
   });
+  it("a desktop-control step card keeps its third button and sends auto with the answer", () => {
+    const step = { ...confirmStep, title: "Click “Bold”", allow: "Do this step", deny: "Stop", auto: "Auto for this task" };
+    const asking = run(initialState(), { type: "send", text: "bold it" }, { type: "step", step });
+    const card = pendingConfirm(asking)!;
+    expect([card.allow, card.deny, card.auto]).toEqual(["Do this step", "Stop", "Auto for this task"]);
+    const auto = transition(asking, { type: "answer", approved: true, auto: true });
+    expect(auto.request).toEqual({ kind: "confirm", id: "c1", approved: true, auto: true });
+    const plain = transition(asking, { type: "answer", approved: true });
+    expect(plain.request).toEqual({ kind: "confirm", id: "c1", approved: true });
+    const stop = transition(asking, { type: "answer", approved: false });
+    expect(stop.request).toEqual({ kind: "confirm", id: "c1", approved: false });
+  });
+
+  it("ordinary cards have no auto button", () => {
+    const card = pendingConfirm(run(initialState(), { type: "step", step: confirmStep }))!;
+    expect(card.auto).toBeUndefined();
+  });
 });

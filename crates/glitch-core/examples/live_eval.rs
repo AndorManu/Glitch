@@ -429,6 +429,54 @@ fn cases() -> Vec<Case> {
                 )
             })
         },
+        // --- desktop control (fake desktop with windows, pointer, drag and drop, files)
+        Case {
+            apps: Some(|| vec![hm::files_app(), hm::editor_app()]),
+            ..case("desktop: click the Save button", "desktop", "click the Save button in Draft Editor", |o| {
+                need(o.hands().log().iter().any(|l| l.contains("pointer Left Draft Editor Save")), "didn't click Save")?;
+                need(o.confirms.iter().any(|c| c.contains("Save")), &format!("no card for Save: {:?}", o.confirms))
+            })
+        },
+        Case {
+            apps: Some(|| vec![hm::files_app(), hm::editor_app()]),
+            ..case("desktop: drag item A onto B", "desktop", "drag Photo A onto Folder X in Files Pro", |o| {
+                need(
+                    o.hands().drops() == vec![("Photo A.png".to_string(), "Folder X".to_string())],
+                    &format!("drops: {:?}", o.hands().drops()),
+                )
+            })
+        },
+        Case {
+            apps: Some(|| vec![hm::files_app(), hm::editor_app()]),
+            ..case("desktop: snap this window left", "desktop", "snap the Draft Editor window to the left half of the screen", |o| {
+                let g = o.hands().geometry_of("Draft Editor").ok_or("no window")?;
+                need(g.rect == (0, 0, 960, 1040), &format!("window is at {:?}", g.rect))
+            })
+        },
+        Case {
+            apps: Some(|| vec![hm::files_app(), hm::editor_app()]),
+            ..case(
+                "desktop: move my test file into folder X",
+                "desktop",
+                "move test.txt from my Desktop into the Folder X folder inside Documents",
+                |o| {
+                    need(o.world.home.join("Documents/Folder X/test.txt").exists(), "the file isn't in Folder X")?;
+                    need(!o.world.home.join("Desktop/test.txt").exists(), "still on the Desktop")?;
+                    need(o.confirms.iter().any(|c| c.contains("Move")), &format!("no move card: {:?}", o.confirms))
+                },
+            )
+        },
+        Case {
+            apps: Some(|| vec![hm::files_app(), hm::editor_app()]),
+            ..case("desktop: minimise that window", "desktop", "minimise the Files Pro window", |o| {
+                let g = o.hands().geometry_of("Files Pro").ok_or("no window")?;
+                need(g.state == glitch_core::hands::winops::WinState::Minimized, "not minimised")?;
+                need(
+                    o.hands().geometry_of("Draft Editor").is_some_and(|g| g.state != glitch_core::hands::winops::WinState::Minimized),
+                    "minimised the wrong one",
+                )
+            })
+        },
         // --- the basics still work
         case("open twitter page", "basics", "open twitter on elon musk's page", |o| {
             need(o.opened("x.com/elonmusk") || o.opened("twitter.com/elonmusk"), "didn't open x.com/elonmusk")
@@ -496,6 +544,12 @@ async fn run_case(c: &Case, provider: Arc<OllamaClient>, model: &str, hands_mode
     if let Some(h) = &world.hands {
         agent.set_hands(Some(h.clone()));
         agent.set_hands_model(hands_model.map(String::from));
+        if c.group == "desktop" {
+            std::fs::write(home.path().join("Desktop/test.txt"), "my test file").unwrap();
+            std::fs::create_dir_all(home.path().join("Documents/Folder X")).unwrap();
+            let guard = glitch_core::hands::fsmove::FileGuard::for_home(&dunce::canonicalize(home.path()).unwrap(), &[]);
+            agent.set_desktop_control(true, Some(guard), None);
+        }
     }
     let steps = Arc::new(Mutex::new(Vec::<String>::new()));
     let calls = Arc::new(Mutex::new(0usize));
