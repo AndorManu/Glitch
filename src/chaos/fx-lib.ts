@@ -143,14 +143,14 @@ export function rainColumns(w: number, seed: number): RainColumn[] {
   const cols: RainColumn[] = [];
   for (let i = 0; i < n; i++) {
     // Not every column rains: a sparse, magenta-ish curtain.
-    if (hash01(seed, i * 3) > 0.42) continue;
+    if (hash01(seed, i * 3) > 0.55) continue;
     cols.push({ x: i * RAIN_CELL, speed: 160 + hash01(seed, i * 3 + 1) * 260, len: 6 + Math.floor(hash01(seed, i * 3 + 2) * 12), delay: hash01(seed + 5, i) * 1500, seed: i });
   }
   return cols;
 }
 
 /** Overall opacity of the rain: fades in, holds low, fades out. Never above `MAX_RAIN_ALPHA`. */
-export const MAX_RAIN_ALPHA = 0.26;
+export const MAX_RAIN_ALPHA = 0.4;
 export function rainAlpha(t: number, total: number): number {
   return MAX_RAIN_ALPHA * smooth(t / 700) * smooth((total - t) / 800);
 }

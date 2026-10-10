@@ -11,7 +11,8 @@ import ctypes
 import sys
 import time
 
-from PIL import Image, ImageGrab
+from PIL import Image, ImageDraw, ImageGrab
+import ctypes.wintypes as wt
 
 ctypes.windll.user32.SetProcessDPIAware()
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
@@ -26,6 +27,13 @@ n = 0
 while time.perf_counter() - t0 < secs:
     t = time.perf_counter()
     im = ImageGrab.grab(bbox=(bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]) if bbox else None, all_screens=True).convert("RGB")
+    # The screen grab has no mouse pointer: draw one where it is (white arrow, black outline).
+    pt = wt.POINT()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+    ox, oy = (bbox[0], bbox[1]) if bbox else (0, 0)
+    cx, cy = pt.x - ox, pt.y - oy
+    arrow = [(0, 0), (0, 17), (4, 13), (7, 20), (10, 19), (7, 12), (12, 12)]
+    ImageDraw.Draw(im).polygon([(cx + 1.4 * x, cy + 1.4 * y) for x, y in arrow], fill=(255, 255, 255), outline=(0, 0, 0))
     if scale != 1:
         im = im.resize((int(im.width * scale), int(im.height * scale)), Image.LANCZOS)
     frames.append(im)

@@ -8,9 +8,23 @@ mod imp {
     use windows_sys::Win32::Foundation::{HWND, POINT};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetCursorPos, GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
-        WS_EX_TOOLWINDOW,
+        GetCursorPos, GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, GWL_STYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+        SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
     };
+
+    /// One of Glitch's own helper windows (note, popup, effects) shown natively before the toolkit ever
+    /// applied "no decorations": it still wears the default title bar. Take it off.
+    pub fn strip_caption(hwnd: isize) {
+        let hwnd = hwnd as HWND;
+        // SAFETY: plain style get/set on our own window handle.
+        unsafe {
+            let st = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+            if st & WS_CAPTION != 0 {
+                SetWindowLongPtrW(hwnd, GWL_STYLE, (st & !WS_CAPTION) as isize);
+                SetWindowPos(hwnd, std::ptr::null_mut(), 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+        }
+    }
 
     /// No Alt+Tab entry, no taskbar button, never activated by a click.
     pub fn make_tool_window(hwnd: isize) {
@@ -57,6 +71,7 @@ mod imp {
 #[allow(dead_code)]
 mod imp {
     pub fn make_tool_window(_hwnd: isize) {}
+    pub fn strip_caption(_hwnd: isize) {}
     pub fn hide_from_switcher(_hwnd: isize) {}
     pub fn cursor() -> Option<(f64, f64)> {
         None

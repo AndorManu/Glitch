@@ -306,6 +306,13 @@ pub fn close_extras(app: &AppHandle) {
 /// Show one of Glitch's extra windows without taking the keyboard focus
 /// from whatever the user is doing.
 pub(crate) fn show_quietly(win: &tauri::WebviewWindow) {
+    // A window that was never shown through the toolkit still carries the default title bar
+    // (the toolkit strips it on its first `show`, which this function bypasses): apply it now.
+    let _ = win.set_decorations(false);
+    #[cfg(target_os = "windows")]
+    if let Ok(h) = win.hwnd() {
+        crate::play_native::strip_caption(h.0 as isize);
+    }
     #[cfg(target_os = "windows")]
     if let Ok(h) = win.hwnd() {
         if native::show_no_activate(h.0 as usize as u64) {

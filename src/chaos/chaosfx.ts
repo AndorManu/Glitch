@@ -303,10 +303,12 @@ function glowLine(pts: P[]): void {
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.shadowColor = MAGENTA;
-  ctx.shadowBlur = 9;
-  strokePts(pts, 3, "rgba(255,43,214,0.35)");
+  ctx.shadowBlur = 12;
+  strokePts(pts, 4, "rgba(255,43,214,0.45)");
   ctx.shadowBlur = 0;
-  strokePts(pts, 1.5, INK);
+  strokePts(pts, 1.6, INK);
+  // A faint pink thread inside, so the line still reads on a dark desktop.
+  strokePts(pts, 0.7, "rgba(255,200,246,0.7)");
   ctx.restore();
 }
 
@@ -460,8 +462,9 @@ function drawMelt(t: number): void {
 }
 
 function drawBug(b: Bug, t: number): void {
+  // Big enough to read on a real screen: 3 css px per art pixel.
+  const px = 3;
   const step = Math.floor(t / 160 + b.seed) % 2;
-  const px = 2;
   const body: [number, number][] = [
     [1, 0],
     [2, 0],

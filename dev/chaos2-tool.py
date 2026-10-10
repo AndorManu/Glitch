@@ -121,10 +121,10 @@ def trace(out, pids, ms, hz, hwnds, trigger, sim, delay):
                                 time.sleep(0.05)
                                 key(0x1B, False)
                             else:
-                                for vk in (0x11, 0x12, 0x10, 0x47):
+                                for vk in (0x11, 0x12, 0x10, 0x78):
                                     key(vk, True)
                                 time.sleep(0.08)
-                                for vk in (0x47, 0x10, 0x12, 0x11):
+                                for vk in (0x78, 0x10, 0x12, 0x11):
                                     key(vk, False)
                         else:
                             note = "skipped: the focus is not on our window"
@@ -158,6 +158,18 @@ def main(argv):
         trace(argv[2], {int(p) for p in opt("--pids", "0").split(",")}, float(opt("--ms", 12000)), float(opt("--hz", 250)), hwnds, trigger, opt("--sim"), float(opt("--delay", 300)))
     elif cmd == "shot":
         shot(argv[2], *map(int, argv[3:7]))
+    elif cmd == "styles":
+        want_pid = int(argv[2])
+
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, wt.HWND, wt.LPARAM)
+        def visit2(h, _):
+            if pid_of(h) == want_pid and user32.IsWindowVisible(h):
+                st = user32.GetWindowLongW(h, -16) & 0xFFFFFFFF
+                ex = user32.GetWindowLongW(h, -20) & 0xFFFFFFFF
+                print(hex(int(h)), repr(title_of(h)), "style", hex(st), "ex", hex(ex), "CAPTION" if st & 0xC00000 == 0xC00000 else "")
+            return True
+
+        user32.EnumWindows(visit2, 0)
     elif cmd == "stagecheck":
         # Is the QA stage really covering the work area? (So a film never shows anybody's real desktop.)
         from PIL import ImageGrab

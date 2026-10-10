@@ -73,6 +73,8 @@ function writeSettings(extra = {}) {
       movement_enabled: true,
       chaos_enabled: true,
       chaos_level: "full_virus",
+      // An installed Glitch owns Ctrl+Alt+Shift+G: this copy uses F9 so the real hotkey path can be tested.
+      safety: { paused: false, panic_hotkey: "Ctrl+Alt+Shift+F9", start_with_windows: false },
       chaos_full_confirmed: true,
       reduce_effects: false,
       memory_enabled: false,
@@ -230,11 +232,22 @@ try {
     const steps = t.rows.slice(1).map((r, i) => dist(r, t.rows[i]));
     check("the cursor moved in small steps (no teleport)", Math.max(...steps) <= 26 * dpr * 2.5 + 6, `max ${Math.max(...steps).toFixed(1)} px per sample`);
     check("he cast, reeled, then giggled", ["hook_cast", "hook_reel", "virus_giggle"].every((a) => seen.includes(a)), seen.join(">"));
-    const dur = (t.rows.findLast((r) => dist(r, t.start) > 4)?.t ?? 0) - (t.rows.find((r) => dist(r, t.start) > 4)?.t ?? 0);
+    const changed = t.rows.filter((r, i) => i > 0 && (r.x !== t.rows[i - 1].x || r.y !== t.rows[i - 1].y));
+    const dur = changed.length ? changed.at(-1).t - changed[0].t : 0;
     check("it lasted at most 8.5 s", dur <= 8500, `${(dur / 1000).toFixed(1)} s of movement`);
     void start;
   }
 
+  if (want("diag2")) {
+    await quiet(5500);
+    await act(mascot, "note");
+    await sleep(9000);
+    tool("shot", path.join(OUT, "diag-note.png"), String(ax), String(ay + ah - 400), "900", "400");
+    await act(mascot, "popup:adopted");
+    await sleep(2500);
+    tool("shot", path.join(OUT, "diag-popup.png"), String(ax + aw - 600), String(ay + ah - 400), "600", "400");
+    console.log(tool("styles", String(proc.pid)).stdout);
+  }
   if (want("diag")) {
     await parkCursor(mascot);
     await act(mascot, "hook:pull");
@@ -286,7 +299,8 @@ try {
       const tail = after.filter((r) => r.t > t.fired_ms + 400);
       check(`${name}: and stays where the user left it`, tail.length > 20 && tail.every((r) => r.x === tail[0].x && r.y === tail[0].y), `${tail.length} samples`);
       check(`${name}: he reacts (startled, flop, pout)`, seen.includes("startled") || seen.includes("annoyed") || seen.includes("splat"), seen.join(">"));
-      check(`${name}: Rust logged why`, new RegExp(`ended after \\d+ ms: Some\\(${{ user_input: "UserInput", button: "Button", esc: "Esc", stopped: "Stopped" }[why]}\\)`).test(log), why);
+      const reasons = name === "hotkey" ? "UserInput|Stopped" : { user_input: "UserInput", button: "Button", esc: "Esc" }[why];
+      check(`${name}: Rust logged why`, new RegExp(`ended after \\d+ ms: Some\\((${reasons})\\)`).test(log), why);
       if (name === "hotkey") {
         const s = readJson(path.join(APPDIR, "settings.json"));
         check("hotkey: the panic button is on (Glitch paused)", s.safety?.paused === true);
@@ -350,6 +364,14 @@ try {
   if (want("dance")) {
     for (const kind of ["wobble", "edge_slide", "quake", "run_away"]) {
       await parkCursor(mascot, 500, -50);
+      if (kind === "run_away") {
+        // The cursor waits just right of window A: it should slide away from it.
+        const f = path.join(OUT, "snap-a.json");
+        tool("snapshot", f, "--skip-pid", "-1");
+        const a = readJson(f).find((w) => String(w.hwnd) === H.A);
+        tool("setpos", String(a.rect[2] + 30), String(Math.round((a.rect[1] + a.rect[3]) / 2)));
+        await quiet(5500);
+      }
       const tr = bg("dev/chaos2-tool.py", "trace", path.join(OUT, `dance-${kind}.json`), "--pids", pids, "--ms", "13000", "--hz", "100", ...hw("A", "B", "unsaved", "focus"));
       const f = kind === "quake" || kind === "edge_slide" ? await film(`dance-${kind}`, 12, 10) : null;
       await sleep(400);
