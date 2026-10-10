@@ -18,6 +18,8 @@ export default defineConfig({
         bubble: resolve(import.meta.dirname, "bubble.html"),
         note: resolve(import.meta.dirname, "note.html"),
         pawprints: resolve(import.meta.dirname, "pawprints.html"),
+        chaosfx: resolve(import.meta.dirname, "chaosfx.html"),
+        virus: resolve(import.meta.dirname, "virus.html"),
         playfield: resolve(import.meta.dirname, "playfield.html"),
         // The stream overlay: served to OBS by Glitch over 127.0.0.1, not a Tauri window.
         overlay: resolve(import.meta.dirname, "overlay.html"),

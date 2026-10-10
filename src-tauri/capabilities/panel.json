@@ -6,6 +6,9 @@
     "panel"
   ],
   "permissions": [
+    "allow-chaos2-status",
+    "allow-chaos2-stop",
+    "allow-chaos2-test",
     "allow-clear-memory",
     "allow-finish-setup",
     "allow-forget-memory",

@@ -6,6 +6,7 @@ mod autoupdate;
 #[cfg(test)]
 mod capabilities_check;
 mod chaos;
+mod chaos2;
 #[cfg(test)]
 mod chaos_guard;
 mod chaos_native;
@@ -56,6 +57,10 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let chaos = CheckMenuItem::with_id(app, "chaos", "Chaos mode", true, state.settings().chaos_enabled, None::<&str>)?;
+    // The visible chaos state ("Chaos: Full Virus") and its stop button.
+    let chaos_label =
+        MenuItem::with_id(app, "chaos_state", state.settings().chaos_effective().label(), false, None::<&str>)?;
+    let chaos_stop = MenuItem::with_id(app, "chaos_stop", "Stop chaos", true, None::<&str>)?;
     let focus = context::tray_item(app)?;
     let wake = voice::tray::menu_item(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Glitch", true, None::<&str>)?;
@@ -69,10 +74,27 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let stop = MenuItem::with_id(app, "hands_stop", "Stop what Glitch is doing", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
-        &[&pause, &stop, &sep_top, &chat, &fetch, &hide, &wander, &chaos, &focus, &wake, &settings, &sep, &quit],
+        &[
+            &pause,
+            &stop,
+            &sep_top,
+            &chat,
+            &fetch,
+            &hide,
+            &wander,
+            &chaos,
+            &chaos_label,
+            &chaos_stop,
+            &focus,
+            &wake,
+            &settings,
+            &sep,
+            &quit,
+        ],
     )?;
     *state.wander_item.lock().unwrap() = Some(wander);
     *state.chaos_item.lock().unwrap() = Some(chaos);
+    *state.chaos_label.lock().unwrap() = Some(chaos_label);
 
     let mut tray =
         TrayIconBuilder::with_id("glitch").tooltip("Glitch").menu(&menu).show_menu_on_left_click(true).on_menu_event(
@@ -100,6 +122,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                     }
                     let _ = app.emit("settings-changed", &s);
                 }
+                "chaos_stop" => chaos::stop_all(app),
                 "pause" => {
                     let app = app.clone();
                     tauri::async_runtime::spawn(async move {
@@ -152,6 +175,8 @@ fn main() {
             update_me::setup(app.handle(), app.path().app_config_dir()?);
             app.manage(hover::Hitbox::default());
             app.manage(chaos::ChaosState::default());
+            chaos2::install_exit_guards();
+            chaos2::start_sampler(app.handle());
             app.manage(context::ContextState::default());
             voice::setup(app.handle());
             stream::setup(app.handle());
@@ -169,6 +194,7 @@ fn main() {
             pause::after_windows(app.handle());
             play::watch_drops(app.handle());
             chaos::debug_trigger(app.handle());
+            chaos2::debug_popup(app.handle());
             context::start(app.handle());
             context::debug_trigger(app.handle());
             Ok(())
@@ -218,6 +244,21 @@ fn main() {
             chaos::chaos_note_close,
             chaos::chaos_note_open_now,
             chaos::chaos_debug_log,
+            chaos2::chaos2_status,
+            chaos2::chaos2_cursor_act,
+            chaos2::chaos2_fx_start,
+            chaos2::chaos2_fx_squash,
+            chaos2::chaos2_fx_idle,
+            chaos2::chaos2_fx_ready,
+            chaos2::chaos2_melt_frame,
+            chaos2::chaos2_popup,
+            chaos2::chaos2_popup_close,
+            chaos2::chaos2_dance,
+            chaos2::chaos2_yoink,
+            chaos2::chaos2_yoinked_count,
+            chaos2::chaos2_abort,
+            chaos2::chaos2_stop,
+            chaos2::chaos2_test,
             pause::safety_status,
             pause::safety_set_paused,
             pause::safety_set_hotkey,
@@ -288,6 +329,10 @@ fn main() {
         .run(|app, event| {
             // Any way of exiting (tray Quit, OS logout, last window closed):
             // save the chat/memory. (Quit from the UI also unloads the model.)
+            // Put back any window Glitch minimised, whichever way he goes.
+            if matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
+                chaos2::restore_all(Some(app), "exit");
+            }
             if let tauri::RunEvent::Exit = event {
                 // Close the always-on microphone and any voice playback.
                 voice::wake::shutdown(app);

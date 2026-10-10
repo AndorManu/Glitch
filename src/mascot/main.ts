@@ -9,7 +9,7 @@
 // (60 Hz); otherwise no movement timer runs. See creature.ts.
 
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import {
   currentMonitor,
   cursorPosition,
@@ -17,7 +17,7 @@ import {
   PhysicalPosition,
   primaryMonitor,
 } from "@tauri-apps/api/window";
-import { api, chaosApi, type LedgeEvent, MASCOT_TALK_EVENT, type Settings, type UpdateAct, type WorldSnapshot } from "../shared/ipc";
+import { api, chaos2Api, chaosApi, type LedgeEvent, MASCOT_TALK_EVENT, type Settings, type UpdateAct, type WorldSnapshot } from "../shared/ipc";
 import { loadGlitchSprites } from "../sprites/glitch-sprites";
 import { contextApi, type ContextStatus, type Reaction } from "../shared/context";
 import { type CountdownLabel, ContextReactor, debugReaction } from "./context";
@@ -85,6 +85,20 @@ const host: Host = {
     noteOpen: (line, x, y) => chaosApi.noteOpen(line, x, y).catch(() => null),
     noteMove: (x, y) => void chaosApi.noteMove(x, y).catch(() => {}),
     noteIsOpen: () => chaosApi.noteIsOpen(),
+    // Chaos mode 2: every call is checked again in Rust; a refusal comes back as null / false.
+    chaos2: {
+      status: () => chaos2Api.status().catch(() => null),
+      cursorAct: (act, rod) => chaos2Api.cursorAct(act, Math.round(rod.x), Math.round(rod.y)).catch(() => null),
+      fxStart: (kind) => chaos2Api.fxStart(kind).catch(() => null),
+      fxSquash: (x, y) => void chaos2Api.fxSquash(x, y).catch(() => {}),
+      popup: (kind) => chaos2Api.popup(kind).then(() => true, () => false),
+      dance: (id, kind) => chaos2Api.dance(id, kind).catch(() => null),
+      yoink: () => chaos2Api.yoink().catch(() => null),
+      yoinkedCount: () => chaos2Api.yoinkedCount(),
+      // The overlay draws the line from wherever his rod tip is (it changes with every drawn frame).
+      rod: (p) => void emit("chaos2-rod", { x: Math.round(p.x), y: Math.round(p.y) }).catch(() => {}),
+      abort: () => void chaos2Api.abort().catch(() => {}),
+    },
   },
 };
 
@@ -237,6 +251,8 @@ async function main(): Promise<void> {
     applySettings(e.payload);
   });
   await listen<boolean>("pause-changed", (e) => setPaused(e.payload === true, lastSettings));
+  // "Stop chaos" (tray, Settings, panic button, Esc): whatever act he is in the middle of ends now.
+  await listen("chaos2-stopped", () => c.stopMischief());
   await listen<boolean>("panel-visibility", (e) => c.setPanelOpen(e.payload));
   // Unknown moods fall back to idle inside setMood.
   await listen<string>("mood", (e) => {

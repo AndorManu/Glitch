@@ -26,7 +26,8 @@ use std::time::{Duration, Instant, SystemTime};
 use glitch_core::agent::{Agent, Progress, Step};
 use glitch_core::ai::ollama::OllamaClient;
 use glitch_core::ai::AiProvider;
-use glitch_core::desktop::{Capture, CaptureTarget, ClipboardText, Desktop, DesktopResult, WindowInfo};
+use glitch_core::appwait::{Clock, ManualClock};
+use glitch_core::desktop::{AppWindow, Capture, CaptureTarget, ClipboardText, Desktop, DesktopResult, WindowInfo};
 use glitch_core::hands::mock::{self as hm, MockApp, MockHands};
 use glitch_core::hands::MediaStatus;
 use glitch_core::platform::{AppEntry, Platform};
@@ -47,7 +48,21 @@ struct World {
     home: PathBuf,
     /// App control: the fake apps (None: "Let Glitch control apps" is off).
     hands: Option<Arc<MockHands>>,
+    /// A slow-starting app ("SlowTune"): its window shows up 3 s after it
+    /// was launched, on the manual clock, and the user's dev window stays in
+    /// front. Its first picture is an empty loading screen if `slow_blank`.
+    slow: Option<SlowApp>,
 }
+
+struct SlowApp {
+    clock: Arc<ManualClock>,
+    launched_at: Mutex<Option<Duration>>,
+    blank_first: bool,
+    shots_taken: Mutex<Vec<u64>>,
+}
+
+const SLOW_DELAY: Duration = Duration::from_secs(3);
+const SLOW_ID: u64 = 2;
 
 struct FakePlatform(Arc<World>);
 
@@ -65,11 +80,15 @@ impl Platform for FakePlatform {
         if let Some(h) = &self.0.hands {
             h.launch(&app.name);
         }
+        if let Some(s) = &self.0.slow {
+            s.launched_at.lock().unwrap().get_or_insert(s.clock.elapsed());
+        }
         Ok(())
     }
     fn installed_apps(&self) -> Vec<AppEntry> {
         ["Calculator", "Spotify", "Notepad", "Paint", "Discord"]
             .iter()
+            .chain(self.0.slow.iter().map(|_| &"SlowTune"))
             .map(|n| AppEntry { name: n.to_string(), launch_path: format!("C:\\Apps\\{n}.lnk").into() })
             .collect()
     }
@@ -99,6 +118,64 @@ impl Desktop for FakeDesktop {
     }
     fn active_window(&self) -> Option<WindowInfo> {
         self.0.window.clone()
+    }
+    fn lists_windows(&self) -> bool {
+        self.0.slow.is_some()
+    }
+    fn app_windows(&self) -> Vec<AppWindow> {
+        let Some(s) = &self.0.slow else { return vec![] };
+        let win = |id: u64, title: &str, process: &str, foreground: bool| AppWindow {
+            id,
+            pid: id as u32,
+            title: title.into(),
+            process: process.into(),
+            ancestors: vec![],
+            age: Some(Duration::from_secs(1)),
+            minimized: false,
+            responsive: true,
+            foreground,
+            width: 1200,
+            height: 800,
+        };
+        // The user's editor stays in front the whole time.
+        let mut v = vec![win(1, "cart.py - shop - Visual Studio Code", "code", true)];
+        let up = s.launched_at.lock().unwrap().is_some_and(|t| s.clock.elapsed() >= t + SLOW_DELAY);
+        if up {
+            v.push(win(SLOW_ID, "SlowTune", "slowtune", false));
+        }
+        v
+    }
+    fn capture_window(&self, id: u64) -> DesktopResult<Capture> {
+        let s = self.0.slow.as_ref().ok_or("no such window")?;
+        if id != SLOW_ID || !self.app_windows().iter().any(|w| w.id == id) {
+            return Err("that window has closed".into());
+        }
+        let n = {
+            let mut t = s.shots_taken.lock().unwrap();
+            t.push(id);
+            t.len()
+        };
+        if s.blank_first && n == 1 {
+            // The empty white loading screen.
+            return Ok(Capture {
+                width: 800,
+                height: 500,
+                rgba: vec![255; 800 * 500 * 4],
+                window: Some(WindowInfo { title: "SlowTune".into(), app: "slowtune".into() }),
+                redact: vec![],
+            });
+        }
+        let img = image::open(fixtures_dir().join("slowtune.png"))
+            .map_err(|e| format!("fixture slowtune: {e}"))?
+            .into_rgba8();
+        let (width, height) = img.dimensions();
+        Ok(Capture {
+            width,
+            height,
+            rgba: img.into_raw(),
+            window: Some(WindowInfo { title: "SlowTune".into(), app: "slowtune".into() }),
+            redact: vec![],
+        })
     }
     fn read_clipboard(&self) -> DesktopResult<ClipboardText> {
         self.0
@@ -188,6 +265,10 @@ impl Outcome {
         let t = self.hands().text_of(app).unwrap_or_default();
         need(t.trim().eq_ignore_ascii_case(want), &format!("{app} contains {t:?}, wanted {want:?}"))
     }
+    /// Screenshots taken of the slow app's own window.
+    fn slow_shots(&self) -> usize {
+        self.world.slow.as_ref().map_or(0, |s| s.shots_taken.lock().unwrap().len())
+    }
     fn no_markdown(&self) -> bool {
         !self.text.contains("**") && !self.text.contains("```") && !self.text.lines().any(|l| l.starts_with('#'))
     }
@@ -203,6 +284,8 @@ struct Case {
     selected: Option<&'static str>,
     /// App control on, with these fake apps.
     apps: Option<fn() -> Vec<MockApp>>,
+    /// The slow-starting app: Some(true) = its first look is a blank loading screen.
+    slow: Option<bool>,
     check: fn(&Outcome) -> Result<(), String>,
 }
 
@@ -220,7 +303,18 @@ const fn case(
     say: &'static str,
     check: fn(&Outcome) -> Result<(), String>,
 ) -> Case {
-    Case { name, group, say, screen: None, window: None, clipboard: None, selected: None, apps: None, check }
+    Case {
+        name,
+        group,
+        say,
+        screen: None,
+        window: None,
+        clipboard: None,
+        selected: None,
+        apps: None,
+        slow: None,
+        check,
+    }
 }
 
 fn cases() -> Vec<Case> {
@@ -429,6 +523,70 @@ fn cases() -> Vec<Case> {
                 )
             })
         },
+        // --- opening an app that starts slowly (the screen of the user's
+        //     editor is in front the whole time; the app's window is up 3 s
+        //     after it was launched)
+        Case {
+            screen: Some("code-bug"),
+            window: Some(("cart.py - shop - Visual Studio Code", "Visual Studio Code")),
+            slow: Some(false),
+            ..case("open a slow app and say what is in it", "open-app", "open SlowTune and tell me what you see", |o| {
+                need(o.used("open_app"), "didn't open the app")?;
+                need(
+                    !o.says_any(&["isn't open", "isnt open", "not open", "isn't even open", "isn't running"]),
+                    "claims it isn't open",
+                )?;
+                let seen = ["rainy day jazz", "desert roads", "gym mix", "made for you", "your library"]
+                    .iter()
+                    .filter(|w| o.says(&[w]))
+                    .count();
+                need(seen >= 2, &format!("names only {seen} things from SlowTune's window: {}", o.text))?;
+                need(
+                    !o.says_any(&["indexerror", "prices[", "cart.py", "visual studio"]),
+                    "describes the editor instead",
+                )?;
+                need(o.slow_shots() >= 1, "never looked at SlowTune's window")?;
+                need(o.world.captures.lock().unwrap().is_empty(), "took a screenshot of the screen / active window")
+            })
+        },
+        Case {
+            screen: Some("code-bug"),
+            window: Some(("cart.py - shop - Visual Studio Code", "Visual Studio Code")),
+            slow: Some(true),
+            ..case(
+                "open a slow app that shows a loading screen first",
+                "open-app",
+                "open SlowTune and describe what's in its window",
+                |o| {
+                    need(o.used("open_app"), "didn't open the app")?;
+                    need(o.slow_shots() == 2, &format!("looked {} time(s), wanted blank then real", o.slow_shots()))?;
+                    need(
+                        o.says_any(&["rainy day jazz", "desert roads", "gym mix", "made for you", "your library"]),
+                        "doesn't describe the real content",
+                    )?;
+                    need(!o.says_any(&["indexerror", "prices[", "cart.py"]), "describes the editor")
+                },
+            )
+        },
+        Case {
+            screen: Some("code-bug"),
+            window: Some(("cart.py - shop - Visual Studio Code", "Visual Studio Code")),
+            slow: Some(false),
+            ..case(
+                "needs clicking inside the app, app control off",
+                "open-app",
+                "open SlowTune and find me a playlist it can play",
+                |o| {
+                    need(o.used("open_app"), "didn't open the app")?;
+                    need(
+                        o.confirms.iter().any(|c| c.contains("I need app control")),
+                        &format!("no app control card: {:?}", o.confirms),
+                    )?;
+                    need(o.world.captures.lock().unwrap().is_empty(), "took a screenshot of the wrong window")?;
+                    need(!o.says_any(&["isn't open", "isnt open", "isn't even open"]), "claims it isn't open")
+                },
+            )
+        },
         // --- desktop control (fake desktop with windows, pointer, drag and drop, files)
         Case {
             apps: Some(|| vec![hm::files_app(), hm::editor_app()]),
@@ -532,6 +690,12 @@ async fn run_case(c: &Case, provider: Arc<OllamaClient>, model: &str, hands_mode
         clipboard: Mutex::new(c.clipboard.map(String::from)),
         home: home.path().to_path_buf(),
         hands: c.apps.map(|f| Arc::new(MockHands::new(f()))),
+        slow: c.slow.map(|blank_first| SlowApp {
+            clock: Arc::new(ManualClock::default()),
+            launched_at: Mutex::new(None),
+            blank_first,
+            shots_taken: Mutex::new(Vec::new()),
+        }),
         ..Default::default()
     });
     if c.name.starts_with("pause the music") {
@@ -549,11 +713,21 @@ async fn run_case(c: &Case, provider: Arc<OllamaClient>, model: &str, hands_mode
     }
     let mut agent = Agent::new(provider, Arc::new(FakePlatform(world.clone())));
     agent.set_desktop(Arc::new(FakeDesktop(world.clone())));
+    if let Some(s) = &world.slow {
+        agent.set_clock(s.clock.clone());
+    }
     // Like the app's default: memory on (adds the memory tools and prompt).
     agent.set_memory(Some(glitch_core::memory::MemoryStore::in_memory()));
     if let Some(h) = &world.hands {
         agent.set_hands(Some(h.clone()));
         agent.set_hands_model(hands_model.map(String::from));
+        if c.group == "desktop" {
+            std::fs::write(home.path().join("Desktop/test.txt"), "my test file").unwrap();
+            std::fs::create_dir_all(home.path().join("Documents/Folder X")).unwrap();
+            let guard =
+                glitch_core::hands::fsmove::FileGuard::for_home(&dunce::canonicalize(home.path()).unwrap(), &[]);
+            agent.set_desktop_control(true, Some(guard), None);
+        }
         if c.group == "desktop" {
             std::fs::write(home.path().join("Desktop/test.txt"), "my test file").unwrap();
             std::fs::create_dir_all(home.path().join("Documents/Folder X")).unwrap();

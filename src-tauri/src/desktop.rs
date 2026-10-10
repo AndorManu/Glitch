@@ -19,7 +19,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use glitch_core::desktop::{Capture, CaptureTarget, ClipboardText, Desktop, DesktopResult, NowPlaying, WindowInfo};
+use glitch_core::desktop::{
+    AppWindow, Capture, CaptureTarget, ClipboardText, Desktop, DesktopResult, NowPlaying, WindowInfo,
+};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
@@ -71,6 +73,31 @@ impl Desktop for NativeDesktop {
 
     fn active_window(&self) -> Option<WindowInfo> {
         imp::active_window()
+    }
+
+    fn lists_windows(&self) -> bool {
+        cfg!(target_os = "windows")
+    }
+
+    fn app_windows(&self) -> Vec<AppWindow> {
+        imp::app_windows()
+    }
+
+    fn capture_window(&self, id: u64) -> DesktopResult<Capture> {
+        let t0 = std::time::Instant::now();
+        let c = imp::capture_window(id)?;
+        eprintln!(
+            "glitch: captured window {id} {}x{} in {} ms ({} field(s) covered)",
+            c.width,
+            c.height,
+            t0.elapsed().as_millis(),
+            c.redact.len()
+        );
+        #[cfg(debug_assertions)]
+        if let Some(path) = std::env::var_os("GLITCH_DEBUG_SAVE_CAPTURE") {
+            let _ = image::save_buffer(&path, &c.rgba, c.width, c.height, image::ExtendedColorType::Rgba8);
+        }
+        Ok(c)
     }
 
     fn read_clipboard(&self) -> DesktopResult<ClipboardText> {
@@ -144,6 +171,13 @@ impl Desktop for NativeDesktop {
     }
 }
 
+/// The screen as it is right now, for chaos mode's melt effect. Lives only in
+/// RAM (not even the debug save hook of [`Desktop::capture`]), Glitch's own
+/// windows are not in it, and the caller drops it as soon as the effect ends.
+pub fn capture_screen_ram() -> DesktopResult<Capture> {
+    imp::capture(CaptureTarget::Screen)
+}
+
 #[cfg(target_os = "windows")]
 pub use imp::friendly_app;
 
@@ -165,6 +199,12 @@ mod imp {
     pub fn active_window() -> Option<WindowInfo> {
         None
     }
+    pub fn app_windows() -> Vec<AppWindow> {
+        Vec::new()
+    }
+    pub fn capture_window(_: u64) -> DesktopResult<Capture> {
+        Err("looking at one app's window only works on Windows so far".into())
+    }
     pub fn clipboard_is_private() -> bool {
         false
     }
@@ -178,7 +218,7 @@ mod imp {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    use glitch_core::desktop::{Capture, CaptureTarget, DesktopResult, PixelRect, WindowInfo};
+    use glitch_core::desktop::{AppWindow, Capture, CaptureTarget, DesktopResult, PixelRect, WindowInfo};
     use windows_sys::core::BOOL;
     use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT};
     use windows_sys::Win32::Graphics::Dwm::{
@@ -358,6 +398,290 @@ mod imp {
         user_window(&windows()).map(info)
     }
 
+    // ------------------------------------------------ one app's window
+
+    /// Debug builds: only these processes (QA runs with their own fake apps).
+    fn only_pids() -> Option<Vec<u32>> {
+        if !cfg!(debug_assertions) {
+            return None;
+        }
+        let v = std::env::var("GLITCH_HANDS_ONLY_PIDS").ok()?;
+        Some(v.split(',').filter_map(|p| p.trim().parse().ok()).collect())
+    }
+
+    /// (pid -> (parent pid, exe stem lower case)) of every running program.
+    fn process_table() -> std::collections::HashMap<u32, (u32, String)> {
+        use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+        };
+        let mut out = std::collections::HashMap::new();
+        unsafe {
+            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snap.is_null() || snap as isize == -1 {
+                return out;
+            }
+            let mut e: PROCESSENTRY32W = std::mem::zeroed();
+            e.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            let mut ok = Process32FirstW(snap, &mut e);
+            while ok != 0 {
+                let n = e.szExeFile.iter().position(|&c| c == 0).unwrap_or(e.szExeFile.len());
+                let name = String::from_utf16_lossy(&e.szExeFile[..n]).to_lowercase();
+                let stem = name.strip_suffix(".exe").unwrap_or(&name).to_string();
+                out.insert(e.th32ProcessID, (e.th32ParentProcessID, stem));
+                ok = Process32NextW(snap, &mut e);
+            }
+            CloseHandle(snap);
+        }
+        out
+    }
+
+    /// How long a process has been running.
+    fn process_age(pid: u32) -> Option<Duration> {
+        use windows_sys::Win32::Foundation::FILETIME;
+        use windows_sys::Win32::System::SystemInformation::GetSystemTimeAsFileTime;
+        use windows_sys::Win32::System::Threading::GetProcessTimes;
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if h.is_null() {
+                return None;
+            }
+            let z = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+            let (mut c, mut e, mut k, mut u) = (z, z, z, z);
+            let ok = GetProcessTimes(h, &mut c, &mut e, &mut k, &mut u);
+            CloseHandle(h);
+            if ok == 0 {
+                return None;
+            }
+            let mut now = z;
+            GetSystemTimeAsFileTime(&mut now);
+            let ft = |f: FILETIME| (u64::from(f.dwHighDateTime) << 32) | u64::from(f.dwLowDateTime);
+            // 100 ns ticks.
+            Some(Duration::from_nanos(ft(now).saturating_sub(ft(c)).saturating_mul(100)))
+        }
+    }
+
+    struct Listing {
+        own_pid: u32,
+        only: Option<Vec<u32>>,
+        out: Vec<HWND>,
+    }
+
+    unsafe extern "system" fn list_visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let ctx = &mut *(lparam as *mut Listing);
+        if IsWindowVisible(hwnd) == 0 || GetWindowTextLengthW(hwnd) == 0 {
+            return 1;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == ctx.own_pid || ctx.only.as_ref().is_some_and(|o| !o.contains(&pid)) {
+            return 1;
+        }
+        if (GetWindowLongW(hwnd, GWL_EXSTYLE) as u32) & WS_EX_TOOLWINDOW != 0 {
+            return 1;
+        }
+        let mut cloaked = 0u32;
+        let hr = DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED as u32,
+            (&mut cloaked as *mut u32).cast(),
+            std::mem::size_of::<u32>() as u32,
+        );
+        if (hr == 0 && cloaked != 0) || SKIP_CLASSES.contains(&class_name(hwnd).as_str()) {
+            return 1;
+        }
+        ctx.out.push(hwnd);
+        1
+    }
+
+    unsafe fn window_size(hwnd: HWND) -> (u32, u32) {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowPlacement, WINDOWPLACEMENT};
+        if IsIconic(hwnd) != 0 {
+            let mut p: WINDOWPLACEMENT = std::mem::zeroed();
+            p.length = std::mem::size_of::<WINDOWPLACEMENT>() as u32;
+            if GetWindowPlacement(hwnd, &mut p) != 0 {
+                let r = p.rcNormalPosition;
+                return ((r.right - r.left).max(0) as u32, (r.bottom - r.top).max(0) as u32);
+            }
+            return (0, 0);
+        }
+        match frame(hwnd) {
+            Some(r) => ((r.right - r.left) as u32, (r.bottom - r.top) as u32),
+            None => (0, 0),
+        }
+    }
+
+    /// Every visible top-level window of other apps, front to back,
+    /// minimized ones included (Glitch's own and cloaked ones left out).
+    pub fn app_windows() -> Vec<AppWindow> {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, IsHungAppWindow};
+        let mut ctx = Listing { own_pid: unsafe { GetCurrentProcessId() }, only: only_pids(), out: Vec::new() };
+        unsafe { EnumWindows(Some(list_visit), &mut ctx as *mut Listing as LPARAM) };
+        let table = process_table();
+        let fg = unsafe { GetForegroundWindow() };
+        ctx.out
+            .into_iter()
+            .filter_map(|h| unsafe {
+                let (width, height) = window_size(h);
+                if width < 120 || height < 80 {
+                    return None;
+                }
+                let mut pid = 0u32;
+                GetWindowThreadProcessId(h, &mut pid);
+                let process = table.get(&pid).map(|(_, n)| n.clone()).unwrap_or_default();
+                let mut ancestors = Vec::new();
+                let mut cur = table.get(&pid).map(|(p, _)| *p);
+                while let (Some(p), true) = (cur, ancestors.len() < 4) {
+                    let Some((parent, name)) = table.get(&p) else { break };
+                    ancestors.push(name.clone());
+                    cur = Some(*parent);
+                }
+                Some(AppWindow {
+                    id: h as usize as u64,
+                    pid,
+                    title: title(h),
+                    process,
+                    ancestors,
+                    age: process_age(pid),
+                    minimized: IsIconic(h) != 0,
+                    responsive: IsHungAppWindow(h) == 0,
+                    foreground: h == fg || windows_sys::Win32::UI::WindowsAndMessaging::GetAncestor(fg, 2) == h,
+                    width,
+                    height,
+                })
+            })
+            .collect()
+    }
+
+    /// Are the points of the visible part of this window covered by other
+    /// apps' windows (Glitch's own don't count: they are hidden from captures)?
+    unsafe fn covered(hwnd: HWND, r: RECT) -> bool {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetAncestor, WindowFromPoint, GA_ROOT};
+        let own = GetCurrentProcessId();
+        let (w, h) = (r.right - r.left, r.bottom - r.top);
+        let pts = [(2, 2), (4, 4), (2, 4), (4, 2), (3, 3)];
+        pts.iter().any(|(fx, fy)| {
+            let p = POINT { x: r.left + w * fx / 6, y: r.top + h * fy / 6 };
+            let top = WindowFromPoint(p);
+            if top.is_null() {
+                return false;
+            }
+            let root = GetAncestor(top, GA_ROOT);
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(root, &mut pid);
+            root != hwnd && pid != own
+        })
+    }
+
+    /// A window's own picture, even with other windows in front of it
+    /// (PrintWindow asks the app to draw itself). All-black means the app
+    /// doesn't support that.
+    unsafe fn print_window(hwnd: HWND, w: i32, h: i32) -> DesktopResult<Vec<u8>> {
+        use windows_sys::Win32::Storage::Xps::PrintWindow;
+        let screen = GetDC(std::ptr::null_mut());
+        let mem = CreateCompatibleDC(screen);
+        let mut bmi: BITMAPINFO = std::mem::zeroed();
+        bmi.bmiHeader = BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: w,
+            biHeight: -h,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB,
+            ..std::mem::zeroed()
+        };
+        let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+        let dib = CreateDIBSection(mem, &bmi, DIB_RGB_COLORS, &mut bits, std::ptr::null_mut(), 0);
+        let result = if dib.is_null() || bits.is_null() {
+            Err("couldn't make room for the screenshot".to_string())
+        } else {
+            let old = SelectObject(mem, dib);
+            // PW_RENDERFULLCONTENT (2): also windows drawn by the GPU.
+            let ok = PrintWindow(hwnd, mem, 2);
+            SelectObject(mem, old);
+            let n = (w * h * 4) as usize;
+            let bgra = std::slice::from_raw_parts(bits as *const u8, n);
+            if ok == 0 || bgra.as_chunks::<4>().0.iter().all(|p| p[0] == 0 && p[1] == 0 && p[2] == 0) {
+                Err("that window is behind others and doesn't let Windows copy it".to_string())
+            } else {
+                let mut rgba = Vec::with_capacity(n);
+                for px in bgra.as_chunks::<4>().0 {
+                    rgba.extend_from_slice(&[px[2], px[1], px[0], 255]);
+                }
+                Ok(rgba)
+            }
+        };
+        if !dib.is_null() {
+            DeleteObject(dib);
+        }
+        DeleteDC(mem);
+        ReleaseDC(std::ptr::null_mut(), screen);
+        result
+    }
+
+    /// A screenshot of exactly one window (from `app_windows`).
+    pub fn capture_window(id: u64) -> DesktopResult<Capture> {
+        use windows_sys::Win32::UI::WindowsAndMessaging::IsWindow;
+        let hwnd = id as usize as HWND;
+        unsafe {
+            if IsWindow(hwnd) == 0 {
+                return Err("that window has closed".into());
+            }
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            if pid == GetCurrentProcessId() {
+                return Err("that is one of Glitch's own windows".into());
+            }
+            if only_pids().is_some_and(|o| !o.contains(&pid)) {
+                return Err("not allowed in this test run".into());
+            }
+            if IsIconic(hwnd) != 0 {
+                return Err("that window is minimized, so there is nothing to see".into());
+            }
+        }
+        let wins = windows();
+        let Some(f) = (unsafe { frame(hwnd) }) else { return Err("that window has no visible area".into()) };
+        let mon = unsafe { monitor_rect(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)) };
+        let visible = intersect(f, mon).unwrap_or(mon);
+        let (tx, rx) = mpsc::channel();
+        let h = hwnd as usize;
+        std::thread::spawn(move || {
+            let _ = tx.send(uia::password_rects(h));
+        });
+        // The pixels: straight from the screen when nothing covers the window
+        // (works for every app, GPU ones included), else the window's own
+        // picture.
+        let (rect, width, height, rgba) = if unsafe { covered(hwnd, visible) } {
+            let mut wr = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+            unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &mut wr) };
+            let (w, h) = (wr.right - wr.left, wr.bottom - wr.top);
+            if w <= 0 || h <= 0 {
+                return Err("that window has no visible area".into());
+            }
+            let rgba = unsafe { print_window(hwnd, w, h)? };
+            (wr, w as u32, h as u32, rgba)
+        } else {
+            let (w, h, rgba) = {
+                let _hidden = HiddenFromCapture::new(&wins.own);
+                unsafe { grab(visible)? }
+            };
+            (visible, w, h, rgba)
+        };
+        let redact = rx
+            .recv_timeout(UIA_TIMEOUT)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|f| RECT { left: f.left, top: f.top, right: f.right, bottom: f.bottom })
+            .filter_map(|f| intersect(f, rect))
+            .map(|f| PixelRect {
+                x: (f.left - rect.left) as u32,
+                y: (f.top - rect.top) as u32,
+                w: (f.right - f.left) as u32,
+                h: (f.bottom - f.top) as u32,
+            })
+            .collect();
+        Ok(Capture { width, height, rgba, window: Some(info(hwnd)), redact })
+    }
+
     unsafe fn monitor_rect_at(p: POINT) -> RECT {
         let m = MonitorFromPoint(p, MONITOR_DEFAULTTONEAREST);
         monitor_rect(m)
@@ -469,6 +793,7 @@ mod imp {
                     // Only the desktop is open: show the screen.
                     None => (monitor_rect_at(cursor), None),
                 },
+                CaptureTarget::App => (monitor_rect_at(cursor), front),
                 CaptureTarget::Cursor => {
                     let mon = monitor_rect_at(cursor);
                     let (bw, bh) = CURSOR_BOX;
@@ -630,6 +955,128 @@ mod imp {
                 Ok(None)
             })
             .flatten()
+        }
+    }
+}
+
+/// Live check on a real desktop with the REAL window listing and capture,
+/// against stand-in apps this test starts itself (examples/fake_slow_app.rs):
+/// it never looks at or touches any other window (debug builds scope the
+/// listing to the pids in GLITCH_HANDS_ONLY_PIDS).
+///
+///   cargo build -p glitch --example fake_slow_app
+///   cargo test -p glitch slow_app_live -- --ignored --nocapture
+///   (GLITCH_QA_SHOTS=<dir> also saves the pictures)
+#[cfg(all(test, target_os = "windows"))]
+mod live_tests {
+    use std::process::{Child, Command};
+    use std::time::Duration;
+
+    use glitch_core::appwait::{self, AppMatcher, RealClock, WaitOutcome};
+
+    use super::*;
+
+    struct Kill(Child);
+    impl Drop for Kill {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+        }
+    }
+
+    fn save(name: &str, c: &Capture) {
+        if let Some(dir) = std::env::var_os("GLITCH_QA_SHOTS") {
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = image::save_buffer(
+                std::path::Path::new(&dir).join(name),
+                &c.rgba,
+                c.width,
+                c.height,
+                image::ExtendedColorType::Rgba8,
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "live: needs a desktop; see the module docs"]
+    fn slow_app_live() {
+        let deps = std::env::current_exe().unwrap();
+        let fake = deps.parent().unwrap().parent().unwrap().join("examples").join("fake_slow_app.exe");
+        assert!(fake.exists(), "build it first: cargo build -p glitch --example fake_slow_app");
+        let dir = tempfile::Builder::new().prefix("glitch-slow-app-").tempdir().unwrap();
+        let exe = dir.path().join("SlowTune.exe");
+        std::fs::copy(&fake, &exe).unwrap();
+        let cover_exe = dir.path().join("CoverUp.exe");
+        std::fs::copy(&fake, &cover_exe).unwrap();
+        // Nothing is visible to Glitch but the two stand-ins.
+        std::env::set_var("GLITCH_HANDS_ONLY_PIDS", "0");
+        let desktop_before = imp::app_windows();
+        assert!(desktop_before.is_empty(), "scoped listing must be empty before the stand-in exists");
+
+        // 3 s until the window exists, then 2 s of an empty white surface.
+        let child = Kill(Command::new(&exe).args(["SlowTune", "3", "2", "300", "150", "800", "500"]).spawn().unwrap());
+        let pid = child.0.id();
+        std::env::set_var("GLITCH_HANDS_ONLY_PIDS", pid.to_string());
+
+        let clock = RealClock::new();
+        let matcher = AppMatcher::launched("SlowTune", &desktop_before);
+        let desktop = NativeDesktopForTests;
+        let outcome =
+            appwait::wait_for_window(&desktop, &clock, &matcher, Duration::from_secs(20), appwait::POLL, &mut |t| {
+                eprintln!("  waiting {} s", t.as_secs())
+            });
+        let WaitOutcome::Ready { window, waited, kind } = outcome else { panic!("{outcome:?}") };
+        eprintln!("ready after {waited:?}: {window:?} ({kind:?})");
+        assert!(waited >= Duration::from_secs(3), "{waited:?}");
+        assert_eq!(window.process, "slowtune");
+        assert_eq!(window.title, "SlowTune");
+        assert!(window.responsive && !window.minimized);
+
+        // The first look finds the white loading screen, waits and looks again.
+        let shot = appwait::capture_app(&desktop, &clock, &matcher, Some(window.id), "SlowTune").unwrap();
+        save("slowtune-visible.png", &shot.capture);
+        assert!(!shot.still_blank, "the content should be there after the retry");
+
+        // Now cover it with another window and look again: its OWN picture.
+        let cover =
+            Kill(Command::new(&cover_exe).args(["CoverUp", "0", "0", "250", "100", "1000", "700"]).spawn().unwrap());
+        std::env::set_var("GLITCH_HANDS_ONLY_PIDS", format!("{pid},{}", cover.0.id()));
+        std::thread::sleep(Duration::from_millis(1200));
+        let all = imp::app_windows();
+        let cover_win = all.iter().find(|w| w.title == "CoverUp").expect("cover window listed");
+        assert!(all.iter().position(|w| w.id == cover_win.id) < all.iter().position(|w| w.id == window.id));
+        let behind = imp::capture_window(window.id).expect("a window behind others can be captured");
+        save("slowtune-behind.png", &behind);
+        assert!(!glitch_core::vision::mostly_blank(&behind), "PrintWindow shows the app, not the cover");
+        assert_eq!(behind.window.as_ref().map(|w| w.title.as_str()), Some("SlowTune"));
+        drop(cover);
+        drop(child);
+    }
+
+    struct NativeDesktopForTests;
+    impl Desktop for NativeDesktopForTests {
+        fn capture(&self, _: CaptureTarget) -> DesktopResult<Capture> {
+            Err("unused".into())
+        }
+        fn active_window(&self) -> Option<WindowInfo> {
+            None
+        }
+        fn read_clipboard(&self) -> DesktopResult<ClipboardText> {
+            Err("unused".into())
+        }
+        fn write_clipboard(&self, _: &str) -> DesktopResult<()> {
+            Err("unused".into())
+        }
+        fn selected_text(&self) -> DesktopResult<Option<String>> {
+            Ok(None)
+        }
+        fn set_timer(&self, _: Duration, _: &str) -> DesktopResult<()> {
+            Err("unused".into())
+        }
+        fn app_windows(&self) -> Vec<AppWindow> {
+            imp::app_windows()
+        }
+        fn capture_window(&self, id: u64) -> DesktopResult<Capture> {
+            imp::capture_window(id)
         }
     }
 }

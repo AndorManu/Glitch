@@ -128,13 +128,13 @@ describe("animations", () => {
     const once: AnimationName[] = [
       ...["happy", "startled", "laugh", "grabCursor", "peek", "fall", "land", "glitchOut", "gone", "glitchIn", "chaosSpin"],
       ...["crouch", "splat", "dizzy", "peekEdge", "lookAround", "build", "malfunction", "wave"],
-      ...["wake", "sad", "angry", "scared", "eat", "celebrate", "point", "pull_up", "bounce", "wall_jump", "sneeze", "annoyed", "calmDown", "smugBite", "stretch", "suggest", "yawn_stay"],
+      ...["wake", "sad", "angry", "scared", "eat", "celebrate", "point", "pull_up", "bounce", "wall_jump", "sneeze", "annoyed", "calmDown", "hook_cast", "virus_giggle", "smugBite", "stretch", "suggest", "yawn_stay"],
       ...["celebrate_focus", "worried_battery", "knock_screen", "hide_peek", "streamer", "look_dirs", "high_five", "happy_spin", "jump_scare"],
     ] as AnimationName[];
     const loops: AnimationName[] = [
       ...["idle", "walk", "think", "ask", "sleep", "carryCursor", "dragWindow", "pushWindow", "dangle", "napRock"],
       ...["cling", "climb", "run", "airUp", "airDown", "tumble", "flail", "sitEdge", "held", "heldKick", "listen", "talk", "dance", "typing", "sit"],
-      ...["tail_copter", "glide", "fall_flail", "hang_ledge", "slide_down", "sit_edge_swing", "fish", "struggle", "clingCursor", "sulk", "biteCursor", "hide", "guard"],
+      ...["tail_copter", "glide", "fall_flail", "hang_ledge", "slide_down", "sit_edge_swing", "fish", "struggle", "clingCursor", "sulk", "biteCursor", "hide", "guard", "hook_reel"],
       ...["idle_tail", "idle_tail_sit", "dance_beat", "hold_sign", "sweat_fan", "glasses_type", "watch_tv", "fetch_ball", "chubby_idle", "hats", "petted"],
     ] as AnimationName[];
     // These hand over to a loop that isn't idle.

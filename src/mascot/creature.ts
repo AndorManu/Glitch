@@ -16,8 +16,9 @@ import { ANIMATIONS, type AnimationName, Animator, type Clock, isAnimationName, 
 import { bridge, clip, familyOf, glitchCut, has, turnKeys } from "./transitions";
 import { ANIM_BITES, ANIM_FRAME_H, ANIM_FRAME_W, ANIM_GRIPS } from "../sprites/anim";
 import { ART_SCALE } from "../sprites/glitch-anim";
-import { type BehaviourName, Brain, type BrainContext, type Haul, isBehaviourName, type Plan, type Gait } from "./brain";
+import { type BehaviourName, Brain, type BrainContext, type Haul, isBehaviourName, type Plan, type Gait, type Step } from "./brain";
 import { ChaosDirector, chaosAnim, type ChaosHost, isAct, knockKeys } from "./chaos";
+import { artPx, rodTipOf } from "./chaos2";
 import { reactToMove } from "./ledge";
 import { capSpeed, Pendulum, VelocityTracker } from "./drag";
 import {
@@ -332,6 +333,8 @@ export class Creature {
   plan: Plan | null = null;
   asleep = false;
   movement = true;
+  /** Cancels the chaos act a `hold` step is waiting for (see brain.ts). */
+  private holdCancel: (() => void) | null = null;
   /** Chaos mode switch (only acts with `movement` on too). */
   chaosOn = true;
   /** Chaos mode's planner, if the host supports it. */
@@ -460,6 +463,8 @@ export class Creature {
             cursor: () => Promise.resolve(this.host.cursor()),
             stepInGlitch: (ms) => this.stepInGlitch(ms),
             knock: () => this.knock(),
+            rodTip: () => this.rodTip(),
+            sleep: (ms) => new Promise<void>((resolve) => this.clock.setTimeout(resolve, ms)),
           },
           this.rand,
         )
@@ -1833,12 +1838,31 @@ export class Creature {
     });
   };
 
+  /** Where the rod tip of the frame he shows is (physical px), for the hook's line. */
+  rodTip(): Vec | null {
+    const frame = this.animator.pose?.frame;
+    const w = this.world;
+    if (!frame || !w) return null;
+    const lag = this.rideLag;
+    const feet = { x: this.body.x + lag.x, y: this.body.y + lag.y + HALF * w.scale };
+    return rodTipOf(frame, feet, this.facingLeft, artPx(w.scale));
+  }
+
   /** Chaos mode on/off (settings, tray). Off stops any mischief at once. */
   setChaos(on: boolean): void {
     this.chaosOn = on;
     if (on) return;
     this.pawsUntil = -Infinity;
     if (this.plan?.name === "mischief" || this.loco?.haul) {
+      this.interrupt();
+      if (this.mode === "stand") this.animator.play(this.restAnim());
+      this.scheduleBrain(4000 + this.rand() * 3000);
+    }
+  }
+
+  /** Rust stopped every chaos act (tray "Stop chaos", Esc, panic): drop a running mischief plan. */
+  stopMischief(): void {
+    if (this.plan?.name === "mischief" || this.loco?.haul || this.holdCancel) {
       this.interrupt();
       if (this.mode === "stand") this.animator.play(this.restAnim());
       this.scheduleBrain(4000 + this.rand() * 3000);
@@ -1960,6 +1984,37 @@ export class Creature {
               if (this.plan === plan) this.finishPlan();
             },
           );
+        return;
+      }
+      case "hold": {
+        // Chaos mode 2: an act runs in Rust; he plays his animation until it says it is over.
+        this.animator.play(step.anim);
+        let done = false;
+        let result: boolean | Step[] = true;
+        step.until().then(
+          (r) => {
+            done = true;
+            result = r;
+          },
+          () => {
+            done = true;
+            result = false;
+          },
+        );
+        const t0 = this.now;
+        this.holdCancel = step.cancel ?? null;
+        const poll = (): void => {
+          if (this.plan !== plan) return; // interrupted: interrupt() already called cancel
+          step.onTick?.();
+          const timedOut = this.now - t0 >= step.maxMs;
+          if (!done && !timedOut) return this.wait(50, poll);
+          this.holdCancel = null;
+          if (!done) step.cancel?.();
+          if (result === false) return this.finishPlan();
+          if (Array.isArray(result)) plan.steps.splice(this.stepIndex, 0, ...result);
+          this.nextStep();
+        };
+        this.wait(50, poll);
         return;
       }
       case "corner":
@@ -2134,6 +2189,12 @@ export class Creature {
   /** Drop whatever plan is running; leave the body somewhere sane. */
   private interrupt(): void {
     this.plan = null;
+    // A chaos act running in Rust (hook, dance...) is told to let go.
+    if (this.holdCancel) {
+      const cancel = this.holdCancel;
+      this.holdCancel = null;
+      cancel();
+    }
     this.waiting = null;
     if (this.brainTimer !== null) this.clock.clearTimeout(this.brainTimer);
     this.brainTimer = null;

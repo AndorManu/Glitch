@@ -90,7 +90,7 @@ pub fn hide_from_switcher(win: &WebviewWindow) {
 pub fn keep_out_of_switcher(app: &AppHandle) {
     let app = app.clone();
     let _ = std::thread::Builder::new().name("glitch-switcher".into()).spawn(move || loop {
-        for label in [MASCOT, BUBBLE, "pawprints", "note", "hands-banner"] {
+        for label in [MASCOT, BUBBLE, "pawprints", "note", "hands-banner", "chaosfx", "virus"] {
             if let Some(w) = app.get_webview_window(label) {
                 hide_from_switcher(&w);
             }

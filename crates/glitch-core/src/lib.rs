@@ -5,9 +5,11 @@
 
 pub mod agent;
 pub mod ai;
+pub mod appwait;
 pub mod autoupdate;
 pub mod belly;
 pub mod chaos;
+pub mod chaos2;
 pub mod confirm;
 pub mod context;
 pub mod desktop;

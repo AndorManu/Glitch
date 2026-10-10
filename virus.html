@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Glitch is only playing</title>
+    <link rel="icon" href="data:," />
+    <style>
+      /* 372x244 CSS px window (src-tauri/src/chaos2.rs). Transparent around the card. */
+      :root {
+        --ink: #1d0b2e;
+        --ink-2: #3a1a5c;
+        --paper: #fff4fd;
+        --magenta: #ff2bd6;
+        --cyan: #29f1ff;
+        --muted: #6d4a8a;
+      }
+      html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+      body { user-select: none; -webkit-user-select: none; font-family: "Cascadia Mono", "Consolas", "Menlo", monospace; color: var(--ink); }
+      .card {
+        position: absolute; inset: 8px 12px 14px 8px;
+        background: var(--paper);
+        box-shadow: 0 0 0 3px var(--ink), 6px 6px 0 3px rgba(29, 11, 46, 0.4), -3px 0 0 3px var(--cyan), 3px 0 0 3px var(--magenta);
+        padding: 14px 16px 12px;
+        box-sizing: border-box;
+        display: grid; grid-template-columns: 76px 1fr; grid-template-rows: auto 1fr auto auto; column-gap: 14px; row-gap: 6px;
+      }
+      .tag { grid-column: 1 / 3; font-size: 11px; letter-spacing: 1px; color: var(--muted); display: flex; justify-content: space-between; text-transform: lowercase; }
+      .tag b { color: var(--magenta); }
+      .face { grid-row: 2; width: 76px; height: 76px; background: var(--ink); box-shadow: 0 0 0 2px var(--ink), 3px 3px 0 2px var(--magenta); display: grid; place-items: center; }
+      .face canvas { width: 72px; height: 72px; image-rendering: pixelated; }
+      .minis { display: flex; gap: 3px; margin-top: 4px; min-height: 28px; }
+      .minis canvas { width: 28px; height: 28px; image-rendering: pixelated; animation: pop 0.35s steps(4) both; }
+      .text { grid-row: 2; grid-column: 2; min-width: 0; align-self: start; }
+      h1 { margin: 2px 0 6px; font-size: 16px; line-height: 1.2; font-weight: 800; text-shadow: 1px 0 rgba(255, 43, 214, 0.45), -1px 0 rgba(41, 241, 255, 0.45); }
+      p { margin: 0; font-size: 13px; line-height: 1.3; }
+      .bar { grid-column: 1 / 3; height: 16px; background: #fff; box-shadow: 0 0 0 2px var(--ink); position: relative; }
+      .bar[hidden] { display: none; }
+      .fill { position: absolute; inset: 0 auto 0 0; width: 0; background: repeating-linear-gradient(90deg, var(--magenta) 0 8px, #ff7be8 8px 12px); }
+      .meter { position: absolute; right: 6px; top: 0; font-size: 11px; line-height: 16px; font-weight: 800; mix-blend-mode: normal; color: var(--ink); text-shadow: 0 0 3px #fff; }
+      .foot { grid-column: 1 / 3; display: flex; justify-content: space-between; align-items: center; margin-top: 2px; }
+      .foot span { font-size: 11px; color: var(--muted); }
+      button {
+        font: 800 13px/1 inherit; color: var(--paper); background: var(--ink); border: 0; padding: 7px 14px; cursor: pointer;
+        box-shadow: 0 0 0 2px var(--ink), 3px 3px 0 2px var(--magenta);
+      }
+      button:hover { background: var(--ink-2); }
+      button:focus-visible { outline: 3px solid var(--cyan); outline-offset: 3px; }
+      @keyframes pop { from { transform: translateY(8px) scale(0.2); opacity: 0; } to { transform: none; opacity: 1; } }
+      @media (prefers-reduced-motion: reduce) { .minis canvas { animation: none; } }
+    </style>
+  </head>
+  <body>
+    <div class="card" role="dialog" aria-labelledby="title">
+      <div class="tag"><span><b>~</b> a little note from glitch <b>~</b></span><span id="tag-r"></span></div>
+      <div class="face"><canvas id="face" width="72" height="72" aria-hidden="true"></canvas></div>
+      <div class="text">
+        <h1 id="title"></h1>
+        <p id="body"></p>
+        <div class="minis" id="minis" aria-hidden="true"></div>
+      </div>
+      <div class="bar" id="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"><div class="fill" id="fill"></div><div class="meter" id="meter"></div></div>
+      <div class="foot"><span id="footer"></span><button type="button" id="close"></button></div>
+    </div>
+    <script type="module" src="/src/chaos/virus.ts"></script>
+  </body>
+</html>

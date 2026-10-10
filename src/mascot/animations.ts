@@ -1038,6 +1038,9 @@ export type AnimationName =
   | "slide_down"
   | "sit_edge_swing"
   | "fish"
+  | "hook_cast"
+  | "hook_reel"
+  | "virus_giggle"
   | "bounce"
   | "wall_jump"
   | "sneeze"
@@ -1117,6 +1120,11 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   // Fishing off a window edge: casts (skipping the first frame, its line encloses
   // some sheet background), waits, a bite, catches one.
   fish: { keys: (r) => [k("fish1", 300), k("fish2", 1500 + r() * 1500), k("fish3", 1800 + r() * 2000), k("fish4", 260), k("fish5", 260), k("fish6", 500), k("fish7", 900), k("fish6", 400)] },
+  // Chaos mode 2 (the hook): casts the rod, reels (the line itself is drawn live by the overlay from the
+  // rod tip, ANIM_RODS), and the giggle after. hook_reel0-7 loops; the rod tip anchors are per frame.
+  hook_cast: { keys: () => clip("hook_cast", 105, { ease: 1, hold: 120 }), once: true, bridge: false },
+  hook_reel: { keys: () => clip("hook_reel", 105, { ease: 0 }), bridge: false },
+  virus_giggle: { keys: () => [...clip("virus_giggle", 110, { ease: 0 }), ...clip("virus_giggle", 110, { ease: 0, pick: [2, 3, 4, 5, 6, 7] })], once: true },
   bounce: { keys: () => clip("bounce", 85, { ease: 1, hold: 150 }), once: true, bridge: false },
   wall_jump: { keys: () => clip("wall_jump", 80, { ease: 0 }), once: true, bridge: false },
   // A sneeze on cue (chaos mode): the same drawn sneeze as the idle fidget.

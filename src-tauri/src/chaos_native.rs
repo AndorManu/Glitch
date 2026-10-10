@@ -3,10 +3,11 @@
 //! when) are pure functions in `glitch_core::chaos`; this file only reads
 //! state and moves things.
 //!
-//! What is deliberately NOT here: closing, resizing, minimising, focusing or
-//! sending input to other apps, or touching files. The only write calls are
-//! `SetWindowPos` with `SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE` and
-//! `SetCursorPos`.
+//! What is deliberately NOT here: closing, resizing, focusing or sending input
+//! to other apps, or touching files. The only write calls are `SetWindowPos`
+//! with `SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE`, `SetCursorPos`, and the
+//! one audited minimise/restore function `yoink_show` (chaos mode 2's
+//! "yoink": `SW_SHOWMINNOACTIVE` / `SW_SHOWNOACTIVATE`, nothing else).
 //!
 //! Windows only for now. macOS / Linux: everything reports "not available"
 //! (no candidates, no cursor control), so chaos mode there is limited to
@@ -22,11 +23,18 @@ pub struct Target {
     pub border: (i32, i32),
 }
 
+/// What the audited function in `imp` does to a window.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum YoinkCmd {
+    Minimize,
+    Restore,
+}
+
 pub use imp::*;
 
 #[cfg(target_os = "windows")]
 mod imp {
-    use super::Target;
+    use super::{Target, YoinkCmd};
     use glitch_core::chaos::Candidate;
     use glitch_core::world::ScreenRect;
     use windows_sys::core::BOOL;
@@ -38,17 +46,22 @@ mod imp {
     use windows_sys::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
     use windows_sys::Win32::System::SystemInformation::GetTickCount;
     use windows_sys::Win32::System::Threading::{
-        GetCurrentProcess, GetCurrentProcessId, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+        GetCurrentProcess, GetCurrentProcessId, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW,
+        PROCESS_QUERY_LIMITED_INFORMATION,
     };
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, GetLastInputInfo, LASTINPUTINFO, VK_ESCAPE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_XBUTTON1,
+        VK_XBUTTON2,
+    };
     use windows_sys::Win32::UI::Shell::{
         SHQueryUserNotificationState, QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowLongW, GetWindowRect,
         GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
-        SetCursorPos, SetWindowPos, ShowWindow, GWL_EXSTYLE, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOSIZE,
-        SWP_NOZORDER, SW_SHOWNOACTIVATE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+        SetCursorPos, SetWindowPos, ShowWindow, SystemParametersInfoW, GWL_EXSTYLE, SPI_GETCLIENTAREAANIMATION,
+        SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     };
 
     const SKIP_CLASSES: &[&str] = &[
@@ -187,7 +200,25 @@ mod imp {
         }
     }
 
+    /// Debug builds only: `GLITCH_CHAOS_ONLY_PIDS=123,456` limits chaos mode to the windows of
+    /// those processes (the QA test windows), so a test run never touches anybody's real windows.
+    fn scoped_mode() -> bool {
+        cfg!(debug_assertions) && std::env::var_os("GLITCH_CHAOS_ONLY_PIDS").is_some()
+    }
+
+    fn scoped_out(hwnd: HWND) -> bool {
+        if !scoped_mode() {
+            return false;
+        }
+        let Ok(v) = std::env::var("GLITCH_CHAOS_ONLY_PIDS") else { return false };
+        let pid = pid_of(hwnd);
+        !v.split(',').filter_map(|p| p.trim().parse::<u32>().ok()).any(|p| p == pid)
+    }
+
     fn describe(hwnd: HWND, fg: HWND) -> Option<Target> {
+        if scoped_out(hwnd) {
+            return None;
+        }
         if unsafe { IsWindow(hwnd) } == 0
             || unsafe { IsWindowVisible(hwnd) } == 0
             || unsafe { IsIconic(hwnd) } != 0
@@ -197,7 +228,9 @@ mod imp {
             return None;
         }
         let ex = unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) } as u32;
-        let system = ex & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST) != 0
+        // Always-on-top windows are left alone, except in a scoped QA run (the scope already limits it to test windows).
+        let topmost = if scoped_mode() { 0 } else { WS_EX_TOPMOST };
+        let system = ex & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | topmost) != 0
             || cloaked(hwnd)
             || SKIP_CLASSES.contains(&class_name(hwnd).as_str());
         let frame = frame_of(hwnd)?;
@@ -291,6 +324,136 @@ mod imp {
         true
     }
 
+    // ---------------------------------------------------- chaos mode 2
+
+    /// Any mouse button is down right now (reads the key state, sends nothing).
+    pub fn button_down() -> bool {
+        [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2]
+            .iter()
+            .any(|vk| (unsafe { GetAsyncKeyState(*vk as i32) } as u16) & 0x8000 != 0)
+    }
+
+    /// Esc is held right now (reads the key state, sends nothing): it stops every chaos act.
+    pub fn esc_down() -> bool {
+        (unsafe { GetAsyncKeyState(VK_ESCAPE as i32) } as u16) & 0x8000 != 0
+    }
+
+    /// The OS "show animations in Windows" switch is off (Settings > Accessibility > Visual effects).
+    pub fn os_reduce_motion() -> bool {
+        let mut on: BOOL = 1;
+        // SAFETY: out-parameter of the size the action documents (a BOOL).
+        let ok = unsafe { SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, (&mut on as *mut BOOL).cast(), 0) };
+        ok != 0 && on == 0
+    }
+
+    /// The window the user is working in.
+    pub fn foreground_id() -> Option<u64> {
+        let fg = unsafe { GetForegroundWindow() };
+        (!fg.is_null()).then_some(fg as usize as u64)
+    }
+
+    fn pid_of(hwnd: HWND) -> u32 {
+        let mut pid = 0u32;
+        unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+        pid
+    }
+
+    /// Lower-case executable name without `.exe` ("" if it can't be read).
+    fn process_stem(pid: u32) -> String {
+        let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+        if h.is_null() {
+            return String::new();
+        }
+        let mut buf = [0u16; 520];
+        let mut len = buf.len() as u32;
+        let ok = unsafe { QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut len) };
+        unsafe { CloseHandle(h) };
+        if ok == 0 {
+            return String::new();
+        }
+        let path = String::from_utf16_lossy(&buf[..len as usize]);
+        let file = path.rsplit(['\\', '/']).next().unwrap_or("").to_lowercase();
+        file.strip_suffix(".exe").unwrap_or(&file).to_string()
+    }
+
+    /// Everything the minimise prank needs to decide about one window.
+    fn yoink_describe(t: Target) -> glitch_core::chaos2::YoinkWin {
+        let hwnd = t.cand.id as usize as HWND;
+        glitch_core::chaos2::YoinkWin {
+            cand: t.cand,
+            process: process_stem(pid_of(hwnd)),
+            title: window_title(hwnd),
+            class: class_name(hwnd),
+            last_front_ms_ago: None,
+        }
+    }
+
+    /// Visible windows of other apps, described for the minimise prank (titles and
+    /// program names are only read to decide "hands off", never stored beyond the prank).
+    pub fn yoink_candidates() -> Vec<glitch_core::chaos2::YoinkWin> {
+        candidates().into_iter().map(yoink_describe).collect()
+    }
+
+    pub fn yoink_win(id: u64) -> Option<glitch_core::chaos2::YoinkWin> {
+        target(id).map(yoink_describe)
+    }
+
+    /// The identity of a window: its process id and class (a recycled handle differs).
+    pub fn identity(id: u64) -> Option<(u32, String)> {
+        let hwnd = id as usize as HWND;
+        (unsafe { IsWindow(hwnd) } != 0).then(|| (pid_of(hwnd), class_name(hwnd)))
+    }
+
+    /// Is the window minimised right now? (`None`: it is gone.)
+    pub fn is_minimized(id: u64) -> Option<bool> {
+        let hwnd = id as usize as HWND;
+        (unsafe { IsWindow(hwnd) } != 0).then(|| unsafe { IsIconic(hwnd) } != 0)
+    }
+
+    /// Titles and program names of every visible top-level window (for screen-share detection).
+    pub fn visible_titles() -> Vec<String> {
+        struct Acc(Vec<String>);
+        unsafe extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            let acc = &mut *(lparam as *mut Acc);
+            if IsWindowVisible(hwnd) != 0 && !is_own(hwnd) {
+                let t = window_title(hwnd);
+                if !t.is_empty() {
+                    acc.0.push(t);
+                }
+                let p = process_stem(pid_of(hwnd));
+                if matches!(p.as_str(), "obs64" | "obs32" | "streamlabs") {
+                    acc.0.push("OBS Studio".to_string());
+                }
+            }
+            1
+        }
+        let mut acc = Acc(Vec::new());
+        // SAFETY: acc outlives the synchronous enumeration.
+        unsafe { EnumWindows(Some(collect), &mut acc as *mut Acc as LPARAM) };
+        acc.0
+    }
+
+    // BEGIN AUDITED MINIMIZE/RESTORE
+    /// The ONLY place chaos mode minimises or restores another app's window.
+    /// Minimise: `SW_SHOWMINNOACTIVE` (the window goes to the taskbar and nothing
+    /// is activated). Restore: `SW_SHOWNOACTIVATE` (back in its place, without
+    /// taking the keyboard focus). Never Glitch's own windows, never anything
+    /// the caller hasn't checked against the minimise book.
+    pub fn yoink_show(id: u64, cmd: YoinkCmd) -> bool {
+        let hwnd = id as usize as HWND;
+        if unsafe { IsWindow(hwnd) } == 0 || is_own(hwnd) {
+            return false;
+        }
+        let how = if cmd == YoinkCmd::Minimize {
+            windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWMINNOACTIVE
+        } else {
+            SW_SHOWNOACTIVATE
+        };
+        unsafe { ShowWindow(hwnd, how) };
+        true
+    }
+    // END AUDITED MINIMIZE/RESTORE
+
     pub const AVAILABLE: bool = true;
 }
 
@@ -323,6 +486,36 @@ mod imp {
         None
     }
     pub fn set_cursor(_x: i32, _y: i32) -> bool {
+        false
+    }
+    pub fn button_down() -> bool {
+        false
+    }
+    pub fn os_reduce_motion() -> bool {
+        false
+    }
+    pub fn esc_down() -> bool {
+        false
+    }
+    pub fn foreground_id() -> Option<u64> {
+        None
+    }
+    pub fn yoink_candidates() -> Vec<glitch_core::chaos2::YoinkWin> {
+        Vec::new()
+    }
+    pub fn yoink_win(_id: u64) -> Option<glitch_core::chaos2::YoinkWin> {
+        None
+    }
+    pub fn identity(_id: u64) -> Option<(u32, String)> {
+        None
+    }
+    pub fn is_minimized(_id: u64) -> Option<bool> {
+        None
+    }
+    pub fn visible_titles() -> Vec<String> {
+        Vec::new()
+    }
+    pub fn yoink_show(_id: u64, _cmd: super::YoinkCmd) -> bool {
         false
     }
     pub const AVAILABLE: bool = false;

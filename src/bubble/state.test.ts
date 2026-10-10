@@ -109,6 +109,31 @@ describe("bubble state", () => {
 describe("live progress", () => {
   const reply = (text: string) => ({ type: "step" as const, step: { type: "reply" as const, text, actions: [] } });
 
+  it("shows the wait for an app with its seconds, then which app it looks at", () => {
+    let s = run(initialState(), { type: "send", text: "open spotify and tell me what you see" });
+    s = run(
+      s,
+      { type: "progress", p: { kind: "step", id: 1, tool: "open_app", label: "Opening Spotify" } },
+      { type: "progress", p: { kind: "step_done", id: 1, ok: true } },
+      { type: "progress", p: { kind: "step", id: 2, tool: "wait_for_app", label: "Waiting for Spotify to load..." } },
+      { type: "progress", p: { kind: "step", id: 2, tool: "wait_for_app", label: "Waiting for Spotify to load... 4 s" } },
+    );
+    // The same step is updated in place, not listed again.
+    expect(s.work.steps.map((x) => [x.id, x.label, x.state])).toEqual([
+      [1, "Opening Spotify", "done"],
+      [2, "Waiting for Spotify to load... 4 s", "running"],
+    ]);
+    s = run(
+      s,
+      { type: "progress", p: { kind: "step_done", id: 2, ok: true } },
+      { type: "progress", p: { kind: "looking", active: true, target: "app", app: "Spotify" } },
+    );
+    expect(s.work.looking).toBe("app");
+    expect(s.work.lookingApp).toBe("Spotify");
+    s = run(s, { type: "progress", p: { kind: "looking", active: false, target: "app", app: "Spotify" } });
+    expect(s.work.lookingApp).toBeNull();
+  });
+
   it("lists steps, the looking badge and streamed text while busy", () => {
     let s = run(initialState(), { type: "send", text: "what's on my screen?" });
     s = run(
@@ -128,6 +153,7 @@ describe("live progress", () => {
     );
     expect(s.work).toEqual({
       looking: null,
+      lookingApp: null,
       text: "Glitch: A shopping list!",
       steps: [{ id: 1, tool: "look_at_screen", label: "Looking at your screen", state: "done" }],
       plan: [],

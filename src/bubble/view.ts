@@ -655,7 +655,7 @@ const STEP_ICON: Record<"running" | "done" | "failed", string> = { running: "", 
 
 /** Draw the live step list ("1. Looking at your screen ✓") and the looking badge. */
 function renderWork(el: HTMLElement, work: Work): void {
-  const key = JSON.stringify([work.steps, work.looking, work.plan]);
+  const key = JSON.stringify([work.steps, work.looking, work.lookingApp, work.plan]);
   if (el.dataset.key === key) return;
   el.dataset.key = key;
   const parts: HTMLElement[] = [];
@@ -664,7 +664,7 @@ function renderWork(el: HTMLElement, work: Work): void {
     for (const s of work.plan) plan.append(h("li", {}, s));
     parts.push(h("div", { class: "plan-box" }, h("span", { class: "plan-title" }, "Plan"), plan));
   }
-  if (work.looking) parts.push(h("div", { class: "looking", role: "status" }, lookingText(work.looking)));
+  if (work.looking) parts.push(h("div", { class: "looking", role: "status" }, lookingText(work.looking, work.lookingApp)));
   // While the badge shows, the screenshot step it stands for isn't listed twice.
   const all = work.steps.filter((st) => !(work.looking && st.tool === "look_at_screen" && st.state === "running"));
   // Long app tasks: the newest steps, and how many came before.

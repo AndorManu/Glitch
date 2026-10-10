@@ -428,12 +428,29 @@ pub fn get_settings(state: State<'_, AppState>) -> Settings {
     state.settings()
 }
 
+/// `null` and "missing" are different for `reduce_effects`: null = follow the OS.
+fn double_option<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    Option::<T>::deserialize(d).map(Some)
+}
+
 /// Fields the UI may change. Everything is optional; missing = unchanged.
 #[derive(Deserialize)]
 pub struct SettingsPatch {
     model: Option<String>,
     movement_enabled: Option<bool>,
     chaos_enabled: Option<bool>,
+    /// Chaos mode level: off / gentle / mischief / full_virus ("off" also switches chaos_enabled off).
+    chaos_level: Option<glitch_core::chaos2::ChaosLevel>,
+    /// The one-time Full Virus confirmation was given in the Settings dialog.
+    chaos_full_confirmed: Option<bool>,
+    /// "Reduce effects": true / false, or null to follow the OS animation setting.
+    #[serde(default, deserialize_with = "double_option")]
+    reduce_effects: Option<Option<bool>>,
+    chaos_during_stream: Option<bool>,
     onboarding_done: Option<bool>,
     memory_enabled: Option<bool>,
     screen_enabled: Option<bool>,
@@ -462,6 +479,8 @@ pub async fn update_settings(
         }
     }
     let old_model = state.settings().model;
+    let patch_level_changed = patch.chaos_level.is_some();
+    let patch_reduce_changed = patch.reduce_effects.is_some();
     let new = state.update_settings(|s| {
         if let Some(m) = patch.model {
             s.model = Some(m);
@@ -471,6 +490,23 @@ pub async fn update_settings(
         }
         if let Some(v) = patch.chaos_enabled {
             s.chaos_enabled = v;
+        }
+        if let Some(l) = patch.chaos_level {
+            s.chaos_level = l;
+            // "Off" is the old switch off; any other level switches chaos on.
+            s.chaos_enabled = l.is_on();
+            // Full Virus only counts once it was confirmed (here or earlier).
+            if l == glitch_core::chaos2::ChaosLevel::FullVirus && patch.chaos_full_confirmed == Some(true) {
+                s.chaos_full_confirmed = true;
+            }
+        } else if let Some(c) = patch.chaos_full_confirmed {
+            s.chaos_full_confirmed = c;
+        }
+        if let Some(r) = patch.reduce_effects {
+            s.reduce_effects = r;
+        }
+        if let Some(v) = patch.chaos_during_stream {
+            s.chaos_during_stream = v;
         }
         if let Some(v) = patch.onboarding_done {
             s.onboarding_done = v;
@@ -520,7 +556,8 @@ pub async fn update_settings(
             let _ = ollama.unload(&old).await;
         });
     }
-    if !new.chaos_enabled || !new.movement_enabled {
+    if !new.chaos_enabled || !new.movement_enabled || patch_level_changed || patch_reduce_changed {
+        // A new level (or switching off, or Reduce effects) ends whatever is running right now.
         crate::chaos::stop_all(&app);
     }
     let _ = app.emit("settings-changed", &new);

@@ -36,13 +36,15 @@ export interface Work {
   steps: WorkStep[];
   /** Taking a screenshot right now: the "looking at your screen" badge. */
   looking: CaptureTarget | null;
+  /** With `looking` "app": which app. */
+  lookingApp: string | null;
   /** The reply so far, as it streams in (plain text). */
   text: string;
   /** An app task's plan, shown above the steps. */
   plan: string[];
 }
 
-export const NO_WORK: Work = { steps: [], looking: null, text: "", plan: [] };
+export const NO_WORK: Work = { steps: [], looking: null, lookingApp: null, text: "", plan: [] };
 
 export interface BubbleState {
   /** Waiting for the model: the thought cloud is up and sending is off. */
@@ -149,7 +151,7 @@ export function applyProgress(w: Work, p: AgentProgress): Work {
     case "step_done":
       return { ...w, steps: w.steps.map((x) => (x.id === p.id ? { ...x, state: p.ok ? "done" : "failed" } : x)) };
     case "looking":
-      return { ...w, looking: p.active ? p.target : null };
+      return { ...w, looking: p.active ? p.target : null, lookingApp: p.active ? (p.app ?? null) : null };
     case "text":
       return { ...w, text: w.text + p.delta };
     case "plan":

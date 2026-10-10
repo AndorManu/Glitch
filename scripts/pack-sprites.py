@@ -334,6 +334,18 @@ def grip_lines(sheets: tuple[str, ...]) -> list[str]:
     return lines
 
 
+def rod_lines() -> list[str]:
+    """Fishing-rod tips saved by slice-generated.py (art/frames/<sheet>-rods.json)."""
+    import json
+
+    lines = []
+    for p in sorted(FRAMES.glob("*-rods.json")):
+        sheet = p.name.removesuffix("-rods.json")
+        for i, (x, y) in enumerate(json.loads(p.read_text())):
+            lines.append(f"  {sheet}{i}: [{x}, {y}],")
+    return lines
+
+
 def main():
     names: list[str] = []
     imgs: list[np.ndarray] = []
@@ -394,6 +406,10 @@ def main():
         "// Where his mouth bites the cursor tip (art px in the frame), per bite_cursor frame.",
         "export const ANIM_BITES: Record<string, [number, number]> = {",
         *grip_lines(("bite_cursor",)),
+        "};",
+        "// Where the fishing rod's tip is (art px in the frame): the hook line starts exactly there.",
+        "export const ANIM_RODS: Record<string, [number, number]> = {",
+        *rod_lines(),
         "};",
         "",
     ]

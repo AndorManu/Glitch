@@ -25,7 +25,8 @@ export const WELCOME =
   "Hi, I'm Glitch! Ask me anything, or try “what's on my screen?”, “what does this error mean?”, “what's 15% of what I copied?” or “remind me to stretch in 20 minutes”.";
 
 /** The badge while Glitch takes a screenshot. */
-export function lookingText(target: "screen" | "window" | "cursor"): string {
+export function lookingText(target: "screen" | "window" | "cursor" | "app", app?: string | null): string {
+  if (target === "app") return app ? `👀 looking at ${app}` : "👀 looking at that app";
   return target === "cursor" ? "👀 looking under your mouse" : target === "window" ? "👀 looking at your window" : "👀 looking at your screen";
 }
 
@@ -104,6 +105,8 @@ export const EMPTY_REPLY = "Hmm… I'm not sure what to say to that.";
 export function askPermission(title: string): string {
   const t = title.trim().replace(/[.?!…]+$/, "");
   if (!t) return "Can I go ahead?";
+  // Already Glitch speaking ("I can open Spotify, but ... I need app control"): not a "Can I ...?" question.
+  if (/^I /.test(t)) return `${t}.`;
   // Keep words like "URL" or "Spotify" intact: only lower a capital that
   // starts an ordinary word.
   const lowered = /^[A-Z][a-z]/.test(t) ? t[0].toLowerCase() + t.slice(1) : t;

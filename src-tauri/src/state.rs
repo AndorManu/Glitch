@@ -8,7 +8,7 @@ use glitch_core::memory::MemoryStore;
 use glitch_core::platform::{AppEntry, Platform, SystemPlatform};
 use glitch_core::settings::Settings;
 use tauri::menu::CheckMenuItem;
-use tauri::{AppHandle, Emitter, Wry};
+use tauri::{AppHandle, Emitter, Manager, Wry};
 
 use crate::desktop::NativeDesktop;
 
@@ -30,11 +30,25 @@ impl Platform for DryRunPlatform {
         Ok(())
     }
     fn launch_app(&self, app: &AppEntry) -> io::Result<()> {
+        // Debug builds, QA only: a stand-in app the check started for this
+        // run really launches (and becomes the only process Glitch may see).
+        if let Some((name, exe, args)) = qa_fake_app() {
+            if app.name == name {
+                let child = std::process::Command::new(&exe).args(&args).spawn()?;
+                eprintln!("glitch (dry run): launched the QA stand-in {name} (pid {})", child.id());
+                std::env::set_var("GLITCH_HANDS_ONLY_PIDS", child.id().to_string());
+                return Ok(());
+            }
+        }
         eprintln!("glitch (dry run): would launch app {}", app.name);
         Ok(())
     }
     fn installed_apps(&self) -> Vec<AppEntry> {
-        self.0.installed_apps()
+        let mut apps = self.0.installed_apps();
+        if let Some((name, exe, _)) = qa_fake_app() {
+            apps.push(AppEntry { name, launch_path: exe });
+        }
+        apps
     }
     fn search_roots(&self) -> Vec<PathBuf> {
         self.0.search_roots()
@@ -42,6 +56,19 @@ impl Platform for DryRunPlatform {
     fn home_dir(&self) -> Option<PathBuf> {
         self.0.home_dir()
     }
+}
+
+/// Debug builds only: `GLITCH_QA_FAKE_APP="Name|C:\\path\\app.exe|arg|arg"`
+/// adds a stand-in app (a slow-starting test window the QA check built) to
+/// the installed apps; opening it in a dry run starts it for real.
+fn qa_fake_app() -> Option<(String, PathBuf, Vec<String>)> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    let v = std::env::var("GLITCH_QA_FAKE_APP").ok()?;
+    let mut parts = v.split('|');
+    let (name, exe) = (parts.next()?.to_string(), PathBuf::from(parts.next()?));
+    Some((name, exe, parts.map(str::to_string).collect()))
 }
 
 pub struct AppState {
@@ -56,6 +83,8 @@ pub struct AppState {
     pub wander_item: Mutex<Option<CheckMenuItem<Wry>>>,
     /// Tray "Chaos mode" item, kept in sync with the settings.
     pub chaos_item: Mutex<Option<CheckMenuItem<Wry>>>,
+    /// Tray label "Chaos: Full Virus" (disabled item), kept in sync with the settings.
+    pub chaos_label: Mutex<Option<tauri::menu::MenuItem<Wry>>>,
     /// Last view the panel was asked to show ("setup" or "settings").
     pub panel_view: Mutex<String>,
 }
@@ -151,6 +180,18 @@ impl AppState {
         agent.set_hands(crate::hands::for_setting(app, settings.hands_enabled));
         agent.set_hands_model(settings.hands_model.clone());
         configure_desktop(&mut agent, &settings, &config_dir);
+        // "Turn on app control" on the card Glitch shows when a request needs
+        // clicking inside an app: the same switch as Settings > Features.
+        let enabler_app = app.clone();
+        agent.set_hands_enabler(Some(Arc::new(move || {
+            if crate::pause::is_paused() {
+                return None;
+            }
+            let hands = crate::hands::for_setting(&enabler_app, true).filter(|h| h.unavailable().is_none())?;
+            let new = enabler_app.state::<AppState>().update_settings(|s| s.hands_enabled = true);
+            let _ = enabler_app.emit("settings-changed", &new);
+            Some(hands)
+        })));
         if settings.memory_enabled {
             agent.set_memory(Some(MemoryStore::load(&memory_path)));
         }
@@ -163,6 +204,7 @@ impl AppState {
             platform,
             wander_item: Mutex::new(None),
             chaos_item: Mutex::new(None),
+            chaos_label: Mutex::new(None),
             panel_view: Mutex::new("setup".into()),
         }
     }
@@ -189,6 +231,10 @@ impl AppState {
         let item = self.chaos_item.lock().unwrap().clone();
         if let Some(item) = item {
             let _ = item.set_checked(new.chaos_enabled);
+        }
+        let item = self.chaos_label.lock().unwrap().clone();
+        if let Some(item) = item {
+            let _ = item.set_text(new.chaos_effective().label());
         }
         new
     }

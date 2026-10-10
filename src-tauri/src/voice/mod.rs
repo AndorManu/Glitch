@@ -152,6 +152,13 @@ pub fn current_model(app: &AppHandle) -> &'static SpeechModel {
     speech_models::resolve(settings.voice.model.as_deref(), glitch_core::models::total_ram_bytes())
 }
 
+/// Is a voice command being listened to / transcribed, or is Glitch speaking?
+/// (Chaos mode keeps quiet then.)
+pub fn busy(app: &AppHandle) -> bool {
+    app.try_state::<VoiceState>()
+        .is_some_and(|v| v.phase_name() != "idle" || v.speaking.load(std::sync::atomic::Ordering::Relaxed))
+}
+
 /// Called once from `main`'s setup: registers state and the hotkey. Loads
 /// nothing else.
 pub fn setup(app: &AppHandle) {

@@ -12,8 +12,9 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::ai::{AiError, AiProvider, ChatRequest, Message, Role, ToolCall};
+use crate::appwait::{self, AppMatcher, Clock, RealClock, WaitOutcome};
 use crate::confirm::{approval_checked, Approval, ConfirmError, ConfirmationGate};
-use crate::desktop::{CaptureTarget, Desktop, NoDesktop};
+use crate::desktop::{AppWindow, CaptureTarget, Desktop, NoDesktop};
 use crate::hands::{self, Ask, Driver, Hands, HandsAction};
 use crate::memory::{self, MemoryStore, Remembered};
 use crate::platform::{Os, Platform};
@@ -97,7 +98,13 @@ pub enum Progress {
     /// That tool finished.
     StepDone { id: usize, ok: bool },
     /// Glitch is taking a screenshot right now (`active`), or is done.
-    Looking { active: bool, target: CaptureTarget },
+    Looking {
+        active: bool,
+        target: CaptureTarget,
+        /// With [`CaptureTarget::App`]: which app.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        app: Option<String>,
+    },
     /// The next piece of the reply.
     Text { delta: String },
     /// An app task's plan (2 to 6 short steps), shown above the step list.
@@ -163,6 +170,37 @@ pub struct Agent {
     pending_grant: Option<String>,
     /// The card being asked is a review-mode step card ("Stop" ends the task).
     pending_review: bool,
+    /// Time for the waits (a manual clock in tests).
+    clock: Arc<dyn Clock>,
+    /// The app `open_app` opened in this message (and its window once up).
+    opened_app: Option<OpenedApp>,
+    /// The user's message of this turn.
+    turn_text: String,
+    /// The "turn on app control" card was shown this turn.
+    offered_control: bool,
+    /// The "it IS open" correction was used this turn.
+    guard_used: bool,
+    /// The model looked at an app it never opened this turn, and found no
+    /// window (the app to open, for the correction).
+    looked_unopened: Option<String>,
+    /// Turns "Let Glitch control apps" on (saves the setting) and returns
+    /// the hands to use; set by the app shell.
+    enabler: Option<HandsEnabler>,
+}
+
+/// See [`Agent::set_hands_enabler`].
+pub type HandsEnabler = Arc<dyn Fn() -> Option<Arc<dyn Hands>> + Send + Sync>;
+
+/// An app opened by `open_app` in the current message.
+#[derive(Clone)]
+struct OpenedApp {
+    name: String,
+    matcher: AppMatcher,
+    /// Its window, once the wait found it.
+    window: Option<AppWindow>,
+    /// The wait ended with a usable window.
+    ready: bool,
+    waited: Duration,
 }
 
 /// Added to the system prompt while saved reminders are on.
@@ -239,7 +277,11 @@ pub fn system_prompt(os: Os, screen: bool) -> String {
          open_path with a path from the results to open one.\n\
          - web_search: for facts you don't know or that change (news, prices, weather, scores), never for the \
          user's files. open_url: for a specific website.\n\
-         - open_app, set_timer, take_note, write_clipboard, get_datetime, get_active_window, \
+         - open_app: it waits until the app's window is up and says so (\"ready\"). Never describe the screen, \
+         and never say an app isn't open, before that result. To see an app you opened, call look_at_screen \
+         with target \"app\" and app set to its name (not \"window\": that may be another app). If its window \
+         looks empty or says loading, wait and look once more.\n\
+         - set_timer, take_note, write_clipboard, get_datetime, get_active_window, \
          get_now_playing, focus_mode: when asked.\n\
          Opening apps and files, copying to the clipboard and the first note ask the user for permission by \
          themselves: just call the tool. You can't delete, move or edit files, type or click in other apps, or \
@@ -271,6 +313,11 @@ pub fn system_prompt(os: Os, screen: bool) -> String {
          -> search_files {{\"query\":\"holiday\",\"kind\":\"image\"}} gives results, newest first\n\
          -> open_path {{\"path\":\"<path of the first result>\"}}\n\
          Glitch: Opened <the file name from the results>, your newest holiday photo!\n\
+         User: open weather and tell me what you see\n\
+         -> open_app {{\"name\":\"Weather\"}} gives ready true, window \"Weather\"\n\
+         -> look_at_screen {{\"target\":\"app\",\"app\":\"Weather\"}} gives a window with \"Tuesday 18\u{b0}\" \
+         and \"Rain after 4 pm\"\n\
+         Glitch: Weather is up! It says \"Tuesday 18\u{b0}\" and \"Rain after 4 pm\".\n\
          User: remind me to stretch in 20 minutes\n\
          -> set_timer {{\"minutes\":20,\"message\":\"Time to stretch!\"}}\n\
          Glitch: Deal! I'll pop up in 20 minutes.\n\
@@ -424,6 +471,34 @@ pub fn screen_trigger(text: &str) -> Option<CaptureTarget> {
     }
 }
 
+/// Does the message ask to open/launch/start something ("open Spotify and
+/// tell me what you see")?
+pub fn opens_something(text: &str) -> bool {
+    let t = text.to_lowercase();
+    t.split(|c: char| !c.is_alphanumeric()).any(|w| ["open", "launch", "start", "run"].contains(&w))
+}
+
+/// Does a reply say the app isn't open (apostrophes normalised)?
+fn claims_not_open(reply: &str) -> bool {
+    let t = reply.to_lowercase().replace('\u{2019}', "'");
+    [
+        "isn't even open",
+        "isn't open",
+        "is not open",
+        "not open yet",
+        "isn't running",
+        "isn't even running",
+        "hasn't opened",
+        "didn't open",
+        "did not open",
+        "isn't loaded",
+        "hasn't loaded",
+        "isn't up yet",
+    ]
+    .iter()
+    .any(|p| t.contains(p))
+}
+
 /// Does this message talk about what's on the clipboard (not putting
 /// something on it)?
 pub fn clipboard_trigger(text: &str) -> bool {
@@ -476,7 +551,26 @@ impl Agent {
             turn_model: String::new(),
             pending_grant: None,
             pending_review: false,
+            clock: Arc::new(RealClock::new()),
+            opened_app: None,
+            turn_text: String::new(),
+            offered_control: false,
+            guard_used: false,
+            looked_unopened: None,
+            enabler: None,
         }
+    }
+
+    /// The clock the waits use (tests and evals pass a manual one).
+    pub fn set_clock(&mut self, clock: Arc<dyn Clock>) {
+        self.clock = clock;
+    }
+
+    /// How "Turn on app control" (the card offered when a request needs
+    /// clicking inside an app while the setting is off) switches the setting
+    /// on. Returns the hands to use, or `None` if it can't be turned on.
+    pub fn set_hands_enabler(&mut self, enabler: Option<HandsEnabler>) {
+        self.enabler = enabler;
     }
 
     /// "Let Glitch control apps": `Some(hands)` on, `None` off.
@@ -743,6 +837,11 @@ impl Agent {
         self.waiting_since = None;
         self.pending_grant = None;
         self.pending_review = false;
+        self.opened_app = None;
+        self.turn_text = text.to_string();
+        self.offered_control = false;
+        self.guard_used = false;
+        self.looked_unopened = None;
         self.turn_model = model.to_string();
         if let Some(d) = self.hands.clone() {
             d.new_task(text);
@@ -781,12 +880,15 @@ impl Agent {
     /// model round-trip less.
     async fn prefetch(&mut self, model: &str, text: &str) -> Option<Step> {
         let mut calls = Vec::new();
-        if self.screen_enabled {
+        // "open Spotify and tell me what you see": the look comes after the
+        // app is up, so the model sequences it.
+        if self.screen_enabled && !opens_something(text) {
             if let Some(target) = screen_trigger(text) {
                 let name = match target {
                     CaptureTarget::Screen => "screen",
                     CaptureTarget::Window => "window",
                     CaptureTarget::Cursor => "cursor",
+                    CaptureTarget::App => "window",
                 };
                 calls.push(ToolCall { name: tools::LOOK_AT_SCREEN.into(), arguments: json!({ "target": name }) });
             }
@@ -873,6 +975,18 @@ impl Agent {
         let grant = self.pending_grant.take();
         let model =
             if self.in_task() && !self.turn_model.is_empty() { self.turn_model.clone() } else { model.to_string() };
+        if pending_tool == Some(tools::ENABLE_APP_CONTROL) {
+            return Ok(match resolved {
+                Some(Action::EnableAppControl { app, .. }) => self.enable_app_control_and_resume(&app).await?,
+                _ => {
+                    let app = self.opened_app.as_ref().map(|o| o.name.clone()).unwrap_or_else(|| "The app".into());
+                    self.reply(format!(
+                        "No problem! {app} is open, so you can take it from there. If you ever want me to click \
+                         around for you, switch on \"Let Glitch control apps\" in Settings > Features."
+                    ))
+                }
+            });
+        }
         match resolved {
             Some(action) => {
                 if let Action::TakeNote { .. } = action {
@@ -895,6 +1009,65 @@ impl Agent {
         step
     }
 
+    /// The user wants something done inside an app but app control is off:
+    /// say what is needed and offer to turn it on (a card with "Turn on app
+    /// control" / "Not now"). Only after an app was opened this turn.
+    fn offer_app_control(&mut self) -> Option<Step> {
+        if self.hands.is_some() || self.offered_control || !hands::needs_interaction(&self.turn_text) {
+            return None;
+        }
+        let app = self.opened_app.as_ref()?.name.clone();
+        self.offered_control = true;
+        let doing = hands::interaction_summary(&self.turn_text);
+        let p = self.gate.request(Action::EnableAppControl { app, doing });
+        let step = Step::Confirm {
+            id: p.id.clone(),
+            title: p.description.title.clone(),
+            detail: p.description.detail.clone(),
+            actions: self.actions.clone(),
+            allow: Some("Turn on app control".into()),
+            deny: Some("Not now".into()),
+            auto: None,
+        };
+        self.waiting();
+        Some(step)
+    }
+
+    /// "Turn on app control" was allowed: switch it on (the shell saves the
+    /// setting), then carry on with the original request using the Hands
+    /// plan/act/verify loop. The user's click on the card also allows
+    /// controlling this app for the task.
+    async fn enable_app_control_and_resume(&mut self, app: &str) -> Result<Step, AgentError> {
+        let hands = match self.enabler.clone() {
+            Some(e) => tokio::task::spawn_blocking(move || e()).await.unwrap_or(None),
+            None => None,
+        };
+        let Some(hands) = hands else {
+            return Ok(self.reply(format!(
+                "I couldn't switch app control on from here. {app} is open; you can turn on \"Let Glitch control \
+                 apps\" in Settings > Features and ask me again."
+            )));
+        };
+        self.set_hands(Some(hands));
+        let driver = self.hands.clone().expect("just set");
+        driver.new_task(&self.turn_text);
+        driver.grant(app);
+        self.actions.push("Turned on app control".into());
+        self.start_task();
+        if let Some(m) = &self.hands_model {
+            self.turn_model = m.clone();
+        }
+        let resume =
+            format!("(App control is on now and {app} is open. Please carry on with my request: {})", self.turn_text);
+        self.history.push(Message { untrusted: self.voice_turn.is_some(), ..Message::user(&resume) });
+        let model = self.turn_model.clone();
+        let step = self.run(&model).await;
+        if !matches!(step, Ok(Step::Confirm { .. })) {
+            self.release_hands();
+        }
+        step
+    }
+
     async fn execute(&mut self, model: &str, action: Action) {
         if let Action::Remember { .. } | Action::Forget { .. } = action {
             return self.execute_memory(action);
@@ -906,12 +1079,24 @@ impl Agent {
             Action::OpenApp { app } if self.in_task() => Some(app.name.clone()),
             _ => None,
         };
+        // Windows that exist before the launch: the new app's window is one
+        // that wasn't there (see appwait).
+        let waiting_for = match &action {
+            Action::OpenApp { app } if self.desktop.lists_windows() => Some(app.name.clone()),
+            _ => None,
+        };
+        let before = if waiting_for.is_some() {
+            let d = self.desktop.clone();
+            tokio::task::spawn_blocking(move || d.app_windows()).await.unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         self.steps += 1;
         let id = self.steps;
         let tool = action.tool_name();
         self.emit(Progress::Step { id, tool: tool.into(), label: action.progress_label() });
         let outcome = match &action {
-            Action::LookAtScreen { target } => self.look(model, *target).await,
+            Action::LookAtScreen { target, app } => self.look(model, *target, app.clone()).await,
             _ => {
                 let (platform, desktop) = (self.platform.clone(), self.desktop.clone());
                 // File search, screenshots and the clipboard touch the OS; keep
@@ -929,6 +1114,13 @@ impl Agent {
         };
         let mut outcome = outcome;
         let ok = !outcome.for_model.contains("\"ok\":false");
+        let mut open_step_done = false;
+        if let (true, Some(name)) = (ok, waiting_for) {
+            // "Opened" is done; the wait gets its own step.
+            self.emit(Progress::StepDone { id, ok });
+            open_step_done = true;
+            self.wait_for_app(&name, before, &mut outcome).await;
+        }
         // An app task: don't make the model ask "is it open yet?", wait for it.
         if let (true, Some(app), Some(d)) = (ok, opened_app, self.hands.clone()) {
             let (w, _) = tokio::task::spawn_blocking(move || d.wait_for(&app, OPEN_APP_WAIT))
@@ -940,7 +1132,9 @@ impl Agent {
                 outcome.private = true;
             }
         }
-        self.emit(Progress::StepDone { id, ok });
+        if !open_step_done {
+            self.emit(Progress::StepDone { id, ok });
+        }
         let outside = outcome.private || outcome.untrusted;
         self.private_turn |= outcome.private;
         self.outside_turn |= outside;
@@ -1011,7 +1205,61 @@ impl Agent {
 
     /// `look_at_screen`: checks the setting and the model first, shows the
     /// "looking" indicator while the screenshot is taken.
-    async fn look(&mut self, model: &str, target: CaptureTarget) -> tools::Outcome {
+    /// After `open_app`: wait until the app's window is up (showing "Waiting
+    /// for X to load... 4 s" in the bubble), and tell the model honestly how
+    /// it went.
+    async fn wait_for_app(&mut self, name: &str, before: Vec<AppWindow>, outcome: &mut tools::Outcome) {
+        self.steps += 1;
+        let id = self.steps;
+        let waiting = |secs: u64| {
+            if secs == 0 {
+                format!("Waiting for {name} to load...")
+            } else {
+                format!("Waiting for {name} to load... {secs} s")
+            }
+        };
+        self.emit(Progress::Step { id, tool: "wait_for_app".into(), label: waiting(0) });
+        let matcher = AppMatcher::launched(name, &before);
+        let (desktop, clock, sink) = (self.desktop.clone(), self.clock.clone(), self.progress.clone());
+        let (m, label_name) = (matcher.clone(), name.to_string());
+        let result = tokio::task::spawn_blocking(move || {
+            appwait::wait_for_window(&*desktop, &*clock, &m, appwait::WAIT_TIMEOUT, appwait::POLL, &mut |t| {
+                if let Some(sink) = &sink {
+                    let secs = t.as_secs();
+                    let label = if secs == 0 {
+                        format!("Waiting for {label_name} to load...")
+                    } else {
+                        format!("Waiting for {label_name} to load... {secs} s")
+                    };
+                    sink(Progress::Step { id, tool: "wait_for_app".into(), label });
+                }
+            })
+        })
+        .await;
+        let Ok(result) = result else {
+            self.emit(Progress::StepDone { id, ok: false });
+            return;
+        };
+        let (window, ready, waited) = match &result {
+            WaitOutcome::Ready { window, waited, .. } => (Some(window.clone()), true, *waited),
+            WaitOutcome::Stuck { window, waited, .. } => (Some(window.clone()), false, *waited),
+            WaitOutcome::NoWindow { waited } => (None, false, *waited),
+        };
+        self.emit(Progress::StepDone { id, ok: ready });
+        if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&outcome.for_model) {
+            if let (Some(extra), Some(obj)) = (appwait::outcome_json(name, &result).as_object(), v.as_object_mut()) {
+                obj.extend(extra.clone());
+            }
+            outcome.for_model = v.to_string();
+        }
+        outcome.private = true;
+        if !ready {
+            outcome.summary = format!("Opened {name} (no usable window after {} s)", waited.as_secs());
+        }
+        self.opened_app = Some(OpenedApp { name: name.to_string(), matcher, window, ready, waited });
+    }
+
+    async fn look(&mut self, model: &str, target: CaptureTarget, app: Option<String>) -> tools::Outcome {
         let refuse = |error: String, summary: &str| tools::Outcome {
             for_model: json!({ "ok": false, "error": error }).to_string(),
             summary: summary.into(),
@@ -1041,16 +1289,78 @@ impl Agent {
             );
         }
         self.looks += 1;
-        self.emit(Progress::Looking { active: true, target });
+        // Right after open_app, "the window" means the app just opened, not
+        // whatever else is in front (that was the bug: describing the dev
+        // screen while the app was still loading).
+        let (target, app) = match (target, app) {
+            (CaptureTarget::Window, None) if self.opened_app.is_some() => {
+                (CaptureTarget::App, self.opened_app.as_ref().map(|o| o.name.clone()))
+            }
+            (CaptureTarget::App, None) => (CaptureTarget::App, self.opened_app.as_ref().map(|o| o.name.clone())),
+            other => other,
+        };
+        if target == CaptureTarget::App {
+            let Some(name) = app else {
+                self.looks -= 1;
+                return refuse("which app? Give its name in \"app\".".into(), "Couldn't look at the app");
+            };
+            return self.look_at_app(name).await;
+        }
+        self.emit(Progress::Looking { active: true, target, app: None });
         let (platform, desktop) = (self.platform.clone(), self.desktop.clone());
-        let action = Action::LookAtScreen { target };
+        let action = Action::LookAtScreen { target, app: None };
         let outcome = tokio::task::spawn_blocking(move || {
             tools::execute(&action, &tools::Env { platform: &*platform, desktop: &*desktop })
         })
         .await
         .unwrap_or_else(|e| refuse(e.to_string(), "Couldn't look at the screen"));
-        self.emit(Progress::Looking { active: false, target });
+        self.emit(Progress::Looking { active: false, target, app: None });
         outcome
+    }
+
+    /// Screenshot of one app's window (waits and retries while it loads).
+    async fn look_at_app(&mut self, name: String) -> tools::Outcome {
+        let target = CaptureTarget::App;
+        self.emit(Progress::Looking { active: true, target, app: Some(name.clone()) });
+        let key = crate::platform::normalise_name(&name);
+        let opened = self.opened_app.clone().filter(|o| crate::platform::normalise_name(&o.name) == key);
+        let matcher = opened.as_ref().map(|o| o.matcher.clone()).unwrap_or_else(|| AppMatcher::named(&name));
+        let preferred = opened.as_ref().and_then(|o| o.window.as_ref().map(|w| w.id));
+        let (desktop, clock, n) = (self.desktop.clone(), self.clock.clone(), name.clone());
+        let shot =
+            tokio::task::spawn_blocking(move || appwait::capture_app(&*desktop, &*clock, &matcher, preferred, &n))
+                .await
+                .unwrap_or_else(|e| Err(e.to_string()));
+        self.emit(Progress::Looking { active: false, target, app: Some(name.clone()) });
+        match shot {
+            Err(mut e) => {
+                if opened.is_none() {
+                    self.looked_unopened = Some(name.clone());
+                    // Not opened in this message: that may be the reason.
+                    e.push_str(&format!(
+                        " You didn't open {name} in this message: if the user asked you to open it, call open_app first."
+                    ));
+                }
+                tools::Outcome {
+                    for_model: json!({ "ok": false, "error": e }).to_string(),
+                    summary: format!("Couldn't see {name}'s window"),
+                    ..Default::default()
+                }
+            }
+            Ok(shot) => {
+                let still_blank = shot.still_blank;
+                let mut outcome = tools::look_outcome(target, Some(&name), shot.capture);
+                if still_blank {
+                    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&outcome.for_model) {
+                        v["loading"] = json!(format!(
+                            "{name}'s window is still empty (probably loading). Say that it is still loading; don't make up what it shows."
+                        ));
+                        outcome.for_model = v.to_string();
+                    }
+                }
+                outcome
+            }
+        }
     }
 
     fn execute_memory(&mut self, action: Action) {
@@ -1328,6 +1638,9 @@ impl Agent {
             if let Some(step) = self.drain_queue(model).await {
                 return Ok(step);
             }
+            if let Some(step) = self.offer_app_control() {
+                return Ok(step);
+            }
 
             if let Some(why) = self.task_over() {
                 return Ok(self.stopped_reply(why));
@@ -1393,6 +1706,41 @@ impl Agent {
             self.queue.extend(reply.tool_calls.iter().cloned());
             let text = reply.content.clone();
             self.history.push(reply);
+            if self.queue.is_empty()
+                && !self.guard_used
+                && self.opened_app.is_none()
+                && opens_something(&self.turn_text)
+            {
+                if let Some(app) = self.looked_unopened.take() {
+                    // The user asked to open it, but the model went straight
+                    // to looking (an earlier turn "opened" it) and now says
+                    // it isn't there: it must call open_app first.
+                    self.guard_used = true;
+                    self.history.pop();
+                    self.history.push(Message::system(format!(
+                        "Correction: you have not opened {app} in this message, and the user asked you to. Call \
+                         open_app with {app} now, then look at it."
+                    )));
+                    continue;
+                }
+            }
+            if self.queue.is_empty() && !self.guard_used && claims_not_open(&text) {
+                if let Some(o) = self.opened_app.clone().filter(|o| o.ready) {
+                    // The model says the app isn't open, but its window was
+                    // up: correct it once instead of showing a wrong answer.
+                    self.guard_used = true;
+                    self.history.pop();
+                    let title = o.window.as_ref().map(|w| w.title.clone()).unwrap_or_default();
+                    self.history.push(Message::system(format!(
+                        "Correction: {name} IS open (its window \"{title}\" was ready after {secs} s). Do not say \
+                         it isn't. If the user wants to know what is in it, call look_at_screen with target \"app\" \
+                         and app \"{name}\", then answer from what you see.",
+                        name = o.name,
+                        secs = o.waited.as_secs()
+                    )));
+                    continue;
+                }
+            }
             if self.queue.is_empty() {
                 let text = if !text.is_empty() {
                     text
@@ -1868,8 +2216,8 @@ mod tests {
         }
         // The bubble heard about it: step, looking on/off, step done.
         let log = log.lock().unwrap().clone();
-        assert!(log.contains(&Progress::Looking { active: true, target: CaptureTarget::Window }));
-        assert!(log.contains(&Progress::Looking { active: false, target: CaptureTarget::Window }));
+        assert!(log.contains(&Progress::Looking { active: true, target: CaptureTarget::Window, app: None }));
+        assert!(log.contains(&Progress::Looking { active: false, target: CaptureTarget::Window, app: None }));
         assert!(log.contains(&Progress::StepDone { id: 1, ok: true }));
         assert!(matches!(&log[1], Progress::Step { id: 1, tool, .. } if tool == "look_at_screen"));
         // After the turn the image is gone from the chat, and the reply is private.
@@ -2557,6 +2905,353 @@ mod tests {
         assert!(!m.log().iter().any(|l| l.contains("click")), "not sent before the OK");
         a.confirm("m", &id, false).await.unwrap();
         assert!(!m.log().iter().any(|l| l.contains("click Discord Send")));
+    }
+
+    // ------------------------------------------------ opening an app, waiting for it
+
+    mod open_and_look {
+        use std::time::Duration;
+
+        use super::*;
+        use crate::appwait::ManualClock;
+        use crate::desktop::AppWindow;
+
+        fn win(id: u64, title: &str, process: &str, foreground: bool) -> AppWindow {
+            AppWindow {
+                id,
+                pid: id as u32,
+                title: title.into(),
+                process: process.into(),
+                ancestors: vec![],
+                age: Some(Duration::from_secs(1)),
+                minimized: false,
+                responsive: true,
+                foreground,
+                width: 1200,
+                height: 800,
+            }
+        }
+
+        /// The owner's dev screen is in front; Spotify's window shows up
+        /// `after` seconds into the wait (None: never).
+        fn world(after: Option<u64>, shots: Vec<u8>) -> (Arc<FakeDesktop>, Arc<ManualClock>) {
+            let clock = Arc::new(ManualClock::default());
+            let mut scripted =
+                vec![(Duration::ZERO, win(1, "glitch - spotify wait fix - Visual Studio Code", "code", true))];
+            if let Some(s) = after {
+                scripted.push((Duration::from_secs(s), win(2, "Spotify Free", "spotify", false)));
+            }
+            let d = FakeDesktop {
+                screen: Some((1920, 1080)),
+                window: Some(WindowInfo { title: "dev".into(), app: "Visual Studio Code".into() }),
+                clock: Some(clock.clone()),
+                scripted: Mutex::new(scripted),
+                window_shots: Mutex::new([(2u64, shots)].into_iter().collect()),
+                ..Default::default()
+            };
+            (Arc::new(d), clock)
+        }
+
+        fn agent(
+            model: Arc<ScriptedModel>,
+            d: Arc<FakeDesktop>,
+            clock: Arc<ManualClock>,
+        ) -> (Agent, Arc<Mutex<Vec<Progress>>>) {
+            let (mut a, log) = seeing(model, d);
+            a.set_clock(clock);
+            (a, log)
+        }
+
+        async fn open(a: &mut Agent, text: &str) -> Step {
+            let Step::Confirm { id, .. } = a.send("m", text).await.unwrap() else { panic!("expected the open card") };
+            a.confirm("m", &id, true).await.unwrap()
+        }
+
+        #[tokio::test]
+        async fn open_app_waits_and_the_window_look_goes_to_the_new_app() {
+            let (d, clock) = world(Some(3), vec![90]);
+            let model = ScriptedModel::new(vec![
+                calls("open_app", json!({"name": "spotify"})),
+                // The bug: the model asks for "the window" right after opening.
+                calls("look_at_screen", json!({"target": "window"})),
+                Message::assistant("Spotify is up with your playlists."),
+            ]);
+            let (mut a, log) = agent(model.clone(), d.clone(), clock.clone());
+            let Step::Reply { text, actions } = open(&mut a, "open spotify and tell me what you see").await else {
+                panic!()
+            };
+            assert_eq!(text, "Spotify is up with your playlists.");
+            assert_eq!(actions, ["Opened Spotify", "Looked at Spotify"]);
+            // Spotify's own window was captured, not the dev screen / whole screen.
+            assert_eq!(*d.window_captures.lock().unwrap(), [2]);
+            assert!(d.captures.lock().unwrap().is_empty(), "no screen capture of the dev window");
+            // The model heard that the window is ready only after the wait.
+            let seen = model.seen.lock().unwrap();
+            let opened = seen[1].last().unwrap();
+            assert!(
+                opened.content.contains("\"ready\":true") && opened.content.contains("Spotify Free"),
+                "{}",
+                opened.content
+            );
+            assert!(clock.elapsed() >= Duration::from_secs(3));
+            // The bubble: Opening -> done, Waiting (with seconds) -> done, Looking at Spotify.
+            let log = log.lock().unwrap();
+            let waiting: Vec<&str> = log
+                .iter()
+                .filter_map(|p| match p {
+                    Progress::Step { tool, label, .. } if tool == "wait_for_app" => Some(label.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(waiting.first(), Some(&"Waiting for Spotify to load..."));
+            assert!(waiting.contains(&"Waiting for Spotify to load... 2 s"), "{waiting:?}");
+            assert!(log.iter().any(|p| matches!(p, Progress::Step { id: 1, tool, .. } if tool == "open_app")));
+            assert!(log.iter().any(|p| matches!(p, Progress::StepDone { id: 1, ok: true })));
+            assert!(log.iter().any(|p| matches!(p, Progress::StepDone { id: 2, ok: true })));
+            assert!(log.iter().any(|p| {
+                matches!(p, Progress::Looking { active: true, target: CaptureTarget::App, app: Some(n) } if n == "Spotify")
+            }));
+        }
+
+        #[tokio::test]
+        async fn a_window_that_never_shows_is_reported_honestly_after_waiting() {
+            let (d, clock) = world(None, vec![]);
+            let model = ScriptedModel::new(vec![
+                calls("open_app", json!({"name": "spotify"})),
+                calls("look_at_screen", json!({"target": "window"})),
+                Message::assistant("Spotify started but never showed a window."),
+            ]);
+            let (mut a, _) = agent(model.clone(), d.clone(), clock.clone());
+            let Step::Reply { actions, .. } = open(&mut a, "open spotify and tell me what you see").await else {
+                panic!()
+            };
+            assert_eq!(actions[0], "Opened Spotify (no usable window after 20 s)");
+            let seen = model.seen.lock().unwrap();
+            assert!(seen[1].last().unwrap().content.contains("no window appeared after 20"));
+            // The look retried (3 x 2 s) and then said so; it never captured another window.
+            assert!(seen[2].last().unwrap().content.contains("no visible window"));
+            assert!(d.window_captures.lock().unwrap().is_empty() && d.captures.lock().unwrap().is_empty());
+            assert!(clock.elapsed() >= Duration::from_secs(26), "{:?}", clock.elapsed());
+        }
+
+        #[tokio::test]
+        async fn a_loading_screen_is_looked_at_again_once() {
+            // First picture is an empty white window, the second has content.
+            let (d, clock) = world(Some(1), vec![255, 90]);
+            let model = ScriptedModel::new(vec![
+                calls("open_app", json!({"name": "spotify"})),
+                calls("look_at_screen", json!({"target": "app", "app": "Spotify"})),
+                Message::assistant("Spotify shows your library."),
+            ]);
+            let (mut a, _) = agent(model.clone(), d.clone(), clock.clone());
+            let before = clock.elapsed();
+            open(&mut a, "open spotify and tell me what you see").await;
+            assert_eq!(*d.window_captures.lock().unwrap(), [2, 2], "looked twice");
+            assert!(!model.seen.lock().unwrap()[2].last().unwrap().content.contains("loading"));
+            assert!(clock.elapsed() - before >= Duration::from_secs(2));
+        }
+
+        #[tokio::test]
+        async fn a_window_that_stays_blank_is_said_to_be_loading() {
+            let (d, clock) = world(Some(1), vec![255]);
+            let model = ScriptedModel::new(vec![
+                calls("open_app", json!({"name": "spotify"})),
+                calls("look_at_screen", json!({"target": "window"})),
+                Message::assistant("It is still loading."),
+            ]);
+            let (mut a, _) = agent(model.clone(), d.clone(), clock);
+            open(&mut a, "open spotify and tell me what you see").await;
+            assert_eq!(d.window_captures.lock().unwrap().len(), 3, "two retries, not more");
+            assert!(model.seen.lock().unwrap()[2].last().unwrap().content.contains("still empty"));
+        }
+
+        #[tokio::test]
+        async fn looking_at_an_app_behind_other_windows_captures_that_window() {
+            let (d, clock) = world(Some(0), vec![90]);
+            // No open_app this time: the user asks about the app that is already there.
+            let model = ScriptedModel::new(vec![
+                calls("look_at_screen", json!({"target": "app", "app": "Spotify"})),
+                Message::assistant("Spotify shows your library."),
+            ]);
+            let (mut a, _) = agent(model, d.clone(), clock);
+            let Step::Reply { actions, .. } = a.send("m", "what is in the spotify app?").await.unwrap() else {
+                panic!()
+            };
+            assert_eq!(actions, ["Looked at Spotify"]);
+            assert_eq!(*d.window_captures.lock().unwrap(), [2]);
+            assert!(d.captures.lock().unwrap().is_empty());
+        }
+
+        #[tokio::test]
+        async fn a_wrong_the_app_isnt_open_answer_is_corrected_once() {
+            let (d, clock) = world(Some(1), vec![90]);
+            let model = ScriptedModel::new(vec![
+                calls("open_app", json!({"name": "spotify"})),
+                Message::assistant("Spotify isn't even open yet! Want me to look later?"),
+                calls("look_at_screen", json!({"target": "app", "app": "Spotify"})),
+                Message::assistant("Spotify is open and shows your library."),
+            ]);
+            let (mut a, _) = agent(model.clone(), d, clock);
+            let Step::Reply { text, .. } = open(&mut a, "open spotify and tell me what you see").await else {
+                panic!()
+            };
+            assert_eq!(text, "Spotify is open and shows your library.");
+            let seen = model.seen.lock().unwrap();
+            let fix = seen[2].last().unwrap();
+            assert_eq!(fix.role, Role::System);
+            assert!(fix.content.contains("Spotify IS open"), "{}", fix.content);
+            assert!(!seen[2].iter().any(|m| m.content.contains("isn't even open")), "the wrong answer is dropped");
+        }
+
+        #[tokio::test]
+        async fn looking_at_an_app_that_was_never_opened_sends_the_model_to_open_it() {
+            let (d, clock) = world(Some(1), vec![90]);
+            // Spotify's window comes 1 s after it is launched, so it isn't there yet.
+            d.scripted.lock().unwrap().retain(|(_, w)| w.id != 2);
+            let model = ScriptedModel::new(vec![
+                calls("look_at_screen", json!({"target": "app", "app": "Spotify"})),
+                Message::assistant("Spotify isn't open yet."),
+                calls("open_app", json!({"name": "spotify"})),
+                Message::assistant("Opened it."),
+            ]);
+            let (mut a, _) = agent(model.clone(), d, clock);
+            let step = a.send("m", "open spotify and tell me what you see").await.unwrap();
+            let Step::Confirm { title, .. } = step else {
+                panic!("the correction should lead to the open card: {step:?}")
+            };
+            assert!(title.contains("Spotify"));
+            let seen = model.seen.lock().unwrap();
+            let fix = seen[2].last().unwrap();
+            assert!(fix.content.contains("you have not opened Spotify"), "{}", fix.content);
+            assert!(!seen[2].iter().any(|m| m.content.contains("isn't open yet")));
+        }
+
+        #[tokio::test]
+        async fn without_a_window_list_nothing_waits() {
+            // A desktop that can't list windows (macOS today): open_app is as before.
+            let model =
+                ScriptedModel::new(vec![calls("open_app", json!({"name": "spotify"})), Message::assistant("ok")]);
+            let (mut a, log) = seeing(model, screen_desktop());
+            open(&mut a, "open spotify").await;
+            assert!(!log
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|p| matches!(p, Progress::Step { tool, .. } if tool == "wait_for_app")));
+        }
+
+        #[tokio::test]
+        async fn the_look_before_opening_is_not_prefetched() {
+            let (d, clock) = world(Some(1), vec![90]);
+            let model =
+                ScriptedModel::new(vec![calls("open_app", json!({"name": "spotify"})), Message::assistant("ok")]);
+            let (mut a, _) = agent(model, d.clone(), clock);
+            // "what do you see" alone would look at the screen straight away.
+            let Step::Confirm { .. } = a.send("m", "open spotify and what do you see").await.unwrap() else { panic!() };
+            assert!(d.captures.lock().unwrap().is_empty());
+        }
+
+        // ---- the request needs clicking inside the app, app control is off
+
+        fn spotify_hands() -> Arc<crate::hands::mock::MockHands> {
+            Arc::new(crate::hands::mock::MockHands::new(vec![hm::spotify(false).already_open()]))
+        }
+
+        const ASK: &str = "open Spotify and find me a playlist it can play";
+
+        #[tokio::test]
+        async fn hands_off_offers_to_turn_on_app_control_instead_of_guessing() {
+            let (d, clock) = world(Some(2), vec![90]);
+            let model =
+                ScriptedModel::new(vec![calls("open_app", json!({"name": "spotify"})), Message::assistant("X")]);
+            let (mut a, _) = agent(model.clone(), d.clone(), clock);
+            let Step::Confirm { id, .. } = a.send("m", ASK).await.unwrap() else { panic!() };
+            let Step::Confirm { title, allow, deny, actions, .. } = a.confirm("m", &id, true).await.unwrap() else {
+                panic!("expected the app control card")
+            };
+            assert_eq!(title, "I can open Spotify, but to find and play a playlist I need app control");
+            assert_eq!(allow.as_deref(), Some("Turn on app control"));
+            assert_eq!(deny.as_deref(), Some("Not now"));
+            assert_eq!(actions, ["Opened Spotify"]);
+            assert_eq!(model.seen.lock().unwrap().len(), 1, "the small model is not asked to improvise");
+            assert!(d.captures.lock().unwrap().is_empty() && d.window_captures.lock().unwrap().is_empty());
+            assert!(!a.hands_enabled());
+        }
+
+        #[tokio::test]
+        async fn not_now_leaves_the_app_open_and_the_setting_off() {
+            let (d, clock) = world(Some(2), vec![90]);
+            let model = ScriptedModel::new(vec![calls("open_app", json!({"name": "spotify"}))]);
+            let (mut a, _) = agent(model, d, clock);
+            let enabled = Arc::new(Mutex::new(0));
+            let e = enabled.clone();
+            a.set_hands_enabler(Some(Arc::new(move || {
+                *e.lock().unwrap() += 1;
+                None
+            })));
+            let Step::Confirm { id, .. } = a.send("m", ASK).await.unwrap() else { panic!() };
+            let Step::Confirm { id: card, .. } = a.confirm("m", &id, true).await.unwrap() else { panic!() };
+            let Step::Reply { text, .. } = a.confirm("m", &card, false).await.unwrap() else { panic!() };
+            assert!(text.starts_with("No problem! Spotify is open"), "{text}");
+            assert_eq!(*enabled.lock().unwrap(), 0);
+            assert!(!a.hands_enabled());
+        }
+
+        #[tokio::test]
+        async fn turning_it_on_flips_the_setting_and_resumes_with_app_control() {
+            let (d, clock) = world(Some(2), vec![90]);
+            let model = ScriptedModel::new(vec![
+                calls("open_app", json!({"name": "spotify"})),
+                calls("read_ui", json!({"target": "Spotify", "query": "playlist"})),
+                Message::assistant("Found your playlists."),
+            ]);
+            let (mut a, _) = agent(model.clone(), d, clock);
+            let hands = spotify_hands();
+            let calls_to_enabler = Arc::new(Mutex::new(0));
+            let (c, h) = (calls_to_enabler.clone(), hands.clone());
+            a.set_hands_enabler(Some(Arc::new(move || {
+                *c.lock().unwrap() += 1;
+                Some(h.clone() as Arc<dyn Hands>)
+            })));
+            let Step::Confirm { id, .. } = a.send("m", ASK).await.unwrap() else { panic!() };
+            let Step::Confirm { id: card, .. } = a.confirm("m", &id, true).await.unwrap() else { panic!() };
+            let step = a.confirm("m", &card, true).await.unwrap();
+            let Step::Reply { text, actions } = step else { panic!("{step:?}") };
+            assert_eq!(text, "Found your playlists.");
+            assert_eq!(*calls_to_enabler.lock().unwrap(), 1);
+            assert!(a.hands_enabled());
+            assert!(actions.contains(&"Turned on app control".to_string()), "{actions:?}");
+            // The model got the original request again and the app control tools.
+            let seen = model.seen.lock().unwrap();
+            let resume = &seen[1][seen[1].len().saturating_sub(2)..];
+            assert!(resume.iter().any(|m| m.content.contains(ASK) && m.content.contains("App control is on")));
+            assert!(model.seen_tools.lock().unwrap()[1].contains(&"read_ui"));
+        }
+
+        #[tokio::test]
+        async fn when_it_cannot_be_turned_on_the_user_is_told_where() {
+            let (d, clock) = world(Some(2), vec![90]);
+            let model = ScriptedModel::new(vec![calls("open_app", json!({"name": "spotify"}))]);
+            let (mut a, _) = agent(model, d, clock);
+            let Step::Confirm { id, .. } = a.send("m", ASK).await.unwrap() else { panic!() };
+            let Step::Confirm { id: card, .. } = a.confirm("m", &id, true).await.unwrap() else { panic!() };
+            let Step::Reply { text, .. } = a.confirm("m", &card, true).await.unwrap() else { panic!() };
+            assert!(text.contains("Settings > Features"), "{text}");
+        }
+
+        #[tokio::test]
+        async fn a_plain_look_request_does_not_ask_for_app_control() {
+            let (d, clock) = world(Some(2), vec![90]);
+            let model = ScriptedModel::new(vec![
+                calls("open_app", json!({"name": "spotify"})),
+                calls("look_at_screen", json!({"target": "app", "app": "Spotify"})),
+                Message::assistant("Library, home and search."),
+            ]);
+            let (mut a, _) = agent(model, d, clock);
+            let Step::Reply { .. } = open(&mut a, "open spotify and tell me what you see").await else {
+                panic!("no card expected")
+            };
+        }
     }
 
     // ------------------------------------------------------------ desktop control

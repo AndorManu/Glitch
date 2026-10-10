@@ -10,6 +10,7 @@ import { streamFeature } from "./stream";
 import { updatesFeature } from "./updates";
 import { handsFeature } from "./hands";
 import { safetyFeature } from "./safety";
+import { chaosFeature } from "./chaos";
 import { updateMeFeature } from "./update-me";
 
 export interface Feature {
@@ -18,4 +19,4 @@ export interface Feature {
   render(s: Settings): HTMLElement;
 }
 
-export const FEATURES: readonly Feature[] = [safetyFeature, contextFeature, handsFeature, playFeature, updateMeFeature, voiceExtra, streamFeature, updatesFeature];
+export const FEATURES: readonly Feature[] = [safetyFeature, chaosFeature, contextFeature, handsFeature, playFeature, updateMeFeature, voiceExtra, streamFeature, updatesFeature];

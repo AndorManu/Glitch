@@ -21,6 +21,16 @@ pub struct Settings {
     /// playing with the cursor, footprints, sticky notes). Only while
     /// `movement_enabled` is on too. Missing in older files → on.
     pub chaos_enabled: bool,
+    /// How wild chaos mode is (Off / Gentle / Mischief / Full Virus). Gentle is
+    /// the old behaviour and the default; `chaos_enabled == false` is "Off".
+    pub chaos_level: crate::chaos2::ChaosLevel,
+    /// The one-time "are you sure?" for Full Virus was confirmed in Settings.
+    pub chaos_full_confirmed: bool,
+    /// "Reduce effects": no screen effects (rain, melt, scanlines, clones...).
+    /// `None` follows the OS animation setting.
+    pub reduce_effects: Option<bool>,
+    /// Chaos mode may also run while the stream overlay is on (off by default).
+    pub chaos_during_stream: bool,
     /// Set once the first-run wizard has been completed.
     pub onboarding_done: bool,
     pub ollama_url: String,
@@ -242,6 +252,10 @@ impl Default for Settings {
             model: None,
             movement_enabled: true,
             chaos_enabled: true,
+            chaos_level: crate::chaos2::ChaosLevel::Gentle,
+            chaos_full_confirmed: false,
+            reduce_effects: None,
+            chaos_during_stream: false,
             onboarding_done: false,
             ollama_url: ollama::DEFAULT_URL.to_string(),
             keep_alive: ollama::DEFAULT_KEEP_ALIVE.to_string(),
@@ -259,6 +273,17 @@ impl Default for Settings {
             update_me: UpdateMeSettings::default(),
             safety: SafetySettings::default(),
         }
+    }
+}
+
+impl Settings {
+    /// The level chaos mode actually runs at: Off if switched off (or if
+    /// Glitch may not move), Full Virus only once confirmed.
+    pub fn chaos_effective(&self) -> crate::chaos2::ChaosLevel {
+        if !self.chaos_enabled || !self.movement_enabled {
+            return crate::chaos2::ChaosLevel::Off;
+        }
+        self.chaos_level.confirmed(self.chaos_full_confirmed)
     }
 }
 

@@ -24,6 +24,7 @@ import type { Haul, Plan, Step } from "./brain";
 import { clampTo, FLOOR, HALF, isTop, restCenter, type Surface, surfaceRange, type Vec, type World } from "./physics";
 import type { ChaosStatus, ChaosWindow, PawStamp, ScreenRect } from "../shared/ipc";
 import { pickLine } from "../chaos/lines";
+import { type Chaos2Host, Chaos2Planner, gapFor, isNewAct, type NewAct, orderNewActs, usesNewActs } from "./chaos2";
 
 // ------------------------------------------------------------ animations
 
@@ -100,6 +101,8 @@ export interface ChaosHost {
   noteOpen(line: number, x: number, y: number): Promise<{ w: number; h: number } | null>;
   noteMove(x: number, y: number): void;
   noteIsOpen(): Promise<boolean>;
+  /** Chaos mode 2 (the hook, screen effects, popups, the minimise prank). Absent: gentle chaos only. */
+  chaos2?: Chaos2Host;
 }
 
 /** What chaos mode needs to know about Glitch (creature.ts). */
@@ -116,14 +119,18 @@ export interface ChaosSubject {
   stepInGlitch(ms: number): void;
   /** Knock on the glass; resolves when done. */
   knock(): Promise<void>;
+  /** Where his rod tip is right now (physical px), null if this frame has none. */
+  rodTip(): Vec | null;
+  /** Resolves after `ms` on the creature's clock. */
+  sleep(ms: number): Promise<void>;
 }
 
 /** `perch` is for testing only (weight 0): teleport onto the window top nearest the cursor. */
 export type Act = "window" | "push" | "chase" | "note" | "peek" | "knock" | "paws" | "perch";
 export const ACTS: readonly Act[] = ["window", "push", "chase", "note", "peek", "knock", "paws", "perch"];
 
-export function isAct(name: unknown): name is Act {
-  return typeof name === "string" && (ACTS as readonly string[]).includes(name);
+export function isAct(name: unknown): name is Act | NewAct {
+  return (typeof name === "string" && (ACTS as readonly string[]).includes(name)) || isNewAct(name);
 }
 
 /** Weight and own cooldown (s) per act. Rust adds its hard limits for window/cursor. */
@@ -242,6 +249,7 @@ export class ChaosDirector {
   private readonly last = new Map<Act, number>();
   private lastLine = -1;
   private forced = false;
+  private readonly planner2: Chaos2Planner | null;
 
   constructor(
     private readonly host: ChaosHost,
@@ -250,6 +258,7 @@ export class ChaosDirector {
   ) {
     // Not straight after start-up.
     this.nextAt = me.now() + 30_000 + rand() * 30_000;
+    this.planner2 = host.chaos2 ? new Chaos2Planner(host.chaos2, me, rand, () => host.windows()) : null;
   }
 
   private ready(act: Act, now: number): boolean {
@@ -265,7 +274,20 @@ export class ChaosDirector {
     if (now < this.nextAt) return null;
     const st = await this.host.status().catch(() => null);
     if (!st || !st.enabled || st.blocked || (st.available && st.idle_ms < USER_QUIET_MS)) return null;
-    this.nextAt = now + CHAOS_GAP_MS[0] + this.rand() * (CHAOS_GAP_MS[1] - CHAOS_GAP_MS[0]);
+    // Mischief / Full Virus: Rust says how long to rest (90-180 s / 30-60 s) and which new acts are ready.
+    const st2 = this.host.chaos2 ? await this.host.chaos2.status().catch(() => null) : null;
+    const wild = !!st2 && usesNewActs(st2.level);
+    this.nextAt = now + (wild ? gapFor(st2, CHAOS_GAP_MS, this.rand) : CHAOS_GAP_MS[0] + this.rand() * (CHAOS_GAP_MS[1] - CHAOS_GAP_MS[0]));
+    if (wild && st2) {
+      // Mostly the new acts; the old ones now and then (they have their own cooldowns).
+      const fresh = orderNewActs(st2.ready, this.rand);
+      if (this.rand() >= 0.2) {
+        for (const a of fresh) {
+          const plan = await this.planner2!.plan(a).catch(() => null);
+          if (plan) return plan;
+        }
+      }
+    }
     const options = ACTS.filter((a) => ACT_TABLE[a].weight > 0 && this.ready(a, now))
       .filter((a) => st.available || (a !== "window" && a !== "push"))
       .filter((a) => a !== "window" || st.window_ready)
@@ -293,10 +315,11 @@ export class ChaosDirector {
    * apply). `forced` (debug trigger): skip the act's own dice, e.g. always
    * try to catch the cursor when in reach.
    */
-  async plan(act: Act, forced = false, arg?: string): Promise<Plan | null> {
+  async plan(act: Act | NewAct, forced = false, arg?: string): Promise<Plan | null> {
     this.forced = forced;
     const w = this.me.world;
     if (!w) return null;
+    if (isNewAct(act)) return this.planner2 ? this.planner2.plan(act, arg) : null;
     switch (act) {
       case "window":
         return this.planWindow(w);
