@@ -338,6 +338,8 @@ fn run_cursor_act(
                 "rod": local(rod, area, scale),
                 "cursor": local(start, area, scale),
                 "cast_ms": cast,
+                "origin": [area.x, area.y],
+                "scale": scale,
                 "reduce": reduce_effects(app),
             }),
         );

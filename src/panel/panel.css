@@ -636,3 +636,19 @@ button.danger-text.armed:hover:not(:disabled) { background: var(--danger); }
   background: var(--ok);
   box-shadow: 0 0 0 3px var(--ok-soft);
 }
+
+/* Chaos mode card: level picker and the Full Virus confirmation */
+.chaos-levels { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 8px 0; }
+.chaos-level {
+  font: inherit; font-weight: 650; font-size: 12.5px; padding: 8px 4px; border-radius: 8px; cursor: pointer;
+  color: var(--text); background: var(--surface-2, transparent); border: 1px solid var(--border, rgba(127, 127, 127, 0.4));
+}
+.chaos-level:hover { border-color: var(--accent); }
+.chaos-level.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.chaos-level:focus-visible { outline: 3px solid var(--ring); outline-offset: 2px; }
+.chaos-confirm {
+  margin: 10px 0; padding: 12px; border-radius: 10px; border: 2px solid var(--accent);
+  background: var(--surface-2, rgba(127, 127, 127, 0.08));
+}
+.chaos-confirm p { margin: 6px 0 10px; font-size: 13px; line-height: 1.4; }
+.chaos-confirm .row { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }

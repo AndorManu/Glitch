@@ -143,16 +143,6 @@ async function renderSettings(): Promise<void> {
           void api.updateSettings({ movement_enabled: on }).catch(() => renderSettings());
         }),
         toggleSwitch(
-          "Chaos mode",
-          "Harmless mischief: nudges your windows a little, plays with the cursor, leaves paw prints and notes. Never while you type or game.",
-          s.chaos_enabled ?? true,
-          (on) => {
-            s.chaos_enabled = on;
-            shownKey = settingsKey(s);
-            void api.updateSettings({ chaos_enabled: on }).catch(() => renderSettings());
-          },
-        ),
-        toggleSwitch(
           "Let Glitch see the screen",
           "Only when you ask about something on it. The screenshot stays on this computer, is never saved, and password fields are covered.",
           s.screen_enabled ?? true,
