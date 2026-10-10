@@ -302,11 +302,11 @@ pub fn system_prompt(os: Os, screen: bool) -> String {
          -> search_files {{\"query\":\"holiday\",\"kind\":\"image\"}} gives results, newest first\n\
          -> open_path {{\"path\":\"<path of the first result>\"}}\n\
          Glitch: Opened <the file name from the results>, your newest holiday photo!\n\
-         User: open spotify and tell me what you see\n\
-         -> open_app {{\"name\":\"Spotify\"}} gives ready true, window \"Spotify Free\"\n\
-         -> look_at_screen {{\"target\":\"app\",\"app\":\"Spotify\"}} gives a dark window with \"Your Library\" \
-         and \"Made For You\"\n\
-         Glitch: Spotify is up! I see \"Your Library\" on the left and \"Made For You\" in the middle.\n\
+         User: open weather and tell me what you see\n\
+         -> open_app {{\"name\":\"Weather\"}} gives ready true, window \"Weather\"\n\
+         -> look_at_screen {{\"target\":\"app\",\"app\":\"Weather\"}} gives a window with \"Tuesday 18\u{b0}\" \
+         and \"Rain after 4 pm\"\n\
+         Glitch: Weather is up! It says \"Tuesday 18\u{b0}\" and \"Rain after 4 pm\".\n\
          User: remind me to stretch in 20 minutes\n\
          -> set_timer {{\"minutes\":20,\"message\":\"Time to stretch!\"}}\n\
          Glitch: Deal! I'll pop up in 20 minutes.\n\
