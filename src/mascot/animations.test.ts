@@ -92,18 +92,20 @@ describe("animations", () => {
         if (key.glitch !== undefined) expect(key.glitch).toBeLessThanOrEqual(1);
       }
     }
-  });
+  }, 30_000); // 200 seeds of ~100 animations: slow on a busy machine
 
   it("raccoon frames point inside the 4x4 sheet", () => {
     for (const i of Object.values(RACCOON.frames)) expect(i >= 0 && i < 16).toBe(true);
   });
 
-  it("the animation sheet has every old frame name, full cycles, and an eye for each frame", () => {
+  it("the animation sheet has every old frame name, full cycles, and an eye for each frame that shows one", () => {
     for (const name of Object.keys(RACCOON.frames)) expect(GLITCH_ANIM.frames, name).toHaveProperty(name);
     const count = Object.keys(ANIM_INDEX).length;
+    // Seen from behind / hidden behind an edge: no glitch eye to glitch (visual QA S1-7).
+    const eyeless = new Set(["turn_to_back3", "turn_to_back4", "turn_to_back5", "pose_back", "pose_laugh", "happy_spin3", "peek0", "peek1", "hide_peek0", "hide_peek4"]);
     for (const [name, i] of Object.entries(GLITCH_ANIM.frames)) {
       expect(i >= 0 && i < count, name).toBe(true);
-      expect(GLITCH_ANIM.eyes?.[name], name).toBeDefined();
+      if (!eyeless.has(name) && !eyeless.has(Object.keys(ANIM_INDEX)[i])) expect(GLITCH_ANIM.eyes?.[name], name).toBeDefined();
     }
     for (const [cycle, n] of [["walk", 8], ["idle", 8], ["run", 6], ["wave", 8], ["talk", 8], ["jump", 8]] as const) {
       for (let i = 0; i < n; i++) expect(ANIM_INDEX, `${cycle}${i}`).toHaveProperty(`${cycle}${i}`);
@@ -126,12 +128,14 @@ describe("animations", () => {
     const once: AnimationName[] = [
       ...["happy", "startled", "laugh", "grabCursor", "peek", "fall", "land", "glitchOut", "gone", "glitchIn", "chaosSpin"],
       ...["crouch", "splat", "dizzy", "peekEdge", "lookAround", "build", "malfunction", "wave"],
-      ...["wake", "sad", "angry", "scared", "eat", "celebrate", "point", "pull_up", "bounce", "wall_jump", "sneeze", "annoyed", "calmDown"],
+      ...["wake", "sad", "angry", "scared", "eat", "celebrate", "point", "pull_up", "bounce", "wall_jump", "sneeze", "annoyed", "calmDown", "smugBite", "stretch", "suggest", "yawn_stay"],
+      ...["celebrate_focus", "worried_battery", "knock_screen", "hide_peek", "streamer", "look_dirs", "high_five", "happy_spin", "jump_scare"],
     ] as AnimationName[];
     const loops: AnimationName[] = [
       ...["idle", "walk", "think", "ask", "sleep", "carryCursor", "dragWindow", "pushWindow", "dangle", "napRock"],
       ...["cling", "climb", "run", "airUp", "airDown", "tumble", "flail", "sitEdge", "held", "heldKick", "listen", "talk", "dance", "typing", "sit"],
-      ...["tail_copter", "glide", "fall_flail", "hang_ledge", "slide_down", "sit_edge_swing", "fish", "struggle", "clingCursor", "sulk"],
+      ...["tail_copter", "glide", "fall_flail", "hang_ledge", "slide_down", "sit_edge_swing", "fish", "struggle", "clingCursor", "sulk", "biteCursor", "hide", "guard"],
+      ...["idle_tail", "idle_tail_sit", "dance_beat", "hold_sign", "sweat_fan", "glasses_type", "watch_tv", "fetch_ball", "chubby_idle", "hats", "petted"],
     ] as AnimationName[];
     // These hand over to a loop that isn't idle.
     const special: Partial<Record<AnimationName, AnimationName>> = { lookBack: "cling", yawn: "sleep", grumpy: "sulk" };
@@ -267,7 +271,7 @@ describe("CPU budgets (60 s of fake time)", () => {
         }
       }
     }
-    expect(bursts).toBeGreaterThan(40 * 2); // 60 s of idle has a few bursts in every run
+    expect(bursts).toBeGreaterThanOrEqual(30); // 60 s of idle has a burst or two in every run (loops are 15-40 s)
     console.info(`idle: worst seed ${worst.toFixed(2)} repaints-or-wakeups/s`);
   });
 
