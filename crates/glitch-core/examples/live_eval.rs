@@ -6,6 +6,10 @@
 //!
 //!   cargo run -p glitch-core --example live_eval -- --model qwen3.5:4b --runs 3
 //!   cargo run -p glitch-core --example live_eval -- --only vision --runs 1
+//!   cargo run -p glitch-core --example live_eval -- --only apps --runs 5 (app control
+//!   against a fake desktop: a Spotify-like and a Notepad-like app, see
+//!   glitch_core::hands::mock; add --hands-model qwen2.5:7b for the
+//!   "smarter brain for app control")
 //!   (or: node dev/ollama-check/check.mjs --eval)
 //!
 //! Every case runs `--runs` times from a fresh chat. Approval cards are
@@ -23,6 +27,8 @@ use glitch_core::agent::{Agent, Progress, Step};
 use glitch_core::ai::ollama::OllamaClient;
 use glitch_core::ai::AiProvider;
 use glitch_core::desktop::{Capture, CaptureTarget, ClipboardText, Desktop, DesktopResult, WindowInfo};
+use glitch_core::hands::mock::{self as hm, MockApp, MockHands};
+use glitch_core::hands::MediaStatus;
 use glitch_core::platform::{AppEntry, Platform};
 use serde_json::json;
 
@@ -39,6 +45,8 @@ struct World {
     screen: Option<&'static str>,
     window: Option<WindowInfo>,
     home: PathBuf,
+    /// App control: the fake apps (None: "Let Glitch control apps" is off).
+    hands: Option<Arc<MockHands>>,
 }
 
 struct FakePlatform(Arc<World>);
@@ -54,10 +62,13 @@ impl Platform for FakePlatform {
     }
     fn launch_app(&self, app: &AppEntry) -> io::Result<()> {
         self.0.opened.lock().unwrap().push(format!("app:{}", app.name));
+        if let Some(h) = &self.0.hands {
+            h.launch(&app.name);
+        }
         Ok(())
     }
     fn installed_apps(&self) -> Vec<AppEntry> {
-        ["Calculator", "Spotify", "Notepad", "Paint"]
+        ["Calculator", "Spotify", "Notepad", "Paint", "Discord"]
             .iter()
             .map(|n| AppEntry { name: n.to_string(), launch_path: format!("C:\\Apps\\{n}.lnk").into() })
             .collect()
@@ -164,6 +175,19 @@ impl Outcome {
     fn opened(&self, needle: &str) -> bool {
         self.world.opened.lock().unwrap().iter().any(|o| o.contains(needle))
     }
+    fn hands(&self) -> &MockHands {
+        self.world.hands.as_deref().expect("an apps case")
+    }
+    fn playing_from(&self, context: &str) -> Result<(), String> {
+        match self.hands().playing() {
+            Some((_, c)) if c == context => Ok(()),
+            other => Err(format!("playing {other:?}, wanted something from {context}")),
+        }
+    }
+    fn typed(&self, app: &str, want: &str) -> Result<(), String> {
+        let t = self.hands().text_of(app).unwrap_or_default();
+        need(t.trim().eq_ignore_ascii_case(want), &format!("{app} contains {t:?}, wanted {want:?}"))
+    }
     fn no_markdown(&self) -> bool {
         !self.text.contains("**") && !self.text.contains("```") && !self.text.lines().any(|l| l.starts_with('#'))
     }
@@ -177,6 +201,8 @@ struct Case {
     window: Option<(&'static str, &'static str)>,
     clipboard: Option<&'static str>,
     selected: Option<&'static str>,
+    /// App control on, with these fake apps.
+    apps: Option<fn() -> Vec<MockApp>>,
     check: fn(&Outcome) -> Result<(), String>,
 }
 
@@ -194,7 +220,7 @@ const fn case(
     say: &'static str,
     check: fn(&Outcome) -> Result<(), String>,
 ) -> Case {
-    Case { name, group, say, screen: None, window: None, clipboard: None, selected: None, check }
+    Case { name, group, say, screen: None, window: None, clipboard: None, selected: None, apps: None, check }
 }
 
 fn cases() -> Vec<Case> {
@@ -327,6 +353,82 @@ fn cases() -> Vec<Case> {
             need(o.used("web_search") || o.opened("weather"), "didn't search the web")?;
             need(o.world.opened.lock().unwrap().len() == 1, "opened more than one thing")
         }),
+        // --- app control (fake desktop, see glitch_core::hands::mock)
+        Case {
+            apps: Some(|| vec![hm::browser(), hm::spotify(false), hm::notepad()]),
+            ..case("spotify: open and play my first playlist", "apps", "open spotify and play my first playlist", |o| {
+                o.playing_from("Late Night Drive")?;
+                need(!o.hands().log().iter().any(|l| l.contains("Create playlist")), "clicked Create playlist")
+            })
+        },
+        Case {
+            apps: Some(|| vec![hm::browser(), hm::spotify(false), hm::notepad()]),
+            ..case("notepad: open and type hello", "apps", "open notepad and type hello", |o| {
+                o.typed("Notepad", "hello")
+            })
+        },
+        Case {
+            apps: Some(|| {
+                let mut s = hm::spotify(false).already_open();
+                s.empty_reads = 0;
+                vec![s, hm::browser()]
+            }),
+            ..case("window behind others", "apps", "play my Gym Mix playlist in spotify", |o| o.playing_from("Gym Mix"))
+        },
+        Case {
+            apps: Some(|| {
+                let mut n = hm::notepad().already_open();
+                n.minimized = true;
+                vec![hm::browser(), n]
+            }),
+            ..case("minimized window", "apps", "type hello in notepad", |o| o.typed("Notepad", "hello"))
+        },
+        Case {
+            apps: Some(|| {
+                let mut s = hm::spotify(true).already_open();
+                s.empty_reads = 0;
+                vec![s]
+            }),
+            ..case("needs scrolling to find it", "apps", "play my Classical Essentials playlist in spotify", |o| {
+                o.playing_from("Classical Essentials")
+            })
+        },
+        Case {
+            apps: Some(|| {
+                let mut n = hm::notepad();
+                n.dialog_on_type = Some(hm::update_dialog());
+                vec![hm::browser(), n]
+            }),
+            ..case("a dialog pops up", "apps", "open notepad and type hello", |o| o.typed("Notepad", "hello"))
+        },
+        Case {
+            apps: Some(|| vec![hm::spotify(false).already_open()]),
+            ..case("pause the music (media keys)", "apps", "pause the music", |o| {
+                need(o.hands().playing().is_none(), "still playing")?;
+                need(o.confirms.is_empty(), "asked for media keys")
+            })
+        },
+        Case {
+            apps: Some(|| {
+                vec![MockApp::new(
+                    "Discord",
+                    "discord",
+                    "#general - Discord",
+                    vec![("main", vec![hm::el("edit", "Message #general"), hm::el("button", "Send")])],
+                )
+                .already_open()]
+            }),
+            ..case("sending asks with the exact target", "apps", "type hi team in discord and send it", |o| {
+                need(
+                    o.confirms.iter().any(|c| c.contains("Send") || c.contains("send a message")),
+                    &format!("no card for sending: {:?}", o.confirms),
+                )?;
+                need(
+                    o.hands().text_of("Discord").is_some_and(|t| t.to_lowercase().contains("hi team")),
+                    "didn't type hi team",
+                )
+            })
+        },
         // --- the basics still work
         case("open twitter page", "basics", "open twitter on elon musk's page", |o| {
             need(o.opened("x.com/elonmusk") || o.opened("twitter.com/elonmusk"), "didn't open x.com/elonmusk")
@@ -363,7 +465,7 @@ struct RunResult {
     trace: Vec<String>,
 }
 
-async fn run_case(c: &Case, provider: Arc<OllamaClient>, model: &str) -> RunResult {
+async fn run_case(c: &Case, provider: Arc<OllamaClient>, model: &str, hands_model: Option<&str>) -> RunResult {
     let home = make_home();
     let world = Arc::new(World {
         selected: c.selected.map(String::from),
@@ -371,12 +473,30 @@ async fn run_case(c: &Case, provider: Arc<OllamaClient>, model: &str) -> RunResu
         window: c.window.map(|(t, a)| WindowInfo { title: t.into(), app: a.into() }),
         clipboard: Mutex::new(c.clipboard.map(String::from)),
         home: home.path().to_path_buf(),
+        hands: c.apps.map(|f| Arc::new(MockHands::new(f()))),
         ..Default::default()
     });
+    if c.name.starts_with("pause the music") {
+        if let Some(h) = &world.hands {
+            h.state.lock().unwrap().playing = Some((
+                MediaStatus {
+                    app: "Spotify".into(),
+                    title: "Nightcall".into(),
+                    artist: "Kavinsky".into(),
+                    playing: true,
+                },
+                "Late Night Drive",
+            ));
+        }
+    }
     let mut agent = Agent::new(provider, Arc::new(FakePlatform(world.clone())));
     agent.set_desktop(Arc::new(FakeDesktop(world.clone())));
     // Like the app's default: memory on (adds the memory tools and prompt).
     agent.set_memory(Some(glitch_core::memory::MemoryStore::in_memory()));
+    if let Some(h) = &world.hands {
+        agent.set_hands(Some(h.clone()));
+        agent.set_hands_model(hands_model.map(String::from));
+    }
     let steps = Arc::new(Mutex::new(Vec::<String>::new()));
     let calls = Arc::new(Mutex::new(0usize));
     let first_text = Arc::new(Mutex::new(None::<Instant>));
@@ -394,9 +514,9 @@ async fn run_case(c: &Case, provider: Arc<OllamaClient>, model: &str) -> RunResu
     let t0 = Instant::now();
     let mut confirms = Vec::new();
     let mut step = agent.send(model, c.say).await;
-    // Answer up to 4 approval cards with "Allow".
+    // Answer up to 6 approval cards with "Allow".
     while let Ok(Step::Confirm { id, title, .. }) = &step {
-        if confirms.len() >= 4 {
+        if confirms.len() >= 6 {
             break;
         }
         confirms.push(title.clone());
@@ -445,6 +565,7 @@ async fn main() {
     let runs: usize = opt("--runs").and_then(|r| r.parse().ok()).unwrap_or(3);
     let only = opt("--only");
     let min_rate: f64 = opt("--min-rate").and_then(|r| r.parse().ok()).unwrap_or(1.0);
+    let hands_model = opt("--hands-model");
 
     let provider = Arc::new(OllamaClient::new(&url, "5m"));
     if let Err(e) = provider.version().await {
@@ -456,7 +577,7 @@ async fn main() {
         provider.supports_vision(&model).await
     );
     let t = Instant::now();
-    let _ = provider.warm_up(&model, "5m").await;
+    let _ = provider.warm_up(hands_model.as_deref().unwrap_or(&model), "5m").await;
     println!("      model load: {} ms", t.elapsed().as_millis());
 
     let mut report = Vec::new();
@@ -465,7 +586,7 @@ async fn main() {
     for c in cases().iter().filter(|c| only.as_deref().is_none_or(|o| c.group == o || c.name.contains(o))) {
         let mut passes = 0;
         for run in 1..=runs {
-            let r = run_case(c, provider.clone(), &model).await;
+            let r = run_case(c, provider.clone(), &model, hands_model.as_deref()).await;
             let ok = r.ok.is_ok();
             passes += ok as usize;
             println!(

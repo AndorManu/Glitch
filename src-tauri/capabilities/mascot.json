@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "mascot",
-  "description": "The mascot: moving itself, the world it walks on, chaos mode, opening Settings.",
+  "description": "The mascot: moving itself, the world it walks on, chaos mode, opening Settings, telling the stream overlay what he is doing.",
   "windows": [
     "mascot"
   ],
@@ -32,6 +32,7 @@
     "allow-world-snapshot",
     "allow-context-status",
     "allow-context-debug",
-    "allow-update-me-fake-toast"
+    "allow-update-me-fake-toast",
+    "allow-stream-mirror"
   ]
 }

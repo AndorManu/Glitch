@@ -355,6 +355,13 @@ pub enum Action {
     Forget {
         about: String,
     },
+    /// App control ("Hands"), handled by the agent with `hands::Driver`.
+    /// `ask` says what the user is asked; `key` groups retries of one step.
+    Hands {
+        act: Box<crate::hands::HandsAction>,
+        ask: crate::hands::Ask,
+        key: String,
+    },
     NowPlaying,
     /// `None`: the default length; `Some(0)`: stop.
     Focus {
@@ -389,6 +396,7 @@ impl Action {
             Action::TakeNote { .. } => TAKE_NOTE,
             Action::Remember { .. } => REMEMBER,
             Action::Forget { .. } => FORGET,
+            Action::Hands { act, .. } => act.tool_name(),
             Action::NowPlaying => NOW_PLAYING,
             Action::Focus { .. } => FOCUS,
         }
@@ -414,6 +422,7 @@ impl Action {
             Action::TakeNote { .. } => "Writing a note".into(),
             Action::Remember { .. } => "Remembering".into(),
             Action::Forget { .. } => "Forgetting".into(),
+            Action::Hands { act, .. } => act.progress_label(),
             Action::NowPlaying => "Checking what's playing".into(),
             Action::Focus { minutes: Some(0) } => "Ending focus mode".into(),
             Action::Focus { .. } => "Starting focus mode".into(),
@@ -472,6 +481,20 @@ impl Action {
             },
             Action::Remember { fact } => Description { title: "Remember something".into(), detail: fact.clone() },
             Action::Forget { about } => Description { title: "Forget something".into(), detail: about.clone() },
+            Action::Hands { act, ask, .. } => match ask {
+                crate::hands::Ask::Grant(app) => Description {
+                    title: format!("Control {app} for this"),
+                    detail: format!(
+                        "Next: {}. I'll click and type in {app} until this task is done. A banner shows while I \
+                         work; press Esc or touch your mouse to stop me.",
+                        lower_first(&act.progress_label())
+                    ),
+                },
+                crate::hands::Ask::Sensitive { title, detail } => {
+                    Description { title: title.clone(), detail: detail.clone() }
+                }
+                crate::hands::Ask::No => Description { title: act.progress_label(), detail: String::new() },
+            },
             Action::NowPlaying => Description { title: "See what's playing".into(), detail: String::new() },
             Action::Focus { minutes } => Description {
                 title: "Focus mode".into(),
@@ -482,6 +505,14 @@ impl Action {
                 },
             },
         }
+    }
+}
+
+fn lower_first(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_lowercase().chain(c).collect(),
+        None => String::new(),
     }
 }
 
@@ -816,6 +847,7 @@ pub fn execute(action: &Action, env: &Env<'_>) -> Outcome {
         Action::Remember { .. } | Action::Forget { .. } => {
             Outcome::new(json!({ "ok": false, "error": "memory is turned off" }), "Memory is off")
         }
+        Action::Hands { .. } => Outcome::failed("app control is handled by the agent", "Couldn't do that"),
     }
 }
 

@@ -72,6 +72,27 @@ fn only_the_bubble_talks_to_the_agent() {
         let who: Vec<&String> = granted.iter().filter(|(_, c)| c.contains(cmd)).map(|(w, _)| w).collect();
         assert_eq!(who, ["panel"], "{cmd}");
     }
+    // Stream overlay and updates: only the mascot reports what he is doing,
+    // only Settings changes the overlay or its tokens, and installing a
+    // signed update is the bubble's offer or the Settings card.
+    let who = |cmd: &str| -> Vec<&String> { granted.iter().filter(|(_, c)| c.contains(cmd)).map(|(w, _)| w).collect() };
+    assert_eq!(who("stream_mirror"), ["mascot"]);
+    for cmd in [
+        "update_stream_settings",
+        "stream_new_token",
+        "stream_copy",
+        "stream_test_event",
+        "update_set_auto",
+        "update_check",
+    ] {
+        assert_eq!(who(cmd), ["panel"], "{cmd}");
+    }
+    assert_eq!(who("update_install"), ["bubble", "panel"]);
+    // The updater plugin is driven from Rust only: no webview may call it.
+    for entry in std::fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities")).unwrap() {
+        let text = std::fs::read_to_string(entry.unwrap().path()).unwrap();
+        assert!(!text.contains("updater:"), "no window gets updater plugin permissions");
+    }
     // The chaos helper windows get one command each.
     assert_eq!(granted["note"].iter().collect::<Vec<_>>(), ["chaos_note_close"]);
     assert_eq!(granted["pawprints"].iter().collect::<Vec<_>>(), ["chaos_paws_idle"]);

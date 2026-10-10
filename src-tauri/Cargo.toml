@@ -17,7 +17,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Local time for reminders and the daily briefing (already in the tree).
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-tokio = { version = "1", features = ["sync", "time", "fs", "io-util"] }
+tokio = { version = "1", features = ["sync", "time", "fs", "io-util", "net"] }
+# Twitch chat over TLS for the stream overlay (src/stream/sources.rs). Same
+# OS TLS as reqwest below, already in the dependency tree.
+tokio-native-tls = "0.3"
+# Auto-update from GitHub Releases (src/autoupdate.rs), signature-checked.
+# OS TLS like reqwest below (no rustls/ring build).
+tauri-plugin-updater = { version = "2", default-features = false, features = ["native-tls", "zip"] }
 
 # Voice commands (src/voice/). Speech-to-text runs on this computer with
 # whisper.cpp (built from source by whisper-rs-sys; needs cmake + a C++
@@ -50,6 +56,8 @@ windows-sys = { version = "0.61", features = [
   "Win32_Security",
   "Win32_System_SystemInformation",
   "Win32_System_DataExchange",
+  "Win32_System_LibraryLoader",
+  "Win32_System_StationsAndDesktops",
   "Win32_System_Power",
   "Win32_System_Threading",
   "Win32_UI_Input_KeyboardAndMouse",

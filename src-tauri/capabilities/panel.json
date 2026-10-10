@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "panel",
-  "description": "Setup and Settings: settings, memory, models, voice downloads, reset and quit.",
+  "description": "Setup and Settings: settings, memory, models, voice downloads, reset and quit, stream overlay and update settings.",
   "windows": [
     "panel"
   ],
@@ -38,6 +38,15 @@
     "allow-voice-tts-stop",
     "allow-voice-tts-download",
     "allow-voice-tts-cancel-download",
-    "allow-voice-tts-delete"
+    "allow-voice-tts-delete",
+    "allow-stream-status",
+    "allow-update-stream-settings",
+    "allow-stream-new-token",
+    "allow-stream-test-event",
+    "allow-stream-copy",
+    "allow-update-status",
+    "allow-update-check",
+    "allow-update-set-auto",
+    "allow-update-install"
   ]
 }

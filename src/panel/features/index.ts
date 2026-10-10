@@ -5,6 +5,9 @@
 import type { Settings } from "../../shared/ipc";
 import { contextFeature } from "./context";
 import { voiceExtra } from "./voice-extra";
+import { streamFeature } from "./stream";
+import { updatesFeature } from "./updates";
+import { handsFeature } from "./hands";
 import { updateMeFeature } from "./update-me";
 
 export interface Feature {
@@ -13,4 +16,4 @@ export interface Feature {
   render(s: Settings): HTMLElement;
 }
 
-export const FEATURES: readonly Feature[] = [contextFeature, updateMeFeature, voiceExtra];
+export const FEATURES: readonly Feature[] = [contextFeature, handsFeature, updateMeFeature, voiceExtra, streamFeature, updatesFeature];

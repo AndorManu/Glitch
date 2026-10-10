@@ -13,10 +13,18 @@ export interface Settings {
   memory_enabled: boolean;
   /** "Let Glitch see the screen" (look_at_screen). Missing from old builds: on. */
   screen_enabled?: boolean;
+  /** Feature "Let Glitch control apps" (click, type, play in other apps). Off by default. */
+  hands_enabled?: boolean;
+  /** "Smarter brain for app control": a bigger model only for app tasks (null: the normal brain). */
+  hands_model?: string | null;
   /** The user allowed notes once; later notes don't ask. */
   notes_trusted?: boolean;
   /** Voice commands (see the voice section at the end of this file). */
   voice?: VoiceSettings;
+  /** OBS stream overlay (see the stream section). Missing from old builds: off. */
+  stream_overlay?: StreamSettings;
+  /** Update checks (see the updates section). */
+  auto_update?: UpdateSettings;
   /** "He reacts to what you're doing" (see ./context.ts). Missing from old builds: defaults. */
   context?: import("./context").ContextSettings;
   /** "Update me" features (missing from old builds: defaults). */
@@ -68,7 +76,7 @@ export interface SetupStatus {
 
 export type Step =
   | { type: "reply"; text: string; actions: string[] }
-  | { type: "confirm"; id: string; title: string; detail: string; actions: string[] };
+  | { type: "confirm"; id: string; title: string; detail: string; actions: string[]; allow?: string; deny?: string };
 
 export interface UiError {
   code: string;
@@ -97,7 +105,9 @@ export type AgentProgress =
   | { kind: "step"; id: number; tool: string; label: string }
   | { kind: "step_done"; id: number; ok: boolean }
   | { kind: "looking"; active: boolean; target: CaptureTarget }
-  | { kind: "text"; delta: string };
+  | { kind: "text"; delta: string }
+  /** An app task's plan (2 to 6 short steps). */
+  | { kind: "plan"; steps: string[] };
 
 /** Sent as "reminder" when a timer Glitch set rings. */
 export interface Reminder {
@@ -213,7 +223,7 @@ export const api = {
   /** The chat closed: back to the short keep-alive. */
   coolModel: () => invoke<void>("cool_model"),
   getSettings: () => invoke<Settings>("get_settings"),
-  updateSettings: (patch: Partial<Pick<Settings, "model" | "movement_enabled" | "chaos_enabled" | "onboarding_done" | "memory_enabled" | "screen_enabled">>) =>
+  updateSettings: (patch: Partial<Pick<Settings, "model" | "movement_enabled" | "chaos_enabled" | "onboarding_done" | "memory_enabled" | "screen_enabled" | "hands_enabled">> & { hands_model?: string }) =>
     invoke<Settings>("update_settings", { patch }),
   /** Click on Glitch: toggles the chat bubble (or opens setup on first run). */
   mascotClicked: () => invoke<void>("mascot_clicked"),
@@ -440,6 +450,98 @@ export const chaosApi = {
   noteMove: (x: number, y: number) => invoke<boolean>("chaos_note_move", { x, y }),
   noteClose: () => invoke<void>("chaos_note_close"),
   noteIsOpen: () => invoke<boolean>("chaos_note_open_now"),
+};
+
+// ------------------------------------------------------------------ stream
+// The OBS stream overlay (src-tauri/src/stream/). "stream-status" events
+// carry StreamStatus whenever the server or a connection changes.
+
+export interface StreamSettings {
+  enabled: boolean;
+  port: number;
+  /** Secrets: never shown, copied with streamApi.copy. */
+  view_token: string;
+  write_token: string;
+  mode: "mirror" | "walk";
+  size: number;
+  position: "left" | "center" | "right";
+  react: boolean;
+  show_chat: boolean;
+  mirror_chat: boolean;
+  streamerbot: boolean;
+  streamerbot_url: string;
+  twitch_channel: string;
+}
+
+export interface SourceStatus {
+  state: "off" | "connecting" | "connected" | "error";
+  detail: string;
+}
+
+export interface StreamStatus {
+  enabled: boolean;
+  running: boolean;
+  error: string | null;
+  /** OBS browser-source URL (read-only token). Empty while off. */
+  url: string;
+  /** Where bots POST events (the write token goes in a header). */
+  webhook: string;
+  viewers: number;
+  streamerbot: SourceStatus;
+  twitch: SourceStatus;
+  /** The overlay settings, tokens blanked. */
+  settings: StreamSettings;
+}
+
+export type StreamPatch = Partial<Omit<StreamSettings, "view_token" | "write_token">>;
+export type StreamEventKind = "follow" | "sub" | "raid" | "chat";
+
+export const streamApi = {
+  status: () => invoke<StreamStatus>("stream_status"),
+  update: (patch: StreamPatch) => invoke<Settings>("update_stream_settings", { patch }),
+  /** New view and write tokens: the old OBS URL and bot token stop working. */
+  newToken: () => invoke<StreamStatus>("stream_new_token"),
+  test: (kind: StreamEventKind) => invoke<void>("stream_test_event", { kind }),
+  copy: (what: "url" | "write_token") => invoke<void>("stream_copy", { what }),
+};
+
+// ----------------------------------------------------------------- updates
+// Auto-update (src-tauri/src/autoupdate.rs). "update-status" events carry
+// UpdateStatus; "update-available" (UpdateAvailable) asks the bubble to offer it.
+
+export interface UpdateSettings {
+  auto_check: boolean;
+  snoozed_version: string | null;
+  snoozed_at: number;
+}
+
+export interface UpdateAvailable {
+  version: string;
+  notes: string;
+}
+
+export interface UpdateStatus {
+  current: string;
+  auto_check: boolean;
+  checking: boolean;
+  available: UpdateAvailable | null;
+  /** Offer it in the bubble now (not snoozed with "Later"). */
+  offer: boolean;
+  installing: boolean;
+  /** Download percent while installing (null: size unknown). */
+  progress: number | null;
+  /** Unix seconds (0 = never). */
+  last_check: number;
+  error: string | null;
+}
+
+export const updateApi = {
+  status: () => invoke<UpdateStatus>("update_status"),
+  check: () => invoke<UpdateStatus>("update_check"),
+  setAuto: (on: boolean) => invoke<UpdateStatus>("update_set_auto", { on }),
+  later: () => invoke<void>("update_later"),
+  /** Downloads, verifies the signature, installs and restarts Glitch. */
+  install: () => invoke<void>("update_install"),
 };
 
 // -------------------------------------------------------------- update me

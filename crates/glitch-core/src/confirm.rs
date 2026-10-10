@@ -54,6 +54,12 @@ pub fn approval_for(action: &Action) -> Approval {
         | Action::OpenApp { .. }
         | Action::SearchFiles { .. }
         | Action::OpenPath { .. } => Approval::AskUser,
+        // App control: read-only steps, media keys and apps the user allowed
+        // for this task run at once; the first control action on an app,
+        // and anything that sends, buys, deletes or types text the user
+        // didn't say, waits for the user (see hands::Driver::prepare).
+        Action::Hands { ask: crate::hands::Ask::No, .. } => Approval::Automatic,
+        Action::Hands { .. } => Approval::AskUser,
     }
 }
 
@@ -129,13 +135,18 @@ pub struct ConfirmationGate {
 impl ConfirmationGate {
     /// Park an action and return what the UI should show.
     pub fn request(&mut self, action: Action) -> &PendingAction {
+        let description = action.describe();
+        self.request_described(action, description)
+    }
+
+    /// Like `request`, with a custom card (e.g. "Open Spotify and control it for this").
+    pub fn request_described(&mut self, action: Action, description: Description) -> &PendingAction {
         self.counter += 1;
         // Unpredictable, never-reused id so a stale or replayed click can't
         // approve a different action.
         let mut h = RandomState::new().build_hasher();
         h.write_u64(self.counter);
         let id = format!("c{}-{:016x}", self.counter, h.finish());
-        let description = action.describe();
         self.pending.insert(PendingAction { id, action, description })
     }
 
