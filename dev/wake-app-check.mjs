@@ -177,7 +177,7 @@ try {
           await mascot.shot(`mascot-listening-${n}.png`);
         }
       }
-      await new Promise((r) => p.on("exit", r));
+      if (p.exitCode === null) await new Promise((r) => p.on("exit", r)); // it may already be done
       const lines = log.slice(before).filter((l) => l.includes("wake check"));
       const heard = await bubble.evaluate(`document.querySelector('.input')?.value || document.querySelector('.echo, .user-echo')?.textContent || ''`);
       say(`played ${f}: ${lines.join(" | ") || "no utterance reached the mic"}; bubble listening seen: ${listened}; input/echo: ${JSON.stringify(heard)}`);
@@ -186,6 +186,20 @@ try {
       await sleep(3000);
     }
   }
+
+  // The listening state without relying on the speakers -> microphone loop
+  // (many machines have no loopback): start a push-to-talk recording.
+  await bubble.invoke("voice_start", { mode: "hands_free" });
+  let seen = false;
+  for (let i = 0; i < 30 && !seen; i++) {
+    await sleep(100);
+    seen = await bubble.evaluate(`document.querySelector('.pill')?.classList.contains('listening')`);
+  }
+  await sleep(400);
+  say(`push-to-talk listening seen: ${seen} -> ${await bubble.shot("bubble-listening-ptt.png")}`);
+  await mascot.shot("mascot-listening-ptt.png");
+  await bubble.invoke("voice_cancel");
+  await sleep(1500);
 
   if (st?.tts?.installed) {
     for (const [i, prepared] of [false, true, true].entries()) {
