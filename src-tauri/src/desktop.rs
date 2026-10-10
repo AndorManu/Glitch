@@ -585,7 +585,7 @@ mod imp {
             SelectObject(mem, old);
             let n = (w * h * 4) as usize;
             let bgra = std::slice::from_raw_parts(bits as *const u8, n);
-            if ok == 0 || bgra.chunks_exact(4).all(|p| p[0] == 0 && p[1] == 0 && p[2] == 0) {
+            if ok == 0 || bgra.as_chunks::<4>().0.iter().all(|p| p[0] == 0 && p[1] == 0 && p[2] == 0) {
                 Err("that window is behind others and doesn't let Windows copy it".to_string())
             } else {
                 let mut rgba = Vec::with_capacity(n);
@@ -980,14 +980,10 @@ mod live_tests {
         let clock = RealClock::new();
         let matcher = AppMatcher::launched("SlowTune", &desktop_before);
         let desktop = NativeDesktopForTests;
-        let outcome = appwait::wait_for_window(
-            &desktop,
-            &clock,
-            &matcher,
-            Duration::from_secs(20),
-            appwait::POLL,
-            &mut |t| eprintln!("  waiting {} s", t.as_secs()),
-        );
+        let outcome =
+            appwait::wait_for_window(&desktop, &clock, &matcher, Duration::from_secs(20), appwait::POLL, &mut |t| {
+                eprintln!("  waiting {} s", t.as_secs())
+            });
         let WaitOutcome::Ready { window, waited, kind } = outcome else { panic!("{outcome:?}") };
         eprintln!("ready after {waited:?}: {window:?} ({kind:?})");
         assert!(waited >= Duration::from_secs(3), "{waited:?}");
@@ -1001,9 +997,8 @@ mod live_tests {
         assert!(!shot.still_blank, "the content should be there after the retry");
 
         // Now cover it with another window and look again: its OWN picture.
-        let cover = Kill(
-            Command::new(&cover_exe).args(["CoverUp", "0", "0", "250", "100", "1000", "700"]).spawn().unwrap(),
-        );
+        let cover =
+            Kill(Command::new(&cover_exe).args(["CoverUp", "0", "0", "250", "100", "1000", "700"]).spawn().unwrap());
         std::env::set_var("GLITCH_HANDS_ONLY_PIDS", format!("{pid},{}", cover.0.id()));
         std::thread::sleep(Duration::from_millis(1200));
         let all = imp::app_windows();

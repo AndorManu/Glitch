@@ -99,6 +99,7 @@ async function ask(bubble, text, decide, tag) {
   await bubble.fill("textarea.input", text);
   await bubble.press("textarea.input", "Enter");
   const seen = { cards: [], labels: new Set(), reply: "", chips: [] };
+  let started = false;
   const shots = new Set();
   const t0 = Date.now();
   while (Date.now() - t0 < 150000) {
@@ -128,7 +129,8 @@ async function ask(bubble, text, decide, tag) {
       continue;
     }
     const busy = await bubble.evaluate(() => !!document.querySelector(".thought, .steps .step.running"));
-    if (!busy && !card && bt && seen.cards.length >= 0 && (await bubble.$(".balloon")) && !(await bubble.$(".choices"))) {
+    started ||= busy || !!card || seen.cards.length > 0;
+    if (started && !busy && !card && bt && seen.cards.length >= 0 && (await bubble.$(".balloon")) && !(await bubble.$(".choices"))) {
       // A finished answer (typed out): give the typewriter a moment.
       await sleep(2500);
       seen.reply = await balloonText(bubble);
@@ -176,7 +178,6 @@ try {
   // ---- 2. needs clicking inside, app control off
   killApp();
   await sleep(600);
-  await invoke(bubble, "reset_chat");
   await sleep(500);
   const ask2 = "open SlowTune and find me a playlist it can play";
   const b = await ask(bubble, ask2, (t) => (/SlowTune/.test(t) && !/app control/i.test(t) ? "yes" : /app control/i.test(t) ? "no" : "wait"), "b");
@@ -188,7 +189,6 @@ try {
 
   killApp();
   await sleep(600);
-  await invoke(bubble, "reset_chat");
   await sleep(500);
   const c = await ask(bubble, ask2, (t) => (/SlowTune/.test(t) && !/app control/i.test(t) ? "yes" : /app control/i.test(t) ? "yes" : "wait"), "c");
   console.log(`  [c] cards: ${c.cards.join(" || ")}`);

@@ -24,9 +24,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use glitch_core::agent::{Agent, Progress, Step};
-use glitch_core::appwait::{Clock, ManualClock};
 use glitch_core::ai::ollama::OllamaClient;
 use glitch_core::ai::AiProvider;
+use glitch_core::appwait::{Clock, ManualClock};
 use glitch_core::desktop::{AppWindow, Capture, CaptureTarget, ClipboardText, Desktop, DesktopResult, WindowInfo};
 use glitch_core::hands::mock::{self as hm, MockApp, MockHands};
 use glitch_core::hands::MediaStatus;
@@ -165,7 +165,9 @@ impl Desktop for FakeDesktop {
                 redact: vec![],
             });
         }
-        let img = image::open(fixtures_dir().join("slowtune.png")).map_err(|e| format!("fixture slowtune: {e}"))?.into_rgba8();
+        let img = image::open(fixtures_dir().join("slowtune.png"))
+            .map_err(|e| format!("fixture slowtune: {e}"))?
+            .into_rgba8();
         let (width, height) = img.dimensions();
         Ok(Capture {
             width,
@@ -301,7 +303,18 @@ const fn case(
     say: &'static str,
     check: fn(&Outcome) -> Result<(), String>,
 ) -> Case {
-    Case { name, group, say, screen: None, window: None, clipboard: None, selected: None, apps: None, slow: None, check }
+    Case {
+        name,
+        group,
+        say,
+        screen: None,
+        window: None,
+        clipboard: None,
+        selected: None,
+        apps: None,
+        slow: None,
+        check,
+    }
 }
 
 fn cases() -> Vec<Case> {
@@ -519,13 +532,19 @@ fn cases() -> Vec<Case> {
             slow: Some(false),
             ..case("open a slow app and say what is in it", "open-app", "open SlowTune and tell me what you see", |o| {
                 need(o.used("open_app"), "didn't open the app")?;
-                need(!o.says_any(&["isn't open", "isnt open", "not open", "isn't even open", "isn't running"]), "claims it isn't open")?;
+                need(
+                    !o.says_any(&["isn't open", "isnt open", "not open", "isn't even open", "isn't running"]),
+                    "claims it isn't open",
+                )?;
                 let seen = ["rainy day jazz", "desert roads", "gym mix", "made for you", "your library"]
                     .iter()
                     .filter(|w| o.says(&[w]))
                     .count();
                 need(seen >= 2, &format!("names only {seen} things from SlowTune's window: {}", o.text))?;
-                need(!o.says_any(&["indexerror", "prices[", "cart.py", "visual studio"]), "describes the editor instead")?;
+                need(
+                    !o.says_any(&["indexerror", "prices[", "cart.py", "visual studio"]),
+                    "describes the editor instead",
+                )?;
                 need(o.slow_shots() >= 1, "never looked at SlowTune's window")?;
                 need(o.world.captures.lock().unwrap().is_empty(), "took a screenshot of the screen / active window")
             })
@@ -534,26 +553,39 @@ fn cases() -> Vec<Case> {
             screen: Some("code-bug"),
             window: Some(("cart.py - shop - Visual Studio Code", "Visual Studio Code")),
             slow: Some(true),
-            ..case("open a slow app that shows a loading screen first", "open-app", "open SlowTune and describe what's in its window", |o| {
-                need(o.used("open_app"), "didn't open the app")?;
-                need(o.slow_shots() == 2, &format!("looked {} time(s), wanted blank then real", o.slow_shots()))?;
-                need(o.says_any(&["rainy day jazz", "desert roads", "gym mix", "made for you", "your library"]), "doesn't describe the real content")?;
-                need(!o.says_any(&["indexerror", "prices[", "cart.py"]), "describes the editor")
-            })
+            ..case(
+                "open a slow app that shows a loading screen first",
+                "open-app",
+                "open SlowTune and describe what's in its window",
+                |o| {
+                    need(o.used("open_app"), "didn't open the app")?;
+                    need(o.slow_shots() == 2, &format!("looked {} time(s), wanted blank then real", o.slow_shots()))?;
+                    need(
+                        o.says_any(&["rainy day jazz", "desert roads", "gym mix", "made for you", "your library"]),
+                        "doesn't describe the real content",
+                    )?;
+                    need(!o.says_any(&["indexerror", "prices[", "cart.py"]), "describes the editor")
+                },
+            )
         },
         Case {
             screen: Some("code-bug"),
             window: Some(("cart.py - shop - Visual Studio Code", "Visual Studio Code")),
             slow: Some(false),
-            ..case("needs clicking inside the app, app control off", "open-app", "open SlowTune and find me a playlist it can play", |o| {
-                need(o.used("open_app"), "didn't open the app")?;
-                need(
-                    o.confirms.iter().any(|c| c.contains("I need app control")),
-                    &format!("no app control card: {:?}", o.confirms),
-                )?;
-                need(o.world.captures.lock().unwrap().is_empty(), "took a screenshot of the wrong window")?;
-                need(!o.says_any(&["isn't open", "isnt open", "isn't even open"]), "claims it isn't open")
-            })
+            ..case(
+                "needs clicking inside the app, app control off",
+                "open-app",
+                "open SlowTune and find me a playlist it can play",
+                |o| {
+                    need(o.used("open_app"), "didn't open the app")?;
+                    need(
+                        o.confirms.iter().any(|c| c.contains("I need app control")),
+                        &format!("no app control card: {:?}", o.confirms),
+                    )?;
+                    need(o.world.captures.lock().unwrap().is_empty(), "took a screenshot of the wrong window")?;
+                    need(!o.says_any(&["isn't open", "isnt open", "isn't even open"]), "claims it isn't open")
+                },
+            )
         },
         // --- the basics still work
         case("open twitter page", "basics", "open twitter on elon musk's page", |o| {

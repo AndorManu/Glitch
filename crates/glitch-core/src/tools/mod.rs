@@ -638,7 +638,7 @@ pub fn prepare(call: &ToolCall, platform: &dyn Platform) -> Result<Action, ToolE
                 Some(t) => CaptureTarget::parse(t)
                     .ok_or_else(|| ToolError(format!("target must be one of {:?}", CaptureTarget::NAMES)))?,
             };
-            let app = args.get("app").and_then(Value::as_str).map(|a| clean_text(a)).filter(|a| !a.is_empty());
+            let app = args.get("app").and_then(Value::as_str).map(clean_text).filter(|a| !a.is_empty());
             Ok(Action::LookAtScreen { target, app })
         }
         ACTIVE_WINDOW => Ok(Action::ActiveWindow),

@@ -2899,7 +2899,7 @@ mod tests {
             ]);
             let (mut a, _) = agent(model.clone(), d.clone(), clock);
             open(&mut a, "open spotify and tell me what you see").await;
-            assert_eq!(d.window_captures.lock().unwrap().len(), 2, "one retry, not more");
+            assert_eq!(d.window_captures.lock().unwrap().len(), 3, "two retries, not more");
             assert!(model.seen.lock().unwrap()[2].last().unwrap().content.contains("still empty"));
         }
 

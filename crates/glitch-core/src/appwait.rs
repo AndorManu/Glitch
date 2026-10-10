@@ -253,12 +253,15 @@ pub struct AppShot {
 
 /// Pause before looking again at a window that was not there / still blank.
 pub const LOOK_RETRY: Duration = Duration::from_secs(2);
+/// Looks again at a window that is only one flat colour (a loading screen):
+/// real apps take several seconds to paint, so two more tries, 2 s apart.
+pub const BLANK_RETRIES: u32 = 2;
 /// Extra tries when the window isn't there yet.
 pub const LOOK_RETRIES: u32 = 3;
 
 /// Take a screenshot of the app's window. If the window isn't there yet
 /// (or only minimized) wait 2 s and try again, up to 3 more times; if it is
-/// there but blank (a loading screen) wait 2 s and look once more.
+/// there but blank (a loading screen) wait 2 s and look again, twice at most.
 /// `preferred`: the window the wait already found.
 pub fn capture_app(
     desktop: &dyn Desktop,
@@ -268,7 +271,7 @@ pub fn capture_app(
     name: &str,
 ) -> Result<AppShot, String> {
     let mut missing = 0u32;
-    let mut blank_retried = false;
+    let mut blank_retries = 0u32;
     let mut minimized_title: Option<String> = None;
     loop {
         let windows = desktop.app_windows();
@@ -279,8 +282,8 @@ pub fn capture_app(
             Some(w) if !w.minimized => {
                 let capture = desktop.capture_window(w.id)?;
                 let blank = crate::vision::mostly_blank(&capture);
-                if blank && !blank_retried {
-                    blank_retried = true;
+                if blank && blank_retries < BLANK_RETRIES {
+                    blank_retries += 1;
                     clock.sleep(LOOK_RETRY);
                     continue;
                 }
