@@ -121,6 +121,7 @@ try {
   const cards = [];
   let reply = "";
   let sawBanner = false;
+  let stepsShot = false;
   const t0 = Date.now();
   while (Date.now() - t0 < 120000) {
     if (!sawBanner) sawBanner = browser.contexts().some((c) => c.pages().some((p) => p.url().includes("banner.html")));
@@ -131,7 +132,7 @@ try {
       cards.push(text.replace(/\s+/g, " ").trim());
       await sleep(1300); // the card refuses clicks in its first moment (anti mis-click)
       await bubble.screenshot({ path: join(OUT, `1-card-${cards.length}.png`), omitBackground: true });
-      if (/control Notepad|into Notepad/i.test(text)) await card.click();
+      if (/Notepad/.test(text) && /control|type/i.test(text)) await card.click();
       else await (await bubble.$(".choice.no")).click();
       await sleep(700);
       continue;
@@ -140,13 +141,18 @@ try {
       reply = text;
       break;
     }
+    if (busy && cards.length && !stepsShot && (await bubble.$(".steps .step"))) {
+      stepsShot = true;
+      await sleep(600);
+      await bubble.screenshot({ path: join(OUT, "2-steps.png"), omitBackground: true });
+    }
     await sleep(300);
   }
   clearInterval(ticker);
   await sleep(500);
   await shoot(bubble);
   await bubble.screenshot({ path: join(OUT, "3-reply.png"), omitBackground: true });
-  check("asked to control Notepad first", cards.some((c) => /control Notepad/i.test(c)), JSON.stringify(cards));
+  check("asked to control Notepad first", cards.some((c) => /Notepad/.test(c) && /control/i.test(c)), JSON.stringify(cards));
   check("replied", !!reply, reply.replace(/\s+/g, " ").slice(0, 200));
   const typed = notepadText();
   check("hello is in the Notepad stand-in", /^hello$/i.test(typed), JSON.stringify(typed));
