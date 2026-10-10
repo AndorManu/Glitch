@@ -69,9 +69,12 @@ function findExe() {
   return candidates[0];
 }
 
+// Only the image name of the copy under test counts: name the test exe differently (e.g.
+// qa-fullqa.exe) and an installed glitch.exe running next to it is neither seen nor touched.
+let imageName = "glitch.exe";
 function glitchRunning() {
   try {
-    return /glitch\.exe/i.test(execFileSync("tasklist", ["/FI", "IMAGENAME eq glitch.exe", "/NH"], { encoding: "utf8" }));
+    return execFileSync("tasklist", ["/FI", `IMAGENAME eq ${imageName}`, "/NH"], { encoding: "utf8" }).toLowerCase().includes(imageName.toLowerCase());
   } catch {
     return false;
   }
@@ -232,6 +235,7 @@ async function noBlankPages() {
 
 async function main() {
   const exe = findExe();
+  if (exe) imageName = path.basename(exe);
   if (!exe || !existsSync(exe)) {
     console.error("No glitch.exe found. Build first (npx tauri build --debug --no-bundle) or pass --exe.");
     process.exit(2);
@@ -277,7 +281,7 @@ async function main() {
     panel = await Page.open(t);
     pages.push(panel);
     const s = await panel.ready();
-    const view = await mascot.invoke("panel_view");
+    const view = await panel.invoke("panel_view"); // per-window grants (L4): panel_view belongs to the panel
     record("first run opens the setup panel", (await visible("panel")) === true && view.value === "setup", `${s.href}, view=${view.value}`);
   });
   await alive("setup panel opened");
@@ -323,7 +327,7 @@ async function main() {
 
   // --- clicking Glitch toggles the bubble
   await step("mascot_clicked toggles the bubble", async () => {
-    await mascot.invoke("hide_bubble");
+    await bubble.invoke("hide_bubble");
     const states = [];
     for (let i = 0; i < 3; i++) {
       const r = await mascot.invoke("mascot_clicked");
@@ -393,12 +397,12 @@ async function main() {
     await step("remember a fact", async () => {
       const r = await send("remember that my dog is called Rex");
       const v = r.value ?? {};
-      const mem = await bubble.invoke("get_memory");
+      const mem = await panel.invoke("get_memory");
       const fact = (mem.value?.facts ?? []).find((f) => /rex/i.test(f.text));
       record("remember a fact", r.ok && !!fact && (v.actions ?? []).some((a) => /remembered/i.test(a)), `${JSON.stringify(v.actions)} -> memory: ${JSON.stringify(mem.value?.facts?.map((f) => f.text))}`);
     });
     await step("memory view", async () => {
-      const mem = await mascot.invoke("get_memory");
+      const mem = await panel.invoke("get_memory");
       record("memory view", mem.ok && mem.value.enabled === true, `enabled=${mem.value?.enabled}, ${mem.value?.facts?.length} facts, summary ${JSON.stringify(mem.value?.summary ?? "").slice(0, 60)}`);
     });
   } else if (bubble) {
@@ -412,10 +416,10 @@ async function main() {
   // --- settings panel
   await step("settings panel", async () => {
     const r = await mascot.invoke("show_panel", { view: "settings" });
-    const view = await mascot.invoke("panel_view");
+    const view = await panel.invoke("panel_view");
     const [p, b] = [await visible("panel"), await visible("bubble")];
     record("settings panel opens", r.ok && r.ms < IPC_LIMIT_MS && p === true && b === false && view.value === "settings", `${r.ms} ms, panel=${p} bubble=${b} view=${view.value}`);
-    await mascot.invoke("hide_panel");
+    await panel.invoke("hide_panel");
     record("settings panel hides", (await visible("panel")) === false);
   });
   await alive("settings panel");
@@ -424,7 +428,7 @@ async function main() {
   // --- quit
   await step("quit", async () => {
     const t0 = Date.now();
-    mascot.invoke("quit", {}, 5000).catch(() => {});
+    panel.invoke("quit", {}, 5000).catch(() => {});
     while (exited === null && Date.now() - t0 < 10_000) await sleep(100);
     record("quit exits the app", exited !== null, exited !== null ? `exit code ${exited} after ${Date.now() - t0} ms` : "still running after 10 s");
   });
