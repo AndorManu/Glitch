@@ -10,7 +10,7 @@
 
 import type { FrameImage } from "../sprites/types";
 import { HAT_CELL, HAT_SPRITES, HEAD_DX, HEAD_HALF } from "./hats-data";
-import { BALL_ART, ballGrid, toCanvas } from "./play/ballart";
+import { ballGrid, toCanvas } from "./play/ballart";
 
 /** canvas setTransform matrix [a b c d e f]. */
 export type Mat = [number, number, number, number, number, number];
@@ -125,6 +125,32 @@ export class Accessories implements AccessoryLayer {
     } catch {
       this.hats = null;
     }
+    await this.loadBall();
+  }
+
+  /** The drawn ball for his mouth: the last cell of public/sprites/ball.png, cut to its pixels. */
+  private async loadBall(url = "/sprites/ball.png"): Promise<void> {
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+      const cell = img.naturalHeight;
+      const c = document.createElement("canvas");
+      c.width = c.height = cell;
+      const g = c.getContext("2d")!;
+      g.drawImage(img, 12 * cell, 0, cell, cell, 0, 0, cell, cell);
+      const d = g.getImageData(0, 0, cell, cell).data;
+      let x0 = cell, y0 = cell, x1 = -1, y1 = -1;
+      for (let y = 0; y < cell; y++) for (let x = 0; x < cell; x++) if (d[(y * cell + x) * 4 + 3] > 0) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+      if (x1 < 0) return;
+      const out = document.createElement("canvas");
+      out.width = x1 - x0 + 1;
+      out.height = y1 - y0 + 1;
+      out.getContext("2d")!.drawImage(c, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
+      this.ballImg = out;
+    } catch {
+      // Keep the code-drawn ball.
+    }
   }
 
   /** A few hearts (happy) or stars float up from his head for ~1.5 s. */
@@ -231,10 +257,10 @@ export class Accessories implements AccessoryLayer {
   /** The fetch ball in his mouth (its own pixel art, at his art scale: under and in front of the eye). */
   private drawBall(f: AccessoryFrame, art: Mat): void {
     this.ballImg ??= toCanvas(ballGrid(1));
-    const half = BALL_ART / 2;
+    const bw = this.ballImg.width, bh = this.ballImg.height;
     f.ctx.setTransform(...mul([f.dpr, 0, 0, f.dpr, 0, 0], art));
     f.ctx.imageSmoothingEnabled = false;
-    f.ctx.drawImage(this.ballImg, Math.round(f.eye![0] * ART_W + 4 - half), Math.round(f.eye![1] * ART_H + 11 - half), BALL_ART, BALL_ART);
+    f.ctx.drawImage(this.ballImg, Math.round(f.eye![0] * ART_W + 4 - bw / 2), Math.round(f.eye![1] * ART_H + 11 - bh / 2), bw, bh);
   }
 
   private ballImg: HTMLCanvasElement | null = null;

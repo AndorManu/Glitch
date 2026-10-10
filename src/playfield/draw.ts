@@ -14,19 +14,25 @@ export const ART_PX = 1.5;
 export interface BallArt {
   roll: CanvasImageSource[];
   glitch: CanvasImageSource;
+  /** Drawn sheet only: flattened by an impact, long and thin at speed, glowing. */
+  squash?: CanvasImageSource;
+  stretch?: CanvasImageSource;
+  glow?: CanvasImageSource;
   /** Art px per frame side. */
   size: number;
+  /** CSS px per art px: 1:1 for the drawn sheet (its ball is ~23 art px = BALL_R), 1.5 for the code-drawn fallback. */
+  scale: number;
 }
 
 /** The code-drawn ball (until the drawn ball sheet is there). */
 export function codeBall(): BallArt {
-  return { roll: Array.from({ length: 8 }, (_, i) => toCanvas(ballGrid(i))), glitch: toCanvas(ballGrid(2, true)), size: BALL_ART };
+  return { roll: Array.from({ length: 8 }, (_, i) => toCanvas(ballGrid(i))), glitch: toCanvas(ballGrid(2, true)), size: BALL_ART, scale: ART_PX };
 }
 
 /**
  * The drawn ball sheet (scripts/slice-ball.py -> public/sprites/ball.png):
- * one row, frames 0-7 the roll loop, 8 squash, 9 stretch, 10 glitch, 11 glow.
- * Null if it isn't there.
+ * one row, frames 0-7 the roll loop, 8 squash, 9 stretch, 10 glitch, 11 glow,
+ * 12 the clean ball for his mouth. Null if it isn't there.
  */
 export async function sheetBall(url = "/sprites/ball.png"): Promise<BallArt | null> {
   try {
@@ -34,14 +40,14 @@ export async function sheetBall(url = "/sprites/ball.png"): Promise<BallArt | nu
     img.src = url;
     await img.decode();
     const size = img.naturalHeight;
-    if (img.naturalWidth < size * 11) return null;
+    if (img.naturalWidth < size * 12) return null;
     const cut = (i: number) => {
       const c = document.createElement("canvas");
       c.width = c.height = size;
       c.getContext("2d")!.drawImage(img, i * size, 0, size, size, 0, 0, size, size);
       return c;
     };
-    return { roll: Array.from({ length: 8 }, (_, i) => cut(i)), glitch: cut(10), size };
+    return { roll: Array.from({ length: 8 }, (_, i) => cut(i)), glitch: cut(10), squash: cut(8), stretch: cut(9), glow: cut(11), size, scale: 1 };
   } catch {
     return null;
   }
@@ -82,16 +88,28 @@ export function drawBall(ctx: CanvasRenderingContext2D, art: BallArt, p: BallPic
     ctx.fillRect(px(p.x - p.r * 3), px(p.y - p.r * 3), px(p.r * 6), px(p.r * 6));
   }
   // The ball: squash on impact (flattened onto what it hit), stretch along the motion at speed.
-  const img = p.glitch ? art.glitch : art.roll[p.frame % art.roll.length];
-  const size = art.size * ART_PX;
+  // The drawn sheet has its own flattened, long and glowing frames; the code ball is only scaled.
+  const drawnSquash = !!art.squash && !p.glitch && p.squash > 0.5;
+  const drawnStretch = !!art.stretch && !p.glitch && !drawnSquash && p.stretch > 0.55 && Math.abs(Math.sin(p.dir)) > 0.8;
+  const drawnGlow = !!art.glow && !p.glitch && !drawnSquash && !drawnStretch && p.glow > 0.6;
+  const img = p.glitch
+    ? art.glitch
+    : drawnSquash
+      ? art.squash!
+      : drawnStretch
+        ? art.stretch!
+        : drawnGlow
+          ? art.glow!
+          : art.roll[p.frame % art.roll.length];
+  const size = art.size * art.scale;
   ctx.save();
   ctx.translate(px(p.x), px(p.y));
-  if (p.stretch > 0) {
+  if (p.stretch > 0 && !drawnStretch && !drawnSquash) {
     ctx.rotate(p.dir);
     ctx.scale(1 + 0.32 * p.stretch, 1 - 0.18 * p.stretch);
     ctx.rotate(-p.dir);
   }
-  if (p.squash > 0.02) {
+  if (p.squash > 0.02 && !drawnSquash) {
     const s = p.squash;
     ctx.translate(0, px(p.r * 0.32 * s));
     ctx.scale(1 + 0.34 * s, 1 - 0.3 * s);

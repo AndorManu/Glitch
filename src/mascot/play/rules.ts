@@ -59,7 +59,7 @@ export function playAnim(name: string, has: (n: string) => boolean = isAnimation
 // ------------------------------------------------------------------- ball
 
 /** Ball radius, CSS px (the play overlay draws it this size). */
-export const BALL_R = 9;
+export const BALL_R = 12;
 /**
  * Glitch's flight physics works on a body HALF css px "tall": a world grown
  * by (HALF - r) on every side, with window tops lowered by the same amount,
