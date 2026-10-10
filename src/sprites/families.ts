@@ -21,6 +21,8 @@ const FAMILY_PREFIX: [string, Family][] = [
   ["idle_tail_sit_blink", "sit"],
   ["glasses_type", "sit"],
   ["watch_tv", "sit"],
+  // sitting at the window edge with the rod: he sits down first and stands up after (was neutral: a straight cut to walk)
+  ["fish", "sit"],
   ["fetch_ball", "side"],
   ...["pose_front", "pose_happy", "pose_think", "pose_laugh", "pose_wave"].map((p) => [p, "front"] as [string, Family]),
   // side view (walking, running, jumping, pushing, stretching)
@@ -55,7 +57,7 @@ const CLIPS: Record<string, [Family, Family, number]> = {
 };
 
 /** Frames that belong to no family (effects, being held): never bridged from or to. */
-const NEUTRAL = ["struggle", "cling_cursor", "turn_around", "tail_copter", "glide", "fall_flail", "hang_ledge", "pull_up", "slide_down", "bounce", "wall_jump", "sit_edge_swing", "fish", "dangle", "spin", "teleport", "land", "peek", "pose_glitch", "pose_chaos"];
+const NEUTRAL = ["struggle", "cling_cursor", "turn_around", "tail_copter", "glide", "fall_flail", "hang_ledge", "pull_up", "slide_down", "bounce", "wall_jump", "sit_edge_swing", "dangle", "spin", "teleport", "land", "peek", "pose_glitch", "pose_chaos"];
 
 const cache = new Map<string, Family>();
 
