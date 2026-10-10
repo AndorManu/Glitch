@@ -33,5 +33,7 @@ describe("plain text (same rules as agent.rs plain_text)", () => {
   it("says where Glitch is looking", () => {
     expect(lookingText("screen")).toContain("looking at your screen");
     expect(lookingText("cursor")).toContain("mouse");
+    expect(lookingText("app", "Spotify")).toBe("👀 looking at Spotify");
+    expect(lookingText("app")).toContain("that app");
   });
 });

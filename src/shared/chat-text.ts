@@ -25,7 +25,8 @@ export const WELCOME =
   "Hi, I'm Glitch! Ask me anything, or try “what's on my screen?”, “what does this error mean?”, “what's 15% of what I copied?” or “remind me to stretch in 20 minutes”.";
 
 /** The badge while Glitch takes a screenshot. */
-export function lookingText(target: "screen" | "window" | "cursor"): string {
+export function lookingText(target: "screen" | "window" | "cursor" | "app", app?: string | null): string {
+  if (target === "app") return app ? `👀 looking at ${app}` : "👀 looking at that app";
   return target === "cursor" ? "👀 looking under your mouse" : target === "window" ? "👀 looking at your window" : "👀 looking at your screen";
 }
 

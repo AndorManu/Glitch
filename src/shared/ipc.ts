@@ -104,7 +104,7 @@ export interface PullProgress {
 export type Mood = "thinking" | "happy" | "asking" | "idle" | "listening" | "talking" | "looking";
 
 /** What `look_at_screen` captured. */
-export type CaptureTarget = "screen" | "window" | "cursor";
+export type CaptureTarget = "screen" | "window" | "cursor" | "app";
 
 /**
  * Sent as "agent-progress" while Glitch works on a message (see Progress in
@@ -115,7 +115,8 @@ export type AgentProgress =
   | { kind: "thinking" }
   | { kind: "step"; id: number; tool: string; label: string }
   | { kind: "step_done"; id: number; ok: boolean }
-  | { kind: "looking"; active: boolean; target: CaptureTarget }
+  /** `app`: with target "app", which app ("Spotify"). */
+  | { kind: "looking"; active: boolean; target: CaptureTarget; app?: string }
   | { kind: "text"; delta: string }
   /** An app task's plan (2 to 6 short steps). */
   | { kind: "plan"; steps: string[] };
