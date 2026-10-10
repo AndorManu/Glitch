@@ -480,6 +480,135 @@ def clean_cursor(frames: list[np.ndarray]) -> tuple[list[np.ndarray], list[list[
     return steady, grips
 
 
+#: Rod tip and a point on the rod near his paw (art px in the final canvas, read off
+#: the contact sheets). The generated art draws a thin fishing line from the tip; the
+#: app draws the real one (tip -> cursor), so everything outside the body and the
+#: corridor along the rod is cut. The tip is the line's anchor (ANIM_RODS).
+RODS = {
+    "hook_cast": [((87, 35), (73, 55)), ((91, 19), (74, 52)), ((50, 12), (50, 45)), ((2, 20), (24, 44)),
+                  ((84, 53), (70, 66)), ((97, 50), (72, 67)), ((82, 56), (66, 70)), ((101, 47), (70, 70))],
+    "hook_reel": [((82, 36), (70, 60)), ((92, 26), (72, 58)), ((90, 26), (70, 60)), ((91, 28), (70, 62)),
+                  ((77, 34), (62, 62)), ((80, 35), (64, 64)), ((93, 25), (72, 60)), ((93, 28), (70, 62))],
+}
+
+
+def corridor_clean(f: np.ndarray, tip, base, width: float = 3.0) -> np.ndarray:
+    op = f[:, :, 3] > 0
+    v = f[:, :, :3].astype(int)
+    glitchy = is_glitchy(v)
+    lum = v[..., 0] * 0.3 + v[..., 1] * 0.59 + v[..., 2] * 0.11
+    fur = op & ~glitchy & (lum > 95)
+    ys, xs = np.where(fur)
+    yy, xx = np.indices(op.shape)
+    x0, x1 = np.percentile(xs, [1, 99]); y0, y1 = np.percentile(ys, [1, 99])
+    near_body = (xx >= x0 - 3) & (xx <= x1 + 3) & (yy >= y0 - 3) & (yy <= y1 + 3)
+    (tx, ty), (bx, by) = tip, base
+    dx, dy = tx - bx, ty - by
+    n2 = max(1, dx * dx + dy * dy)
+    t = np.clip(((xx - bx) * dx + (yy - by) * dy) / n2, 0, 1)
+    dist = np.hypot(xx - (bx + t * dx), yy - (by + t * dy))
+    keep = near_body | (dist <= width) | glitchy
+    out = f.copy()
+    out[op & ~keep] = 0
+    # Drawn line crossing the body's box: dark pixels that are not next to any fur / the rod.
+    op = out[:, :, 3] > 0
+    protect = _dilate(fur | (dist <= width + 1), 2)
+    out[op & (lum < 70) & ~protect & ~glitchy] = 0
+    return out
+
+
+MARK = (1, 2, 3)
+
+
+def is_glitchy(v: np.ndarray) -> np.ndarray:
+    return ((v[..., 0] > 120) & (v[..., 2] > 140) & (v[..., 1] < 120)) | ((v[..., 2] > 150) & (v[..., 1] > 150) & (v[..., 0] < 120))
+
+
+def rod_clean(a: np.ndarray) -> np.ndarray:
+    """The fishing rod frames (hook_cast / hook_reel): the generated art draws
+    a thin line from the rod tip. The app draws the real line (tip -> cursor),
+    so cut the drawn one and leave a one-pixel MARK at the rod tip (the rod
+    pixel farthest from the body); process() turns it into an anchor.
+    Rod pixels = the ones that kept their own colour in snap_palette."""
+    op = a[:, :, 3] > 0
+    rgb = a[:, :, :3].astype(float)
+    d = ((rgb[:, :, None, :] - PALETTE[None, None]) ** 2).sum(3).min(2)
+    glitchy = is_glitchy(a[:, :, :3].astype(int))
+    r_, g_, b_ = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    brown = (r_ >= 80) & (r_ <= 165) & (g_ >= 38) & (g_ <= 92) & (b_ >= 18) & (b_ <= 62) & (r_ > g_ + 25) & (g_ > b_ + 8)
+    rod = op & (d > 1) & ~glitchy & brown
+    comps = _components(rod)
+    if comps:
+        keep = comps[0]
+        stray = rod & ~keep
+        a = a.copy()
+        a[stray] = 0
+        op = op & ~stray
+        rod = keep
+    # Fur = the tan/grey body colours: palette pixels that aren't the dark outline.
+    lum = rgb[..., 0] * 0.3 + rgb[..., 1] * 0.59 + rgb[..., 2] * 0.11
+    fur = op & ~rod & (lum > 95) & ~glitchy
+    if not fur.any() or not rod.any():
+        return a
+    ys, xs = np.where(fur)
+    cy, cx = ys.mean(), xs.mean()
+    box = (xs.min(), xs.max(), ys.min(), ys.max())
+    ry, rx = np.where(rod)
+    k = int(np.argmax((rx - cx) ** 2 + (ry - cy) ** 2))
+    ty, tx = int(ry[k]), int(rx[k])
+    out = a.copy()
+    # Thin leftovers outside the fur's bounding box: the drawn line.
+    pad = np.pad(op, 1)
+    nb = sum(np.roll(np.roll(pad, dy, 0), dx, 1) for dy in (-1, 0, 1) for dx in (-1, 0, 1) if dy or dx)[1:-1, 1:-1]
+    yy, xx = np.indices(op.shape)
+    outside = (xx < box[0] - 2) | (xx > box[1] + 2) | (yy < box[2] - 2) | (yy > box[3] + 2)
+    thin = op & ~rod & ~glitchy & (nb <= 3)
+    line = np.zeros_like(op)
+    seen = np.zeros_like(op)
+    h, w = op.shape
+    for y0, x0 in zip(*np.where(thin)):
+        if seen[y0, x0]:
+            continue
+        comp, q = [], [(y0, x0)]
+        seen[y0, x0] = True
+        while q:
+            y, x = q.pop()
+            comp.append((y, x))
+            for yy in range(y - 1, y + 2):
+                for xx in range(x - 1, x + 2):
+                    if 0 <= yy < h and 0 <= xx < w and thin[yy, xx] and not seen[yy, xx]:
+                        seen[yy, xx] = True
+                        q.append((yy, xx))
+        if len(comp) <= 14 or any(outside[y, x] for y, x in comp):
+            for y, x in comp:
+                line[y, x] = True
+    out[line] = 0
+    out[op & ~rod & ~glitchy & outside] = 0
+    out[ty, tx, :3] = MARK
+    return out
+
+
+def take_marks(placed: list[np.ndarray]) -> list[list[int]]:
+    """Find each frame's MARK pixel (the rod tip), give it the colour of a rod
+    pixel next to it, and return the tips (art px in the canvas)."""
+    tips = []
+    for f in placed:
+        m = (f[:, :, 0] == MARK[0]) & (f[:, :, 1] == MARK[1]) & (f[:, :, 2] == MARK[2]) & (f[:, :, 3] > 0)
+        if not m.any():
+            tips.append(tips[-1] if tips else [60, 20])
+            continue
+        y, x = [int(v[0]) for v in np.where(m)]
+        col = None
+        for dy, dx in ((1, -1), (1, 0), (0, -1), (1, 1), (-1, -1)):
+            yy, xx = y + dy, x + dx
+            if 0 <= yy < f.shape[0] and 0 <= xx < f.shape[1] and f[yy, xx, 3] > 0 and tuple(f[yy, xx, :3]) != MARK:
+                col = f[yy, xx, :3].copy()
+                break
+        f[y, x, :3] = col if col is not None else (110, 70, 50)
+        tips.append([x, y])
+    return tips
+
+
 def place(a: np.ndarray, anchor_x: float) -> np.ndarray:
     out = np.zeros((CANVAS_H, CANVAS_W, 4), np.uint8)
     h, w = a.shape[:2]
@@ -557,6 +686,11 @@ def process(name: str, cfg: dict, report: dict) -> list[np.ndarray]:
         heads = [head_x(f) for f in frames]
         anchors = [anchors[0] + (hx - heads[0]) for hx in heads]
     placed = [place(f, ax) for f, ax in zip(frames, anchors)]
+    if cfg.get("rod"):
+        tips = [t for t, _ in RODS[name]]
+        placed = [corridor_clean(f, t, b) for f, (t, b) in zip(placed, RODS[name])]
+        OUT.mkdir(parents=True, exist_ok=True)
+        (OUT / f"{name}-rods.json").write_text(json.dumps(tips))
     if cfg.get("cursor_clean"):
         placed, grips = clean_cursor(placed)
         OUT.mkdir(parents=True, exist_ok=True)
@@ -630,6 +764,12 @@ SHEETS["climb"] = {"cell": 4.9, "rotate": -1, "shift": 6}
 SHEETS["cling_cursor"]["cursor_clean"] = True
 # Arms crossed, standing: as tall as idle0.
 SHEETS["annoyed"] = {"n": None, "ref": 0, "target": 55, "tolerance": 0}
+# Chaos mode 2 (the hook act, the fake-virus giggle, the swarm).
+for _name in ["virus_giggle", "clone_pop"]:
+    SHEETS[_name] = {"n": 8, "ref": 0, "target": 55, "tolerance": 0}
+# The hook sheets are drawn smaller on the page: sampled finer so the head is as big as idle0's.
+for _name in ["hook_cast", "hook_reel"]:
+    SHEETS[_name] = {"n": 8, "cell": 2.7, "rod": True}
 # The fishing line hangs far below him: cut it at his feet (it goes on over the edge).
 SHEETS["fish"]["trim_line"] = 0  # down to his feet: frames stay on one baseline
 
