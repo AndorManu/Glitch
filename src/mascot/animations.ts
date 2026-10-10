@@ -335,6 +335,11 @@ function thinkKeys(rand: () => number): Keyframe[] {
   if (rand() < 0.55) {
     const n = 2 + Math.floor(rand() * 3);
     for (let i = 0; i < n; i++) keys.push(...cycle("typing", [0, 1, 2, 3, 4, 5, 6, 7], 220 + rand() * 40));
+    // The laptop glitches in and out of existence (no plain pop): the first and last typing keys glitch
+    // (on the existing keys, so no extra repaints).
+    const first = keys.findIndex((key) => key.frame === "typing0");
+    keys[first] = { ...keys[first], glitch: 0.4, fx: "eye" };
+    keys[keys.length - 1] = { ...keys[keys.length - 1], glitch: 0.4, fx: "eye" };
   }
   return keys;
 }
@@ -384,12 +389,13 @@ const CURSOR_IN_PAW = (dy: number): Omit<Keyframe, "frame" | "ms"> => ({ props: 
 /** Cursor carried at the snout of the walk frames (snout ~ art (73, 63)); dy follows the body bob. */
 const CURSOR_IN_MOUTH: Extra = (dy) => ({ props: [{ name: "cursor", x: 40, y: -46 + dy, rot: 35 }] });
 
-function grabCursorKeys(rand: () => number): Keyframe[] {
+function grabCursorKeys(rand: () => number, mem: Memory = {}): Keyframe[] {
   const ground = { name: "cursor" as const, x: 40, y: -22, rot: 0 };
   const lying = { props: [ground] };
   return [
-    // Spot it (surprised), crouch, wiggle...
+    // Spot it (surprised), turn side-on to it, crouch, wiggle...
     k("surprised2", 260, { dx: -16, ...lying }),
+    ...toSide(mem, 60).map((key) => ({ ...key, dx: -16, ...lying })),
     k("jump0", 120, { dx: -16, ...lying }),
     k("jump1", 120, { dx: -16, ...lying }),
     k("jump1", 110, { dx: -15, ...lying }),
@@ -638,9 +644,20 @@ function edgeStandUp(rand: () => number, mem: Memory): Keyframe[] {
   const up = edges()["sit>front"];
   if (!up) return [];
   const last = ((mem.lastClip as Record<string, string>) ??= {});
-  const v = pickVariant(up, rand, last["sit>front"]);
+  // stand_up_paws starts from the crouch the slide ends in (the hop would pop).
+  const v = up.find((x) => x.id === "stand_up_paws") ?? pickVariant(up, rand, last["sit>front"]);
   last["sit>front"] = v.id;
-  return [...slideDy([k("sit_down7", 70), k("sit_down7", 70), k("sit_down7", 70), k("sit_down7", 70), k("sit_down7", 70)], (EDGE_DY * 5) / 6, EDGE_DY / 6), ...v.keys(rand, mem)];
+  return [...edgeSwingBack(mem), ...slideDy([k("sit_down7", 50, { glitch: 0.4, fx: "eye" }), k("sit_down7", 50, { glitch: 0.2 }), k("sit_down7", 70), k("sit_down7", 70), k("sit_down7", 70)], (EDGE_DY * 5) / 6, EDGE_DY / 6), ...v.keys(rand, mem)];
+}
+
+/** Off the edge, first the legs swing back to rest (sit_edge_swing back to frame 0 from where it is). */
+function edgeSwingBack(mem: Memory): Keyframe[] {
+  const m = /^sit_edge_swing(\d)$/.exec(String(mem.fromFrame ?? ""));
+  if (!m) return [];
+  // The swing is a cycle: the short way round to frame 0 (back down, or on through 7).
+  const at = Number(m[1]);
+  const path = at === 0 ? [] : at <= 4 ? Array.from({ length: at }, (_, j) => at - 1 - j) : [...Array.from({ length: 7 - at }, (_, j) => at + 1 + j), 0];
+  return path.map((i) => k(`sit_edge_swing${i}`, 70, { dy: EDGE_DY }));
 }
 
 /** At a window's edge: lean right over it to look down, eye flickering. */
@@ -709,7 +726,9 @@ function buildKeys(rand: () => number): Keyframe[] {
     k("point3", 150, { glitch: 0.5, fx: "eye" }),
     k("point4", 250, { fx: "sparkle", glitch: rand() < 0.5 ? 0.25 : 0 }),
     k("point5", 200, { fx: "sparkle" }),
-    ...cycle("celebrate", [2, 3, 4], 110, { fx: "sparkle" }),
+    // Into the cheer through a glitch key, and all the way down again (5-7 land the hop) before idle.
+    k("celebrate2", 60, { glitch: 0.45, fx: "eye" }),
+    ...cycle("celebrate", [2, 3, 4, 5, 6, 7], 110, { fx: "sparkle" }),
     k("idle0", 200),
   ];
 }
@@ -882,7 +901,8 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   // The drawn curled-up breathing (sleep0-7), one frame per 2.4 s.
   sleep: { keys: cycle("sleep", [0, 1, 2, 3, 4, 5, 6, 7], 2400, { fx: "zzz" }) },
   wake: { keys: WAKE, once: true },
-  sad: { keys: () => [...sheetOnce("sad", 140, 900)], once: true },
+  // Ends lying flat (sad7): back up the way he went down before standing again.
+  sad: { keys: () => [...sheetOnce("sad", 140, 900), ...cycle("sad", [6, 5, 4, 3, 2, 1, 0], 90)], once: true },
   angry: { keys: () => [...sheetOnce("angry", 90, 500), ...cycle("angry", [5, 6, 7], 90)], once: true },
   scared: { keys: () => sheetOnce("scared", 80, 500), once: true },
   dance: { keys: () => [...cycle("dance", [0, 1, 2, 3, 4, 5, 6, 7], 120, { fx: "sparkle" })] },
@@ -893,7 +913,8 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   glide: { keys: () => clip("glide", 110, { ease: 0 }), bridge: false },
   fall_flail: { keys: (r) => flailKeys(r), bridge: false },
   hang_ledge: { keys: (r) => [...clip("hang_ledge", 160, { ease: 0 }), k("hang_ledge0", 600 + r() * 600)], bridge: false },
-  pull_up: { keys: () => clip("pull_up", 95, { ease: 1, hold: 200 }), once: true, bridge: false },
+  // pull_up4 -> 5 jumps from hanging below the ledge to crouched on top: a glitch key hides the jump.
+  pull_up: { keys: () => clip("pull_up", 95, { ease: 1, hold: 200 }).map((key, i) => (i === 5 ? { ...key, glitch: 0.45, fx: "eye" as const } : key)), once: true, bridge: false },
   slide_down: { keys: () => clip("slide_down", 90, { ease: 0 }), bridge: false },
   sit_edge_swing: { keys: sitEdgeKeys, intro: (r, mem) => edgeSitDown(r, mem), outro: (r, mem) => edgeStandUp(r, mem) },
   // Fishing off a window edge: casts (skipping the first frame, its line encloses
@@ -1110,10 +1131,9 @@ export class Animator {
   play(name: AnimationName, then?: AnimationName, lead: Keyframe[] = []): void {
     const anim = this.animations[name];
     if (name === this.current && !anim.once && this.keys.length > 0 && lead.length === 0) return;
-    const prev = this.animations[this.current];
-    const leaving = name !== this.current && this.keys.length > 0 && prev?.outro && this.index < this.keys.length + 1;
+    // Leaving the running animation: finish a transition clip it was in the middle of, then its outro.
+    const outro = name !== this.current && this.keys.length > 0 && anim.bridge !== false ? this.exitKeys(name) : [];
     this.mem.next = name;
-    const outro = leaving && anim.bridge !== false ? prev.outro!(this.random, this.mem) : [];
     this.current = name;
     this.then = then ?? anim.next ?? "idle";
     // What is on screen once the outro and the lead-in have played.
@@ -1141,6 +1161,22 @@ export class Animator {
     this.keys = [...make(this.random, base), ...this.keys.slice(this.index)];
     this.index = 0;
     this.step();
+  }
+
+  /**
+   * What to play before leaving the running animation for `next`: the rest of
+   * a transition clip cut off mid-way at double speed and an ease out of a
+   * lean or offset (settleKeys), then the animation's outro. play() leads
+   * every bridged switch with these; callers starting an unbridged animation
+   * on purpose (a startle) can lead with them too.
+   */
+  exitKeys(next?: AnimationName): Keyframe[] {
+    const prev = this.animations[this.current];
+    if (next) this.mem.next = next;
+    this.mem.fromFrame = this.lastPose?.frame ?? null;
+    const settle = settleKeys(this.lastPose, this.keys.slice(this.index), !prev?.outro);
+    if (settle.length) this.mem.fromFrame = settle[settle.length - 1].frame;
+    return [...settle, ...(prev?.outro && this.keys.length > 0 ? prev.outro(this.random, this.mem) : [])];
   }
 
   /** A glitch burst over whatever is showing. */
@@ -1185,4 +1221,34 @@ export class Animator {
     // `rate` speeds walking cycles up or down with the actual ground speed (no foot sliding).
     if (!still) this.timer = this.clock.setTimeout(this.step, Math.max(MIN_KEY_MS, Math.round(ms / this.rate)));
   };
+}
+
+/** Transition clips: cut off mid-way, they finish at double speed first (settleKeys). */
+const TRANSITION_CLIP = /^(sit_down|stand_up_paws|stand_up_hop|stand_up_glitch|turn_front_to_side|turn_side_to_front|turn_to_back|turn_around|walk_start|lie_down|get_up|wake)\d+$/;
+
+/**
+ * Keys that get him from `shown` to a clean pose before something new
+ * starts: the rest of the transition clip he is in the middle of (from the
+ * keys still `upcoming`, at double speed, so a stand-up or a turn is never
+ * cut in half), and with `ease`, a lean or offset (peekEdge leans 27 degrees,
+ * 20 px back) eased back to upright over three keys instead of snapping.
+ */
+export function settleKeys(shown: Pose | null, upcoming: Keyframe[], ease = true): Keyframe[] {
+  if (!shown) return [];
+  const out: Keyframe[] = [];
+  if (TRANSITION_CLIP.test(shown.frame)) {
+    const base = shown.frame.replace(/\d+$/, "");
+    let last = shown.frame;
+    for (const key of upcoming) {
+      if (!TRANSITION_CLIP.test(key.frame) || key.frame.replace(/\d+$/, "") !== base) break;
+      if (key.frame === last) continue; // held keys, glitch keys over the same drawing
+      last = key.frame;
+      out.push({ ...key, ms: Math.max(MIN_KEY_MS, Math.min(80, Math.round(key.ms / 2))), glitch: 0, fx: undefined });
+    }
+  }
+  const end = out.length ? toPose(out[out.length - 1]) : shown;
+  if (ease && (Math.abs(end.rot) > 2 || Math.abs(end.dx) > 3 || Math.abs(end.dy) > 3)) {
+    for (const f of [0.6, 0.3, 0.1]) out.push(k(end.frame, 60, { flip: end.flip, pivot: end.pivot, rot: end.rot * f, dx: Math.round(end.dx * f), dy: Math.round(end.dy * f) }));
+  }
+  return out;
 }
