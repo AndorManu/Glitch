@@ -224,7 +224,7 @@ pub struct TaskState {
     pub steps_done: usize,
     pub plan_len: usize,
     /// window id -> picture fingerprint at the last look.
-    pub pic: HashMap<u64, u64>,
+    pub pic: HashMap<u64, Vec<u8>>,
 }
 
 impl TaskState {
@@ -1131,6 +1131,14 @@ impl Driver {
             Ok(r) => r,
             Err(e) => return (fail(e, &["read_ui"]), format!("Couldn't look at {app}")),
         };
+        // Debug builds only (QA looks at what the model sees): release builds never write a picture.
+        #[cfg(debug_assertions)]
+        if let Some(path) = std::env::var_os("GLITCH_DEBUG_SAVE_MARKS") {
+            use base64::Engine;
+            if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&rendered.base64_jpeg) {
+                let _ = std::fs::write(path, bytes);
+            }
+        }
         {
             let mut s = self.s.lock().unwrap();
             s.desk.geom = Some(rendered.geometry);
@@ -1203,7 +1211,7 @@ impl Driver {
                 if verify {
                     let mut ver = self.verify(&win, before_ui);
                     let pic_changed = match (before_pic, self.picture_sig(&win)) {
-                        (Some(a), Some(b)) => a != b,
+                        (Some(a), Some(b)) => marks::pictures_differ(&a, &b),
                         _ => false,
                     };
                     let changed = ver["changed"].as_bool().unwrap_or(false) || pic_changed;
@@ -1232,7 +1240,7 @@ impl Driver {
     }
 
     /// A fingerprint of the window's picture, for apps whose tree is empty.
-    fn picture_sig(&self, win: &WindowRef) -> Option<u64> {
+    fn picture_sig(&self, win: &WindowRef) -> Option<Vec<u8>> {
         let shot = self.hands.capture(Some(win)).ok()?;
         Some(marks::picture_signature(&shot.capture.rgba, shot.capture.width, shot.capture.height))
     }

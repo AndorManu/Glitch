@@ -85,7 +85,7 @@ pub fn data_dir(settings_path: &Path) -> PathBuf {
 /// Desktop control for the agent: the switch (it needs app control too),
 /// where files may be moved (the user's own folders), and the undo log.
 /// Debug builds: `GLITCH_DESKTOP_FILE_ROOT=<folder>` limits file moves to
-/// exactly that folder (the live tests use a temp folder).
+/// that folder as the "home" (Desktop, Documents... inside it; the live tests use a temp folder).
 pub fn configure_desktop(agent: &mut Agent, settings: &Settings, data_dir: &Path) {
     use glitch_core::hands::fsmove::FileGuard;
     use glitch_core::hands::undo::UndoLog;
@@ -100,7 +100,7 @@ pub fn configure_desktop(agent: &mut Agent, settings: &Settings, data_dir: &Path
         return;
     }
     let guard = match std::env::var_os("GLITCH_DESKTOP_FILE_ROOT").filter(|_| cfg!(debug_assertions)) {
-        Some(root) => Some(FileGuard::with_roots(vec![PathBuf::from(root)])),
+        Some(root) => Some(FileGuard::for_home(&PathBuf::from(root), &[])),
         None => dirs::home_dir().map(|home| {
             let extra: Vec<PathBuf> = [
                 dirs::desktop_dir(),

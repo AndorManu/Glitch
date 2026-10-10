@@ -433,7 +433,10 @@ fn cases() -> Vec<Case> {
         Case {
             apps: Some(|| vec![hm::files_app(), hm::editor_app()]),
             ..case("desktop: click the Save button", "desktop", "click the Save button in Draft Editor", |o| {
-                need(o.hands().log().iter().any(|l| l.contains("pointer Left Draft Editor Save")), "didn't click Save")?;
+                need(
+                    o.hands().log().iter().any(|l| l.contains("pointer Left Draft Editor Save")),
+                    "didn't click Save",
+                )?;
                 need(o.confirms.iter().any(|c| c.contains("Save")), &format!("no card for Save: {:?}", o.confirms))
             })
         },
@@ -448,10 +451,15 @@ fn cases() -> Vec<Case> {
         },
         Case {
             apps: Some(|| vec![hm::files_app(), hm::editor_app()]),
-            ..case("desktop: snap this window left", "desktop", "snap the Draft Editor window to the left half of the screen", |o| {
-                let g = o.hands().geometry_of("Draft Editor").ok_or("no window")?;
-                need(g.rect == (0, 0, 960, 1040), &format!("window is at {:?}", g.rect))
-            })
+            ..case(
+                "desktop: snap this window left",
+                "desktop",
+                "snap the Draft Editor window to the left half of the screen",
+                |o| {
+                    let g = o.hands().geometry_of("Draft Editor").ok_or("no window")?;
+                    need(g.rect == (0, 0, 960, 1040), &format!("window is at {:?}", g.rect))
+                },
+            )
         },
         Case {
             apps: Some(|| vec![hm::files_app(), hm::editor_app()]),
@@ -472,7 +480,9 @@ fn cases() -> Vec<Case> {
                 let g = o.hands().geometry_of("Files Pro").ok_or("no window")?;
                 need(g.state == glitch_core::hands::winops::WinState::Minimized, "not minimised")?;
                 need(
-                    o.hands().geometry_of("Draft Editor").is_some_and(|g| g.state != glitch_core::hands::winops::WinState::Minimized),
+                    o.hands()
+                        .geometry_of("Draft Editor")
+                        .is_some_and(|g| g.state != glitch_core::hands::winops::WinState::Minimized),
                     "minimised the wrong one",
                 )
             })
@@ -547,7 +557,8 @@ async fn run_case(c: &Case, provider: Arc<OllamaClient>, model: &str, hands_mode
         if c.group == "desktop" {
             std::fs::write(home.path().join("Desktop/test.txt"), "my test file").unwrap();
             std::fs::create_dir_all(home.path().join("Documents/Folder X")).unwrap();
-            let guard = glitch_core::hands::fsmove::FileGuard::for_home(&dunce::canonicalize(home.path()).unwrap(), &[]);
+            let guard =
+                glitch_core::hands::fsmove::FileGuard::for_home(&dunce::canonicalize(home.path()).unwrap(), &[]);
             agent.set_desktop_control(true, Some(guard), None);
         }
     }

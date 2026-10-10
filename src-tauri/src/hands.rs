@@ -192,6 +192,12 @@ impl Hands for NativeHands {
     }
 }
 
+/// Debug builds only (live tests): act as if the user pressed Esc.
+#[cfg(debug_assertions)]
+pub(crate) fn request_stop() {
+    STOP_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// The tray's "Stop Glitch's current task": like the user pressing Esc.
 static STOP_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 

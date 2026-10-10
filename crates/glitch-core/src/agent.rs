@@ -994,8 +994,16 @@ impl Agent {
         let mut result = Message::tool_result(tool, done.for_model.to_string());
         result.private = private;
         result.untrusted = private;
-        // The picture with the numbered boxes, for a brain that can see.
+        // The picture with the numbered boxes, for a brain that can see. Only
+        // the newest one stays in the chat (each costs ~1000 tokens of context).
         if !done.images.is_empty() && self.provider.supports_vision(&self.turn_model).await != Some(false) {
+            for m in &mut self.history {
+                if !m.images.is_empty() {
+                    m.images.clear();
+                    m.content =
+                        format!("{} (An older picture was removed; mark_screen again for a new one.)", m.content);
+                }
+            }
             result.images = done.images;
         }
         self.history.push(result);

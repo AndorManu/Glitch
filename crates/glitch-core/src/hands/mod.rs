@@ -1223,6 +1223,12 @@ impl Driver {
                     json!("this step failed 3 times. Don't try it again: tell the user what worked and what didn't.");
             }
         }
+        // Live QA only: GLITCH_DEBUG_HANDS_LOG=1 prints every step and what it answered.
+        #[cfg(debug_assertions)]
+        if std::env::var_os("GLITCH_DEBUG_HANDS_LOG").is_some() {
+            let shown = for_model.to_string();
+            eprintln!("glitch: hands {} -> {}", a.progress_label(), shown.chars().take(600).collect::<String>());
+        }
         let images = {
             let mut s = self.s.lock().unwrap();
             if a.is_control() && ok {

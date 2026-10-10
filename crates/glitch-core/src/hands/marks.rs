@@ -378,8 +378,14 @@ pub fn draw(img: &mut RgbaImage, boxes: &[MarkBox], geo: &ShotGeometry) {
         outline(img, r, 2, c);
         let (tw, th) = tag_size(b.id, s);
         // The tag sits on the box's top-left corner, above it when there's room.
-        let ty = if r.1 >= th { r.1 - th } else { r.1 };
-        let tx = r.0.clamp(0, (img.width() as i32 - tw).max(0));
+        // A thin row (a list item) would have its text covered, so its tag goes
+        // inside, at the right end, where rows have no text.
+        let (tx, ty) = if r.3 < th * 2 && r.2 > tw * 3 {
+            (r.0 + r.2 - tw - 2, r.1 + (r.3 - th) / 2)
+        } else {
+            (r.0, if r.1 >= th { r.1 - th } else { r.1 })
+        };
+        let tx = tx.clamp(0, (img.width() as i32 - tw).max(0));
         draw_number(img, b.id, tx, ty, s, c);
     }
 }
@@ -431,30 +437,46 @@ pub fn list_line(id: u32, role: &str, name: &str, value: Option<&str>, region: b
     s
 }
 
-/// A coarse fingerprint of a picture (8x8 average blocks), so "did the
-/// screen change?" works for apps UI Automation can't read.
-pub fn picture_signature(rgba: &[u8], width: u32, height: u32) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
+/// Blocks per side of the picture fingerprint.
+const SIG_COLS: u32 = 64;
+const SIG_ROWS: u32 = 40;
+
+/// A coarse fingerprint of a picture (average brightness of 64x40 blocks), so
+/// "did the screen change?" works for apps UI Automation can't read, and for
+/// text that UI Automation doesn't expose (a status label).
+pub fn picture_signature(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
     if width == 0 || height == 0 || rgba.len() < (width * height * 4) as usize {
-        return 0;
+        return vec![];
     }
-    for by in 0..8u32 {
-        for bx in 0..8u32 {
-            let (x0, x1) = (bx * width / 8, ((bx + 1) * width / 8).max(bx * width / 8 + 1));
-            let (y0, y1) = (by * height / 8, ((by + 1) * height / 8).max(by * height / 8 + 1));
+    let mut out = Vec::with_capacity((SIG_COLS * SIG_ROWS) as usize);
+    for by in 0..SIG_ROWS {
+        for bx in 0..SIG_COLS {
+            let (x0, x1) = (bx * width / SIG_COLS, ((bx + 1) * width / SIG_COLS).max(bx * width / SIG_COLS + 1));
+            let (y0, y1) = (by * height / SIG_ROWS, ((by + 1) * height / SIG_ROWS).max(by * height / SIG_ROWS + 1));
             let (mut sum, mut n) = (0u64, 0u64);
-            for y in (y0..y1.min(height)).step_by(2) {
-                for x in (x0..x1.min(width)).step_by(2) {
+            for y in y0..y1.min(height) {
+                for x in x0..x1.min(width) {
                     sum += luma(&rgba[((y * width + x) * 4) as usize..]) as u64;
                     n += 1;
                 }
             }
-            // /16: tiny rendering noise (anti-aliasing, a blinking caret) doesn't count.
-            (sum.checked_div(n).unwrap_or(0) / 16).hash(&mut h);
+            out.push(sum.checked_div(n).unwrap_or(0) as u8);
         }
     }
-    h.finish()
+    out
+}
+
+/// Did the screen really change between two fingerprints? A blinking caret
+/// touches one or two blocks; text, a menu or a dialog moves several.
+pub fn pictures_differ(a: &[u8], b: &[u8]) -> bool {
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    if a.len() != b.len() {
+        return true;
+    }
+    let diffs: Vec<u8> = a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)).collect();
+    diffs.iter().filter(|d| **d >= 6).count() >= 4
 }
 
 #[cfg(test)]
@@ -611,13 +633,32 @@ mod tests {
     }
 
     #[test]
-    fn the_picture_signature_ignores_noise_but_sees_real_changes() {
-        let a = picture(320, 200, &[(20, 20, 100, 40)]);
-        let mut noisy = a.clone();
-        noisy[4 * (10 * 320 + 10)] = 250;
-        assert_eq!(picture_signature(&a, 320, 200), picture_signature(&noisy, 320, 200));
-        let b = picture(320, 200, &[(20, 20, 100, 40), (150, 100, 120, 80)]);
-        assert_ne!(picture_signature(&a, 320, 200), picture_signature(&b, 320, 200));
-        assert_eq!(picture_signature(&[], 0, 0), 0);
+    fn the_picture_signature_ignores_a_caret_but_sees_text_and_boxes() {
+        let (w, h) = (900u32, 500u32);
+        let a = picture(w, h, &[(20, 20, 100, 40)]);
+        let sig = |p: &[u8]| picture_signature(p, w, h);
+        let paint = |p: &mut Vec<u8>, x: u32, y: u32| {
+            let i = 4 * (y * w + x) as usize;
+            p[i..i + 3].copy_from_slice(&[0, 0, 0]);
+        };
+        // A blinking caret: one thin line.
+        let mut caret = a.clone();
+        for y in 250..265 {
+            paint(&mut caret, 450, y);
+        }
+        assert!(!pictures_differ(&sig(&a), &sig(&caret)), "a caret is not a change");
+        // A new box appears.
+        let b = picture(w, h, &[(20, 20, 100, 40), (400, 200, 220, 80)]);
+        assert!(pictures_differ(&sig(&a), &sig(&b)));
+        // A short line of "text" (a few dark strokes): a status label changing.
+        let mut text = a.clone();
+        for x in (500..580).step_by(3) {
+            for y in 60..74 {
+                paint(&mut text, x, y);
+            }
+        }
+        assert!(pictures_differ(&sig(&a), &sig(&text)), "text appearing is a change");
+        assert!(picture_signature(&[], 0, 0).is_empty());
+        assert!(!pictures_differ(&[], &[1, 2]));
     }
 }

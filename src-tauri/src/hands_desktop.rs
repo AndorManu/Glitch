@@ -452,11 +452,31 @@ mod win {
         for (i, s) in spots.iter().enumerate() {
             check_spot(*s, pids.get(i).copied())?;
         }
+        let t0 = Instant::now();
+        debug_stop_after();
         let result = run_pointer(app, op, &spots, pids);
+        if matches!(&result, Err(e) if e == USER_STOPPED) {
+            eprintln!("glitch: pointer stopped by the user {} ms into the action", t0.elapsed().as_millis());
+        }
         if let Some(app) = app {
             overlay::finish(app);
         }
         result
+    }
+
+    /// Debug builds only (the live abort test): `GLITCH_DEBUG_STOP_AFTER_MS=n`
+    /// acts like the user pressing Esc n ms into the first pointer action, and
+    /// logs when, so the log shows how fast Glitch lets go.
+    fn debug_stop_after() {
+        #[cfg(debug_assertions)]
+        if let Some(ms) = std::env::var("GLITCH_DEBUG_STOP_AFTER_MS").ok().and_then(|v| v.parse::<u64>().ok()) {
+            std::env::remove_var("GLITCH_DEBUG_STOP_AFTER_MS");
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(ms));
+                eprintln!("glitch: debug: Esc pressed");
+                crate::hands::request_stop();
+            });
+        }
     }
 
     fn run_pointer(app: Option<&AppHandle>, op: &PointerOp, spots: &[Point], pids: &[u32]) -> HandsResult<String> {
