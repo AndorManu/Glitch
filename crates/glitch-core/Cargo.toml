@@ -32,7 +32,7 @@ sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 thiserror = "2"
 # spawn_blocking (file search must not stall the async runtime), and the
 # local event endpoint's 127.0.0.1 listener (net, io-util).
-tokio = { version = "1", features = ["rt", "time", "net", "io-util"] }
+tokio = { version = "1", features = ["rt", "time", "net", "io-util", "macros"] }
 url = "2"
 walkdir = "2"
 

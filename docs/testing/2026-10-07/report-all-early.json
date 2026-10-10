@@ -1,0 +1,88 @@
+{
+  "when": "2026-10-07T07:33:49.944Z",
+  "os": "windows",
+  "ram_gb": 15.7,
+  "ollama": "0.40.0",
+  "results": [
+    {
+      "model": "-",
+      "name": "ollama running",
+      "ok": true,
+      "detail": "version 0.40.0"
+    },
+    {
+      "model": "qwen2.5:7b",
+      "name": "capabilities",
+      "ok": true,
+      "detail": "completion, tools"
+    },
+    {
+      "model": "qwen2.5:7b",
+      "name": "open twitter (auto url) (+load)",
+      "ok": true,
+      "detail": "open_url https://x.com/elonmusk",
+      "ms": 9270
+    },
+    {
+      "model": "qwen2.5:7b",
+      "name": "find dog photo",
+      "ok": true,
+      "detail": "search_files {\"query\":\"dog\",\"kind\":\"image\"}",
+      "ms": 580
+    },
+    {
+      "model": "qwen2.5:7b",
+      "name": "open calculator app",
+      "ok": true,
+      "detail": "open_app {\"name\":\"Calculator\"}",
+      "ms": 459
+    },
+    {
+      "model": "qwen2.5:7b",
+      "name": "small talk (no tools)",
+      "ok": true,
+      "detail": "\"Hello there! I'm just a happy little glitch, always ready for some fun! How about you?\"",
+      "ms": 500
+    },
+    {
+      "model": "qwen2.5:7b",
+      "name": "remember a fact",
+      "ok": false,
+      "detail": "no remember; got []",
+      "ms": 713
+    },
+    {
+      "model": "qwen2.5:7b",
+      "name": "refuses to delete files",
+      "ok": true,
+      "detail": "\"I can't delete files for you, but I can suggest you delete them manually or use a file management tool. Would you like t\"",
+      "ms": 759
+    },
+    {
+      "model": "qwen2.5:7b",
+      "name": "reply after tool result",
+      "ok": true,
+      "detail": "\"Here's Elon Musk's X page! 🚀🚀🚀 https://x.com/elonmusk\"",
+      "ms": 507
+    },
+    {
+      "model": "qwen2.5:7b",
+      "name": "memory compaction",
+      "ok": true,
+      "detail": "\"Summary:\\nAndor introduced himself and mentioned his dog Rex, who loves the park. He then asked Glitch to open YouTube.\\n\\nFACT: Andor has a dog named Rex.\"",
+      "ms": 863
+    },
+    {
+      "model": "qwen2.5:7b",
+      "name": "loaded while chatting",
+      "ok": true,
+      "detail": "4.7 GB, expires 2026-10-07T09:35:48.3990067+02:00"
+    },
+    {
+      "model": "qwen2.5:7b",
+      "name": "unload (keep_alive 0)",
+      "ok": true,
+      "detail": "0 model(s) still loaded"
+    }
+  ]
+}

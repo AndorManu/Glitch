@@ -423,9 +423,9 @@ export class BubbleView {
       const allow = h(
         "button",
         { type: "button", class: "choice yes", onclick: () => allowAccepted(shownAt, performance.now()) && this.on.answer(true) },
-        CONFIRM_CHOICES[0],
+        speech.allow ?? CONFIRM_CHOICES[0],
       );
-      const nope = h("button", { type: "button", class: "choice no", onclick: () => this.on.answer(false) }, CONFIRM_CHOICES[1]);
+      const nope = h("button", { type: "button", class: "choice no", onclick: () => this.on.answer(false) }, speech.deny ?? CONFIRM_CHOICES[1]);
       choices.push(allow, nope);
       const row = h("div", { class: "choices", role: "group", "aria-label": "Allow this?" }, allow, nope);
       // Typing while a button is focused goes to the message box instead.
@@ -607,19 +607,31 @@ function snugWidth(balloon: HTMLElement): void {
   balloon.style.width = best === null ? "" : `${best}px`;
 }
 
+/** Steps listed at once (an app task can take a dozen). */
+const MAX_SHOWN_STEPS = 6;
+
 const STEP_ICON: Record<"running" | "done" | "failed", string> = { running: "", done: "\u2713", failed: "\u00D7" };
 
 /** Draw the live step list ("1. Looking at your screen ✓") and the looking badge. */
 function renderWork(el: HTMLElement, work: Work): void {
-  const key = JSON.stringify([work.steps, work.looking]);
+  const key = JSON.stringify([work.steps, work.looking, work.plan]);
   if (el.dataset.key === key) return;
   el.dataset.key = key;
   const parts: HTMLElement[] = [];
+  if (work.plan.length) {
+    const plan = h("ol", { class: "plan", "aria-label": "My plan" });
+    for (const s of work.plan) plan.append(h("li", {}, s));
+    parts.push(h("div", { class: "plan-box" }, h("span", { class: "plan-title" }, "Plan"), plan));
+  }
   if (work.looking) parts.push(h("div", { class: "looking", role: "status" }, lookingText(work.looking)));
   // While the badge shows, the screenshot step it stands for isn't listed twice.
-  const steps = work.steps.filter((st) => !(work.looking && st.tool === "look_at_screen" && st.state === "running"));
+  const all = work.steps.filter((st) => !(work.looking && st.tool === "look_at_screen" && st.state === "running"));
+  // Long app tasks: the newest steps, and how many came before.
+  const steps = all.slice(-MAX_SHOWN_STEPS);
   if (steps.length) {
     const list = h("ol", { class: "steps", "aria-label": "What I'm doing" });
+    const earlier = all.length - steps.length;
+    if (earlier > 0) list.append(h("li", { class: "step earlier" }, h("span", { class: "label" }, `${earlier} earlier step${earlier === 1 ? "" : "s"}`)));
     for (const st of steps) {
       list.append(h("li", { class: `step ${st.state}` }, h("span", { class: "icon", "aria-hidden": "true" }, STEP_ICON[st.state]), h("span", { class: "label" }, st.label)));
     }

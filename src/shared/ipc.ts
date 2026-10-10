@@ -13,6 +13,10 @@ export interface Settings {
   memory_enabled: boolean;
   /** "Let Glitch see the screen" (look_at_screen). Missing from old builds: on. */
   screen_enabled?: boolean;
+  /** Feature "Let Glitch control apps" (click, type, play in other apps). Off by default. */
+  hands_enabled?: boolean;
+  /** "Smarter brain for app control": a bigger model only for app tasks (null: the normal brain). */
+  hands_model?: string | null;
   /** The user allowed notes once; later notes don't ask. */
   notes_trusted?: boolean;
   /** Voice commands (see the voice section at the end of this file). */
@@ -72,7 +76,7 @@ export interface SetupStatus {
 
 export type Step =
   | { type: "reply"; text: string; actions: string[] }
-  | { type: "confirm"; id: string; title: string; detail: string; actions: string[] };
+  | { type: "confirm"; id: string; title: string; detail: string; actions: string[]; allow?: string; deny?: string };
 
 export interface UiError {
   code: string;
@@ -101,7 +105,9 @@ export type AgentProgress =
   | { kind: "step"; id: number; tool: string; label: string }
   | { kind: "step_done"; id: number; ok: boolean }
   | { kind: "looking"; active: boolean; target: CaptureTarget }
-  | { kind: "text"; delta: string };
+  | { kind: "text"; delta: string }
+  /** An app task's plan (2 to 6 short steps). */
+  | { kind: "plan"; steps: string[] };
 
 /** Sent as "reminder" when a timer Glitch set rings. */
 export interface Reminder {
@@ -217,7 +223,7 @@ export const api = {
   /** The chat closed: back to the short keep-alive. */
   coolModel: () => invoke<void>("cool_model"),
   getSettings: () => invoke<Settings>("get_settings"),
-  updateSettings: (patch: Partial<Pick<Settings, "model" | "movement_enabled" | "chaos_enabled" | "onboarding_done" | "memory_enabled" | "screen_enabled">>) =>
+  updateSettings: (patch: Partial<Pick<Settings, "model" | "movement_enabled" | "chaos_enabled" | "onboarding_done" | "memory_enabled" | "screen_enabled" | "hands_enabled">> & { hands_model?: string }) =>
     invoke<Settings>("update_settings", { patch }),
   /** Click on Glitch: toggles the chat bubble (or opens setup on first run). */
   mascotClicked: () => invoke<void>("mascot_clicked"),

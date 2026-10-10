@@ -20,6 +20,7 @@ export default defineConfig({
         pawprints: resolve(import.meta.dirname, "pawprints.html"),
         // The stream overlay: served to OBS by Glitch over 127.0.0.1, not a Tauri window.
         overlay: resolve(import.meta.dirname, "overlay.html"),
+        banner: resolve(import.meta.dirname, "banner.html"),
       },
     },
   },
