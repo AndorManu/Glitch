@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "note",
+  "description": "Chaos mode's sticky note: it can only close itself.",
+  "windows": [
+    "note"
+  ],
+  "permissions": [
+    "allow-chaos-note-close"
+  ]
+}

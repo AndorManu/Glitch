@@ -14,15 +14,23 @@
   --shadow: rgba(30, 24, 32, 0.28);
   --accent: #9a00f5;
   --accent-bright: #c000f0;
+  /* Hover fill behind white text (AA in both schemes). */
+  --accent-hover: #b000ef;
   --accent-soft: #f1e2ff;
   --accent-ink: #6f00b8;
   --on-accent: #ffffff;
   --danger: #b42343;
   --danger-soft: #fde7eb;
+  --on-danger: #ffffff;
   --ring: rgba(192, 0, 240, 0.42);
   --shine: rgba(255, 255, 255, 0.95);
   --send-off: #e9dfd3;
   --send-off-ink: #b3a49c;
+  --thumb: #d8cabd;
+  /* A damped spring (about 9% overshoot), for things that pop open.
+     Browsers without linear() get the cubic-bezier approximation. */
+  --spring: cubic-bezier(0.3, 1.45, 0.55, 1);
+  --spring-time: 0.5s;
   font: 13.5px/1.42 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
 }
 @media (prefers-color-scheme: dark) {
@@ -35,14 +43,24 @@
     --shadow: rgba(0, 0, 0, 0.45);
     --accent: #a21cff;
     --accent-bright: #d04dff;
+    --accent-hover: #8f00e6;
     --accent-soft: #3f1d5c;
     --accent-ink: #e0b0ff;
     --danger: #ff8aa0;
     --danger-soft: #45192a;
+    --on-danger: #2a0d16;
     --ring: rgba(214, 102, 255, 0.6);
     --shine: rgba(255, 255, 255, 0.12);
     --send-off: #43364b;
     --send-off-ink: #7c6c7e;
+    --thumb: #5d4d66;
+  }
+}
+
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    --spring: linear(0, 0.071, 0.235, 0.435, 0.632, 0.8, 0.929, 1.017, 1.069, 1.092, 1.094, 1.083, 1.065, 1.046, 1.028,
+      1.014, 1.003, 0.996, 0.992, 0.991, 0.991, 0.993, 0.995, 0.996, 1);
   }
 }
 
@@ -75,20 +93,26 @@ button:focus:not(:focus-visible) { outline: none; }
 /* ------------------------------------------------------------------ root */
 
 /* Pinned to the window edge nearest Glitch, so growing content never moves
-   the pill, even for the frame before the window catches up. */
+   the pill, even for the frame before the window catches up.
+   Opening grows the whole thing out of the pill's tail tip (where Glitch is)
+   on a spring; closing sucks it back into the tip, quick and without bounce. */
 .bubble {
   position: absolute;
   left: 0;
   right: 0;
   display: flex;
   flex-direction: column;
-  transform-origin: var(--tail-x, 50%) 100%;
-  transition: opacity 0.14s ease-out, transform 0.24s cubic-bezier(0.25, 1.5, 0.5, 1);
+  transform-origin: var(--tail-x, 50%) calc(100% - 3px);
+  transition: opacity 0.12s ease-out, transform var(--spring-time) var(--spring);
 }
 .bubble.down { bottom: 0; padding: 10px 0 3px; }
-.bubble.up { top: 0; padding: 3px 0 10px; flex-direction: column-reverse; transform-origin: var(--tail-x, 50%) 0; }
-.bubble.away { opacity: 0; transform: translateY(6px) scale(0.9); }
-.bubble.up.away { transform: translateY(-6px) scale(0.9); }
+.bubble.up { top: 0; padding: 3px 0 10px; flex-direction: column-reverse; transform-origin: var(--tail-x, 50%) 3px; }
+.bubble.away {
+  opacity: 0;
+  transform: translateY(10px) scale(0.4);
+  transition: opacity 0.1s ease-in 0.05s, transform 0.15s cubic-bezier(0.55, 0, 0.85, 0.3);
+}
+.bubble.up.away { transform: translateY(-10px) scale(0.4); }
 .away * { animation-play-state: paused !important; }
 
 /* Shared speech-tail look (see TAIL in shapes.ts). Its top 2px sit on the
@@ -136,7 +160,7 @@ button:focus:not(:focus-visible) { outline: none; }
   -webkit-user-select: text;
   cursor: text;
 }
-.input::placeholder { color: var(--muted); opacity: 0.9; }
+.input::placeholder { color: var(--muted); opacity: 1; }
 .input::-webkit-scrollbar { width: 0; }
 /* More than four lines: soften the edge the text scrolls under. */
 .input.scrolls {
@@ -161,6 +185,7 @@ button:focus:not(:focus-visible) { outline: none; }
   transition: color 0.12s, background-color 0.12s, transform 0.3s;
 }
 .icon:hover { color: var(--text); background: var(--paper-2); }
+.icon:active:not(:disabled) { transform: translateY(1px); }
 .gear:hover svg { transform: rotate(40deg); }
 .gear svg { transition: transform 0.3s; }
 
@@ -173,7 +198,7 @@ button:focus:not(:focus-visible) { outline: none; }
   box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.22);
   transition: background-color 0.12s, transform 0.12s;
 }
-.send:hover:not(:disabled) { background: var(--accent-bright); transform: translateY(-1px); }
+.send:hover:not(:disabled) { background: var(--accent-hover); transform: translateY(-1px); }
 .send:active:not(:disabled) { transform: translateY(1px); box-shadow: none; }
 .send:disabled { background: var(--send-off); color: var(--send-off-ink); box-shadow: none; cursor: default; }
 
@@ -193,6 +218,7 @@ button:focus:not(:focus-visible) { outline: none; }
 .up .close { top: auto; bottom: -9px; }
 .close-left .close { right: auto; left: 18px; }
 .close:hover { background: var(--accent-soft); transform: scale(1.1); }
+.close:active { transform: scale(0.94); }
 @media (prefers-color-scheme: dark) { .close { color: var(--text); } }
 
 /* --------------------------------------------------------- voice (mic) */
@@ -222,8 +248,24 @@ button:focus:not(:focus-visible) { outline: none; }
   transition: transform 0.08s linear, opacity 0.12s;
   pointer-events: none;
 }
-.pill.listening .mic-ring { opacity: 0.85; transform: scale(calc(1.08 + var(--level, 0) * 0.42)); }
+.pill.listening .mic-ring { opacity: 0.85; transform: scale(calc(1.06 + var(--level, 0) * 0.24)); }
 .pill.transcribing .mic svg { animation: mic-think 0.9s steps(2, end) infinite; }
+/* "Hey Glitch" armed: a small live dot on the mic, so an open mic is never hidden. */
+.pill.armed .mic::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-bright);
+  box-shadow: 0 0 0 2px var(--paper);
+  z-index: 2;
+  animation: wake-dot 2.4s ease-in-out infinite;
+}
+@keyframes wake-dot { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .pill.armed .mic::after { animation: none; } }
 @keyframes mic-think { 50% { transform: translateY(-2px); } }
 
 /* While listening the outline goes purple like when typing. */
@@ -310,7 +352,7 @@ button:focus:not(:focus-visible) { outline: none; }
   border-radius: 18px;
   filter: drop-shadow(0 2px 0 var(--shadow));
   transform-origin: var(--tail-x, 50%) calc(100% + 14px);
-  animation: pop 0.28s cubic-bezier(0.25, 1.55, 0.5, 1) both;
+  animation: pop var(--spring-time) var(--spring) both;
 }
 .up .balloon { transform-origin: var(--tail-x, 50%) -14px; }
 .balloon.confirm { min-width: 210px; }
@@ -328,7 +370,7 @@ button:focus:not(:focus-visible) { outline: none; }
   mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
 }
 .scroll::-webkit-scrollbar { width: 5px; }
-.scroll::-webkit-scrollbar-thumb { background: var(--paper-2); border-radius: 3px; }
+.scroll::-webkit-scrollbar-thumb { background: var(--thumb); border-radius: 3px; }
 .scroll:hover::-webkit-scrollbar-thumb { background: var(--muted); }
 
 .say {
@@ -356,7 +398,8 @@ button:focus:not(:focus-visible) { outline: none; }
 }
 
 /* (No flex `gap` anywhere: Safari 14.0 doesn't support it.) */
-.error .scroll { display: flex; align-items: flex-start; }
+.error .scroll, .update .scroll { display: flex; align-items: flex-start; }
+.update-glyph { background: var(--accent-soft); color: var(--accent-ink); font-size: 11px; font-weight: 400; }
 .glyph {
   flex: none;
   display: grid;
@@ -370,6 +413,17 @@ button:focus:not(:focus-visible) { outline: none; }
   font-weight: 800;
   font-size: 12px;
   line-height: 1;
+}
+
+/* Errors: a red "!" and one short glitch as the balloon lands (no loop). */
+.error .glyph, .notice.error .glyph { background: var(--danger); color: var(--on-danger); }
+.error .scroll, .notice.error .scroll { animation: glitch-once 0.42s steps(1, end) 0.3s; }
+@keyframes glitch-once {
+  0% { transform: translate(2px, 0); filter: drop-shadow(-2px 0 0 var(--accent-bright)); }
+  20% { transform: translate(-2px, 1px) skewX(-5deg); filter: drop-shadow(2px 0 0 var(--accent)); clip-path: inset(0 0 40% 0); }
+  40% { transform: translate(1px, 0); filter: drop-shadow(-1px 0 0 var(--danger)); clip-path: none; }
+  60% { transform: none; filter: none; }
+  80% { transform: translate(-1px, 0); filter: drop-shadow(1px 0 0 var(--accent-bright)); }
 }
 
 .detail {
@@ -426,9 +480,9 @@ button:focus:not(:focus-visible) { outline: none; }
   transition: transform 0.08s, box-shadow 0.08s, background-color 0.12s;
 }
 .choice.yes { background: var(--accent); color: var(--on-accent); }
-.choice.yes:hover:not(:disabled) { background: var(--accent-bright); }
+.choice.yes:hover:not(:disabled) { background: var(--accent-hover); }
 .choice.no { background: var(--paper-2); color: var(--text); }
-.choice.no:hover:not(:disabled) { background: var(--paper); }
+.choice.no:hover:not(:disabled) { background: var(--accent-soft); }
 .choice:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 0 0 var(--ink); }
 .choice + .choice { margin-left: 6px; }
 .choice:disabled { opacity: 0.45; cursor: default; }
@@ -444,7 +498,8 @@ button:focus:not(:focus-visible) { outline: none; }
   height: 52px;
   filter: drop-shadow(0 2px 0 var(--shadow));
   transform-origin: 50% 100%;
-  animation: pop 0.3s 0.12s cubic-bezier(0.25, 1.6, 0.5, 1) both;
+  /* Last in the sequence: small puff, big puff, then the cloud. */
+  animation: pop var(--spring-time) var(--spring) 0.16s both;
 }
 .up .cloud { transform-origin: 50% 0; }
 .cloud-shape { display: block; }
@@ -476,12 +531,13 @@ button:focus:not(:focus-visible) { outline: none; }
 .trail { width: 26px; height: 20px; margin: 1px 0 0; filter: drop-shadow(0 2px 0 var(--shadow)); }
 .trail svg { display: block; overflow: visible; }
 .up .trail svg { transform: scaleY(-1); }
-.puff { fill: var(--paper); stroke: var(--ink); transform-box: fill-box; transform-origin: center; animation: puff 0.22s cubic-bezier(0.25, 1.6, 0.5, 1) both; }
-.puff-big { animation-delay: 0.06s; }
+.puff { fill: var(--paper); stroke: var(--ink); transform-box: fill-box; transform-origin: center; animation: puff 0.3s var(--spring) both; }
+.puff-big { animation-delay: 0.08s; }
 
+/* Opacity is front-loaded so the overshoot is never see-through. */
 @keyframes pop {
-  from { opacity: 0; transform: scale(0.55); }
-  45% { opacity: 1; }
+  from { opacity: 0; transform: scale(0.5); }
+  20% { opacity: 1; }
   to { opacity: 1; transform: none; }
 }
 @keyframes puff {
@@ -506,4 +562,59 @@ button:focus:not(:focus-visible) { outline: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .bubble.away { transform: none; }
+}
+
+/* ------------------------------------------------- live work (while busy) */
+/* The step list ("Reading your clipboard ✓") and the "👀 looking at your
+   screen" badge: above the thought cloud, or at the top of the reply that
+   streams in. */
+.work {
+  width: max-content;
+  max-width: calc(100vw - 12px);
+  margin: 0 auto 6px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.work[hidden] { display: none; }
+.thought .work {
+  padding: 5px 10px;
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  border-radius: 12px;
+  filter: drop-shadow(0 2px 0 var(--shadow));
+}
+.up .thought .work { margin: 6px auto 0; }
+.balloon.live .work { margin: 0 0 4px; width: auto; color: var(--muted); }
+.looking {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: 600;
+  animation: peek 1.2s ease-in-out infinite;
+}
+.steps { margin: 0; padding: 0; list-style: none; }
+.looking + .steps { margin-top: 4px; }
+.step { display: flex; align-items: center; gap: 6px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 270px; }
+.step .label { overflow: hidden; text-overflow: ellipsis; }
+.step .icon {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+}
+.step.running .icon { border: 2px solid var(--accent-soft); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+.step.done .icon { color: var(--accent); }
+.step.failed { color: var(--muted); }
+.step.failed .icon { color: var(--danger); }
+.balloon.live { animation: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes peek { 50% { opacity: 0.65; } }
+@media (prefers-reduced-motion: reduce) {
+  .step.running .icon, .looking { animation: none; }
 }

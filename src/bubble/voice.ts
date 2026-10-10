@@ -123,7 +123,11 @@ export const NOTHING_HEARD = "I didn't catch that. Hold the mic button while you
 
 export function micHint(s: MicState): string {
   switch (s.phase) {
+    // Until the microphone delivers sound: an idle laptop mic can take
+    // ~0.8 s to wake up (measured on Windows 11), and words said before
+    // that are lost, so don't say "Listening" yet.
     case "starting":
+      return "Mic warming up…";
     case "listening":
       return s.handsFree ? "Listening… tap to stop" : "Listening… let go";
     case "transcribing":
@@ -200,6 +204,14 @@ export function readyText(hotkey: string | null): string {
   const key = hotkey ? ` (or ${hotkey})` : "";
   return `All set! Hold the mic button${key} and talk to me. Tap it instead to talk hands-free.`;
 }
+
+/** Read aloud with Glitch's own voice (else the system voice). Unit-tested. */
+export function useGlitchVoice(voice: "system" | "glitch", installed: boolean): boolean {
+  return voice === "glitch" && installed;
+}
+
+/** The mic button's tooltip while "Hey Glitch" is armed. */
+export const ARMED_TITLE = "Listening for “Hey Glitch” (mic on) · or hold to talk";
 
 /**
  * The part of a reply worth reading aloud, or null to stay quiet (too long:

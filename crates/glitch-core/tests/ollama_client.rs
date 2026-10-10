@@ -63,7 +63,7 @@ async fn chat_sends_keep_alive_tools_and_no_streaming() {
             "model": "qwen3.5:2b",
             "stream": false,
             "keep_alive": "2m",
-            "options": {"num_ctx": 4096},
+            "options": {"num_ctx": 8192},
             "tools": [{"type": "function", "function": {"name": "open_url"}}],
             "messages": [{"role": "user", "content": "hi"}],
         })))
@@ -334,4 +334,76 @@ async fn is_loaded_reads_api_ps() {
     assert!(client.is_loaded("mistral:latest").await);
     assert!(!client.is_loaded("qwen3.5:2b").await);
     assert!(!OllamaClient::new("http://127.0.0.1:1", "2m").is_loaded("x").await);
+}
+
+#[tokio::test]
+async fn streaming_passes_text_on_piece_by_piece_and_collects_tool_calls() {
+    let server = MockServer::start().await;
+    mock_show(&server, json!(["completion", "tools", "vision"])).await;
+    // NDJSON as documented for "stream": true; the tool call arrives in its own chunk.
+    let lines = [
+        json!({"message": {"role": "assistant", "content": "Hel"}, "done": false}),
+        json!({"message": {"role": "assistant", "content": "lo!"}, "done": false}),
+        json!({"message": {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "open_url", "arguments": {"url": "https://a.b"}}}]}, "done": false}),
+        json!({"message": {"role": "assistant", "content": ""}, "done": true, "done_reason": "stop"}),
+    ];
+    let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .and(body_partial_json(json!({"stream": true})))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body, "application/x-ndjson"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = OllamaClient::new(&server.uri(), "2m");
+    let pieces = std::sync::Mutex::new(Vec::<String>::new());
+    let on_text = |t: &str| pieces.lock().unwrap().push(t.to_string());
+    let mut shot = Message::tool_result("look_at_screen", "{\"ok\":true}");
+    shot.images = vec!["aGVsbG8=".into()];
+    let reply = client
+        .chat_streaming(ChatRequest { model: "m", messages: &[Message::user("hi"), shot], tools: &[tool()] }, &on_text)
+        .await
+        .unwrap();
+    assert_eq!(reply.content, "Hello!");
+    assert_eq!(reply.tool_calls, vec![ToolCall { name: "open_url".into(), arguments: json!({"url": "https://a.b"}) }]);
+    assert_eq!(*pieces.lock().unwrap(), ["Hel", "lo!"]);
+    // The screenshot went out as the documented `images` field of its message.
+    let reqs = server.received_requests().await.unwrap();
+    let chat: &Request = reqs.iter().find(|r| r.url.path() == "/api/chat").unwrap();
+    let sent: Value = serde_json::from_slice(&chat.body).unwrap();
+    assert_eq!(sent["messages"][1]["images"], json!(["aGVsbG8="]));
+    assert!(sent["messages"][0].get("images").is_none());
+    assert_eq!(client.supports_vision("m").await, Some(true));
+}
+
+#[tokio::test]
+async fn a_stream_that_stops_half_way_is_an_error() {
+    let server = MockServer::start().await;
+    mock_show(&server, json!(["completion"])).await;
+    let body = format!("{}\n", json!({"message": {"role": "assistant", "content": "Hel"}, "done": false}));
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body, "application/x-ndjson"))
+        .mount(&server)
+        .await;
+    let client = OllamaClient::new(&server.uri(), "2m");
+    let err =
+        client.chat_streaming(ChatRequest { model: "m", messages: &[Message::user("x")], tools: &[] }, &|_| {}).await;
+    assert!(matches!(err, Err(AiError::InvalidResponse(_))), "{err:?}");
+    assert_eq!(client.supports_vision("m").await, Some(false));
+}
+
+#[tokio::test]
+async fn warm_up_loads_with_the_same_context_size() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/chat"))
+        .and(body_partial_json(
+            json!({"model": "m", "messages": [], "keep_alive": "10m", "options": {"num_ctx": 8192}}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"model": "m", "done": true})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    OllamaClient::new(&server.uri(), "2m").warm_up("m", "10m").await.unwrap();
 }

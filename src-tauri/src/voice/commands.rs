@@ -14,7 +14,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use super::download::{self, DownloadError, Expected};
 use super::hotkey::{self, HotkeyStatus};
-use super::{current_model, unavailable_reason, DownloadJob, VoiceState};
+use super::{current_model, tts, unavailable_reason, wake, DownloadJob, VoiceState};
 use crate::commands::UiError;
 use crate::state::AppState;
 
@@ -67,6 +67,12 @@ pub struct VoiceStatus {
     /// The bubble should show the "download the speech model?" offer (it
     /// was opened by the hotkey and may have missed the event).
     offer_pending: bool,
+    /// "Hey Glitch" (setting + whether the mic is open for it right now).
+    wake: wake::WakeStatus,
+    /// "system" | "glitch"
+    read_aloud_voice: String,
+    /// The character voice's download state.
+    tts: tts::TtsStatus,
 }
 
 fn os_name() -> &'static str {
@@ -105,7 +111,17 @@ pub fn voice_status(app: AppHandle) -> VoiceStatus {
         speak_replies: settings.voice.speak_replies,
         download,
         offer_pending: vs.offer_pending.load(Ordering::SeqCst),
+        wake: wake::status(&app),
+        read_aloud_voice: settings.voice.read_aloud_voice.clone(),
+        tts: tts::status(&app),
     }
+}
+
+/// Re-arm/disarm the wake word off the calling thread (opening the
+/// microphone can take a moment).
+fn resync_wake(app: &AppHandle) {
+    let app = app.clone();
+    let _ = std::thread::Builder::new().name("glitch-wake-sync".into()).spawn(move || wake::sync(&app));
 }
 
 /// Voice settings the UI may change. Missing = unchanged.
@@ -116,6 +132,10 @@ pub struct VoicePatch {
     model: Option<String>,
     language: Option<String>,
     speak_replies: Option<bool>,
+    /// Listen for "Hey Glitch".
+    wake_word: Option<bool>,
+    /// "system" | "glitch"
+    read_aloud_voice: Option<String>,
 }
 
 #[tauri::command]
@@ -130,7 +150,13 @@ pub async fn update_voice_settings(app: AppHandle, patch: VoicePatch) -> Result<
             return Err(err("bad_language", format!("\"{l}\" isn't a supported language")));
         }
     }
+    if let Some(v) = &patch.read_aloud_voice {
+        if v != "system" && v != "glitch" {
+            return Err(err("bad_voice", format!("\"{v}\" isn't a read-aloud voice")));
+        }
+    }
     let before = current_model(&app);
+    let wake_affected = patch.enabled.is_some() || patch.wake_word.is_some() || patch.model.is_some();
     let new = app.state::<AppState>().update_settings(|s| {
         if let Some(v) = patch.enabled {
             s.voice.enabled = v;
@@ -144,7 +170,16 @@ pub async fn update_voice_settings(app: AppHandle, patch: VoicePatch) -> Result<
         if let Some(v) = patch.speak_replies {
             s.voice.speak_replies = v;
         }
+        if let Some(v) = patch.wake_word {
+            s.voice.wake_word = v;
+        }
+        if let Some(v) = patch.read_aloud_voice {
+            s.voice.read_aloud_voice = v;
+        }
     });
+    if !new.voice.speak_replies || new.voice.read_aloud_voice != "glitch" {
+        tts::stop(&app);
+    }
     if !new.voice.enabled {
         super::cancel(&app);
         super::unload(&app, None);
@@ -154,6 +189,9 @@ pub async fn update_voice_settings(app: AppHandle, patch: VoicePatch) -> Result<
     }
     if patch.enabled.is_some() {
         hotkey::sync(&app);
+    }
+    if wake_affected {
+        resync_wake(&app);
     }
     let _ = app.emit("settings-changed", &new);
     Ok(new)
@@ -248,7 +286,7 @@ pub async fn voice_download_model(app: AppHandle, model: Option<String>) -> Resu
         &download::client(),
         &url,
         &dest,
-        &Expected { sha1: m.sha1, size: m.size_bytes },
+        &Expected { sha256: m.sha256, size: m.size_bytes },
         &cancel,
         |done, total| {
             // At most 5 updates a second (plus the last one).
@@ -266,6 +304,8 @@ pub async fn voice_download_model(app: AppHandle, model: Option<String>) -> Resu
     match result {
         Ok(()) => {
             send("done", m.size_bytes, m.size_bytes, None);
+            // The wake word may have been waiting for this model.
+            resync_wake(&app);
             Ok(())
         }
         Err(e) => {
@@ -301,7 +341,53 @@ pub fn voice_delete_model(app: AppHandle, model: String) -> Result<(), UiError> 
             Err(e) => return Err(err("delete_failed", e.to_string())),
         }
     }
+    resync_wake(&app);
     Ok(())
+}
+
+/// The bubble's system voice started/stopped reading a reply aloud (the
+/// wake word ignores the microphone meanwhile).
+#[tauri::command]
+pub fn voice_speaking(app: AppHandle, on: bool) {
+    wake::set_speaking(&app, on);
+}
+
+/// A message is on its way: get the character voice ready (if it's used).
+#[tauri::command]
+pub fn voice_tts_prepare(app: AppHandle) {
+    tts::prepare(&app);
+}
+
+/// Read a reply aloud with Glitch's voice. An error means "use the system
+/// voice instead" (not downloaded, no speakers, ...).
+#[tauri::command]
+pub fn voice_tts_speak(app: AppHandle, text: String) -> Result<(), UiError> {
+    if text.chars().count() > 1_000 {
+        return Err(err("too_long", "that's too long to read aloud"));
+    }
+    tts::speak(&app, &text).map_err(|e| err("tts_failed", e))
+}
+
+#[tauri::command]
+pub fn voice_tts_stop(app: AppHandle) {
+    tts::stop(&app);
+}
+
+/// Download the character voice. Progress as "tts-download" events.
+#[tauri::command]
+pub async fn voice_tts_download(app: AppHandle) -> Result<(), UiError> {
+    tts::download_all(&app).await.map_err(|e| err(e.code(), e.to_string()))
+}
+
+#[tauri::command]
+pub fn voice_tts_cancel_download(app: AppHandle) {
+    tts::cancel_download(&app);
+}
+
+/// Remove the character voice from disk (read-aloud falls back to the system voice).
+#[tauri::command]
+pub fn voice_tts_delete(app: AppHandle) -> Result<(), UiError> {
+    tts::delete(&app).map_err(|e| err("delete_failed", e))
 }
 
 /// Open the OS's microphone privacy settings (after "permission denied").

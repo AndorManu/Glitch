@@ -7,13 +7,13 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use glitch_core::voice::audio::{prepare_for_whisper, resample};
 use glitch_core::voice::models::SpeechModel;
 use glitch_core::voice::vad::{Decision, Mode, Vad, VadConfig};
-use glitch_core::voice::{transcript, SAMPLE_RATE};
+use glitch_core::voice::{transcript, wake, SAMPLE_RATE};
 use serde::Serialize;
 
 use super::capture::MicError;
@@ -33,7 +33,8 @@ pub enum VoiceEvent {
     Heard {
         text: String,
     },
-    /// Back to idle without a message: "cancelled" or "nothing_heard".
+    /// Back to idle without a message: "cancelled", "nothing_heard", or
+    /// "wake_only" (he heard "Hey Glitch" and then nothing).
     Idle {
         reason: &'static str,
     },
@@ -57,11 +58,42 @@ pub struct Control {
     hands_free: AtomicBool,
     /// Also stops a running whisper transcription.
     pub abort: Arc<AtomicBool>,
+    /// Started by the wake word: the transcript starts with "Hey Glitch",
+    /// which is cut off before it is sent.
+    from_wake: bool,
+    /// Audio from before the recording (the wake-word utterance) and
+    /// whether it counts as the start of the command for the silence
+    /// detector (it does when the command followed the name in one go).
+    preroll: Mutex<Option<(Vec<f32>, bool)>>,
 }
 
 impl Control {
     pub fn new(mode: Mode) -> Self {
-        Self { cmd: AtomicU8::new(RUN), hands_free: AtomicBool::new(mode == Mode::HandsFree), abort: Arc::default() }
+        Self {
+            cmd: AtomicU8::new(RUN),
+            hands_free: AtomicBool::new(mode == Mode::HandsFree),
+            abort: Arc::default(),
+            from_wake: false,
+            preroll: Mutex::default(),
+        }
+    }
+
+    /// A hands-free command after "Hey Glitch". `has_command`: the name was
+    /// followed by more words in the same breath.
+    pub fn from_wake(has_command: bool) -> Self {
+        Self { from_wake: true, preroll: Mutex::new(Some((vec![], has_command))), ..Self::new(Mode::HandsFree) }
+    }
+
+    pub fn is_from_wake(&self) -> bool {
+        self.from_wake
+    }
+
+    /// The audio that came before the microphone was handed over (set while
+    /// opening it; empty for push-to-talk).
+    pub fn set_preroll(&self, audio: Vec<f32>) {
+        let mut p = self.preroll.lock().unwrap();
+        let counts = p.as_ref().is_some_and(|(_, c)| *c);
+        *p = Some((audio, counts));
     }
 
     /// Stop recording and transcribe what we have.
@@ -129,6 +161,12 @@ pub fn record<M>(
     let mut audio: Vec<f32> = Vec::with_capacity(rate as usize * 4);
     let max_len = rate as usize * (cfg.max_ms as usize / 1000 + 1);
     let mut last_level = Instant::now() - LEVEL_EVERY;
+    if let Some((pre, counts)) = ctl.preroll.lock().unwrap().take() {
+        audio.extend_from_slice(&pre);
+        if counts {
+            vad.push(&pre);
+        }
+    }
     on_level(0.0, ctl.hands_free());
 
     let mut failure = None;
@@ -198,6 +236,7 @@ pub fn run<M>(
     let speech = match recorded {
         Ok(Recorded::Speech(s)) => s,
         Ok(Recorded::Cancelled) => return emit(VoiceEvent::Idle { reason: "cancelled" }),
+        Ok(Recorded::NothingHeard) if ctl.from_wake => return emit(VoiceEvent::Idle { reason: "wake_only" }),
         Ok(Recorded::NothingHeard) => return emit(VoiceEvent::Idle { reason: "nothing_heard" }),
         Ok(Recorded::DigitalSilence) => {
             return emit(VoiceEvent::Error { code: "mic_silent", message: "the microphone only sent silence".into() })
@@ -211,6 +250,10 @@ pub fn run<M>(
     }
     match result {
         Ok(raw) => match transcript::clean(&raw) {
+            Some(text) if ctl.from_wake => match wake::strip_wake(&text) {
+                Some(text) => emit(VoiceEvent::Heard { text }),
+                None => emit(VoiceEvent::Idle { reason: "wake_only" }),
+            },
             Some(text) => emit(VoiceEvent::Heard { text }),
             None => emit(VoiceEvent::Idle { reason: "nothing_heard" }),
         },
@@ -426,6 +469,69 @@ mod tests {
         assert_eq!(last(&events), &VoiceEvent::Error { code: "stt_failed", message: "model file is damaged".into() });
     }
 
+    /// A wake-word command: `pre` is what the wake listener already had,
+    /// `script` what the mic delivers after the hand-over.
+    fn wake_run(has_command: bool, pre: Vec<f32>, script: Vec<f32>, text: &str) -> (Vec<VoiceEvent>, Option<f32>) {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let ctl = Control::from_wake(has_command);
+        let open = fake_mic(script, 0.001, dropped);
+        let events = Mutex::new(vec![]);
+        let secs = Mutex::new(None);
+        run(
+            &ctl,
+            |a, e| {
+                let r = open(a, e);
+                ctl.set_preroll(pre);
+                r
+            },
+            |samples| {
+                *secs.lock().unwrap() = Some(samples.len() as f32 / SAMPLE_RATE as f32);
+                Ok(text.to_string())
+            },
+            |e| events.lock().unwrap().push(e),
+        );
+        (events.into_inner().unwrap(), secs.into_inner().unwrap())
+    }
+
+    #[test]
+    fn wake_command_in_one_breath() {
+        // "Hey Glitch, open YouTube" was all in the pre-roll, then silence:
+        // it stops on its own and the name is cut off.
+        let mut pre = hiss(0.3);
+        pre.extend(tone(1.5, 0.2));
+        pre.extend(hiss(0.4));
+        let (events, secs) = wake_run(true, pre, vec![], " Hey Glitch, open YouTube.");
+        assert_eq!(last(&events), &VoiceEvent::Heard { text: "Open YouTube.".into() });
+        // The pre-roll's speech is part of what whisper hears.
+        assert!(secs.unwrap() >= 1.5, "{secs:?}");
+    }
+
+    #[test]
+    fn wake_then_pause_then_command() {
+        // "Hey Glitch." ... (pause) ... "open YouTube": the pause doesn't
+        // end it, the command after it is recorded too.
+        let mut pre = hiss(0.3);
+        pre.extend(tone(0.7, 0.2));
+        pre.extend(hiss(0.4));
+        let mut script = hiss(1.0);
+        script.extend(tone(1.0, 0.2));
+        let (events, secs) = wake_run(false, pre, script, "Hey Glitch. Open YouTube.");
+        assert_eq!(last(&events), &VoiceEvent::Heard { text: "Open YouTube.".into() });
+        assert!(secs.unwrap() >= 2.5, "both parts: {secs:?}");
+    }
+
+    #[test]
+    fn wake_word_alone_is_quietly_dropped() {
+        let mut pre = hiss(0.3);
+        pre.extend(tone(0.7, 0.2));
+        // Nobody says anything after the name.
+        let (events, _) = wake_run(false, pre.clone(), vec![], "x");
+        assert_eq!(last(&events), &VoiceEvent::Idle { reason: "wake_only" });
+        // Or whisper only hears the name.
+        let (events, _) = wake_run(true, pre, vec![], "Hey Glitch!");
+        assert_eq!(last(&events), &VoiceEvent::Idle { reason: "wake_only" });
+    }
+
     #[test]
     fn event_json_shape() {
         let j = |e: VoiceEvent| serde_json::to_value(e).unwrap();
@@ -441,6 +547,6 @@ mod tests {
         let m = j(VoiceEvent::NeedsModel { model: *glitch_core::voice::models::find("base").unwrap() });
         assert_eq!(m["phase"], "needs_model");
         assert_eq!(m["model"]["id"], "base");
-        assert!(m["model"].get("sha1").is_none());
+        assert!(m["model"].get("sha256").is_none());
     }
 }

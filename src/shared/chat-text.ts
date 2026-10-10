@@ -22,7 +22,71 @@ export function explainError(e: UiError): { text: string; offerSetup: boolean } 
 }
 
 export const WELCOME =
-  "Hi, I'm Glitch! Ask me anything, or try “open YouTube”, “open the Calculator app” or “find a photo of a dog”.";
+  "Hi, I'm Glitch! Ask me anything, or try “what's on my screen?”, “what does this error mean?”, “what's 15% of what I copied?” or “remind me to stretch in 20 minutes”.";
+
+/** The badge while Glitch takes a screenshot. */
+export function lookingText(target: "screen" | "window" | "cursor"): string {
+  return target === "cursor" ? "👀 looking under your mouse" : target === "window" ? "👀 looking at your window" : "👀 looking at your screen";
+}
+
+/**
+ * The speech bubble shows plain text: drop the markdown small models add
+ * anyway and a "Glitch:" speaker label. Same rules as `plain_text` in
+ * crates/glitch-core/src/agent.rs (used here for text while it streams in,
+ * so the final reply matches what was already shown). Unit-tested.
+ */
+export function plainText(text: string): string {
+  let t = text.trim();
+  for (const label of ["**Glitch:**", "Glitch:", "**Glitch**:"]) {
+    if (t.slice(0, label.length).toLowerCase() === label.toLowerCase()) t = t.slice(label.length).trimStart();
+  }
+  return t
+    .split("\n")
+    .filter((l) => !l.trimStart().startsWith("```"))
+    .map((l) => {
+      const line = l.replaceAll("**", "").replaceAll("`", "");
+      const trimmed = line.trimStart();
+      if (trimmed.startsWith("* ")) return `- ${trimmed.slice(2)}`;
+      if (trimmed.startsWith("#")) return trimmed.replace(/^#+/, "").trimStart();
+      return line;
+    })
+    .join("\n")
+    .trim()
+    .replace(/^[\s\S]*$/, (all) => noDashes(all));
+}
+
+/**
+ * Glitch never writes em or en dashes. Ranges (3–5) become 3-5, a dash
+ * between words or clauses becomes a comma. Same rules as `no_dashes` in
+ * crates/glitch-core/src/agent.rs. Unit-tested.
+ */
+export function noDashes(text: string): string {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c !== "\u2014" && c !== "\u2013") {
+      out += c;
+      continue;
+    }
+    const prev = out[out.length - 1];
+    const next = text[i + 1];
+    const range = prev !== undefined && /\d/.test(prev) && next !== undefined && /\d/.test(next);
+    if (range || prev === undefined || prev === "\n") {
+      out += "-";
+      continue;
+    }
+    out = out.replace(/ +$/, "");
+    let j = i + 1;
+    while (text[j] === " ") j++;
+    const n = text[j];
+    if (n !== undefined && !".!?,\n".includes(n)) out += ", ";
+    i = j - 1;
+  }
+  return out.replaceAll(",,", ",");
+}
+
+/** Said after "Clear chat" in Settings. */
+export const CLEARED = "Fresh start! What's on your mind?";
 
 /** Placeholder of the little compose pill. */
 export const PLACEHOLDER = "Say something to Glitch…";

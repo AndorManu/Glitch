@@ -5,18 +5,25 @@
 // and the thought cloud (only while the model is working, paused when the
 // window is hidden).
 
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import {
   api,
   asUiError,
+  CHAT_CLEARED_EVENT,
+  MASCOT_TALK_EVENT,
   voiceApi,
+  type AgentProgress,
   type BubbleLayout,
+  type Reminder,
   type Settings,
   type VoiceDownloadEvent,
   type VoiceEvent,
   type VoiceStatus,
+  type WakeStatus,
 } from "../shared/ipc";
+import { browserStore, pickGreeting } from "../shared/greeting";
 import { canSend, dismissSpeech, initialState, transition, type BubbleEvent, type Request } from "./state";
+import { UpdateMe } from "./update-me";
 import { BubbleView } from "./view";
 import {
   explainDownloadError,
@@ -26,13 +33,14 @@ import {
   micTransition,
   readyText,
   speakable,
+  useGlitchVoice,
   type MicEvent,
   type Os,
   type VoiceSay,
 } from "./voice";
 
 const root = document.getElementById("root")!;
-let state = initialState();
+let state = initialState(pickGreeting(browserStore()));
 
 const view = new BubbleView(root, {
   send: (text) => dispatch({ type: "send", text }),
@@ -41,6 +49,11 @@ const view = new BubbleView(root, {
   openSettings: () => void api.showPanel("settings").catch(() => {}),
   openSetup: () => void api.showPanel("setup").catch(() => {}),
   seen: () => dispatch({ type: "seen" }),
+  // The mascot window moves his mouth while the reply appears (see MASCOT_TALK_EVENT).
+  talk: (chars, opened) => {
+    if (opened) void emit("mascot-action", "point").catch(() => {});
+    void emit(MASCOT_TALK_EVENT, chars).catch(() => {});
+  },
   micDown: () => micDispatch({ type: "press", at: performance.now() }),
   micUp: () => micDispatch({ type: "release", at: performance.now() }),
   voiceDownload: () => void voiceApi.downloadModel(setupModel()).catch(() => {}),
@@ -51,31 +64,83 @@ const view = new BubbleView(root, {
   },
   voiceCancelDownload: () => void voiceApi.cancelDownload().catch(() => {}),
   openMicSettings: () => void voiceApi.openMicSettings().catch(() => {}),
+  choose: (id, choice) => void updates.choose(id, choice),
 });
+
+// "Update me": reminders, Claude Code, scripts, the digest, the briefing.
+const updates = new UpdateMe({ dispatch: (e) => dispatch(e), busy: () => state.busy });
+updates.listen();
 
 function dispatch(e: BubbleEvent): void {
   const prev = state;
   const t = transition(state, e);
   state = t.state;
   if (state !== prev) view.render(state);
+  // A timer that rang while Glitch was busy speaks up once he's done.
+  if (!state.busy && pendingReminders.length) {
+    const text = pendingReminders.shift()!;
+    queueMicrotask(() => dispatch({ type: "reminder", text }));
+  }
   if (t.request) {
     if (t.request.kind === "send") view.clearInput();
     stopSpeaking();
+    // His own voice loads while the model thinks (~0.5 s saved).
+    if (speakReplies && useGlitchVoice(readAloudVoice, ttsInstalled)) void voiceApi.ttsPrepare().catch(() => {});
     void perform(t.request);
   }
 }
 
+/** Bumped by "Clear chat": answers to requests from before it are dropped. */
+let epoch = 0;
+
 async function perform(r: Request): Promise<void> {
+  const mine = epoch;
   try {
     const step = r.kind === "send" ? await api.sendMessage(r.text) : await api.confirmAction(r.id, r.approved);
+    if (mine !== epoch) return;
     dispatch({ type: "step", step });
     if (step.type === "reply") speakReply(step.text);
   } catch (e) {
+    if (mine !== epoch) return;
     dispatch({ type: "failed", error: asUiError(e) });
   }
   view.setEcho(null);
   if (visible) view.focus();
 }
+
+// Live progress while Glitch works: steps, "looking at your screen", and
+// the reply streaming in.
+void listen<AgentProgress>("agent-progress", (e) => dispatch({ type: "progress", p: e.payload }));
+
+/** Timers that rang while Glitch was busy (shown right after). */
+const pendingReminders: string[] = [];
+void listen<Reminder>("reminder", (e) => {
+  if (state.busy) pendingReminders.push(e.payload.message);
+  else dispatch({ type: "reminder", text: e.payload.message });
+});
+
+// Keep the model loaded while the chat is open, so answers start at once.
+const WARM_EVERY_MS = 4 * 60_000;
+let warmTimer: ReturnType<typeof setInterval> | null = null;
+function keepWarm(on: boolean): void {
+  if (warmTimer) clearInterval(warmTimer);
+  warmTimer = null;
+  if (on) {
+    void api.warmModel().catch(() => {});
+    warmTimer = setInterval(() => void api.warmModel().catch(() => {}), WARM_EVERY_MS);
+  } else {
+    void api.coolModel().catch(() => {});
+  }
+}
+
+void listen(CHAT_CLEARED_EVENT, () => {
+  epoch++;
+  micDispatch({ type: "cancel" });
+  stopSpeaking();
+  view.setEcho(null);
+  view.clearInput();
+  dispatch({ type: "cleared" });
+});
 
 // ------------------------------------------------------------- voice
 // Push-to-talk. The recording itself happens in Rust; this mirrors its
@@ -85,6 +150,8 @@ let mic = initialMic();
 let os: Os = "windows";
 let hotkey: string | null = null;
 let speakReplies = false;
+let readAloudVoice: "system" | "glitch" = "system";
+let ttsInstalled = false;
 /** A voice start that Rust never confirmed (e.g. voice got disabled). */
 let startTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -159,6 +226,9 @@ function applyStatus(st: VoiceStatus | null): void {
   os = st.os;
   hotkey = st.hotkey.registered ? st.hotkey.label : null;
   speakReplies = st.speak_replies;
+  readAloudVoice = st.read_aloud_voice ?? "system";
+  ttsInstalled = !!st.tts?.installed;
+  view.setArmed(!!st.wake?.armed);
   micDispatch({ type: "config", usable: st.available && st.enabled });
   if (st.phase === "listening" && !micActive(mic)) micDispatch({ type: "voice", event: { phase: "listening", level: 0, hands_free: false } });
   if (st.offer_pending) {
@@ -171,21 +241,37 @@ function refreshVoice(): void {
   voiceApi.status().then(applyStatus, () => micDispatch({ type: "config", usable: false }));
 }
 
-// Reading replies aloud (optional, off by default): the system's own voice
-// via the webview, short replies only, silenced by any new input.
+// Reading replies aloud (optional, off by default), short replies only,
+// silenced by any new input: Glitch's own voice if it's chosen and
+// downloaded (played by Rust, mouth moving), else the system's voice via
+// the webview.
 function speakReply(text: string): void {
-  const synth = "speechSynthesis" in window ? window.speechSynthesis : null;
   const words = speakable(text);
-  if (!speakReplies || !synth || !words || !visible) return;
+  if (!speakReplies || !words || !visible) return;
+  if (useGlitchVoice(readAloudVoice, ttsInstalled)) {
+    voiceApi.ttsSpeak(words).catch(() => systemSpeak(words));
+    return;
+  }
+  systemSpeak(words);
+}
+
+function systemSpeak(words: string): void {
+  const synth = "speechSynthesis" in window ? window.speechSynthesis : null;
+  if (!synth) return;
   try {
     synth.cancel();
-    synth.speak(new SpeechSynthesisUtterance(words));
+    const u = new SpeechSynthesisUtterance(words);
+    // The wake word plugs its ears while he talks (he'd hear himself).
+    u.onstart = () => void voiceApi.speaking(true).catch(() => {});
+    u.onend = u.onerror = () => void voiceApi.speaking(false).catch(() => {});
+    synth.speak(u);
   } catch {
     // No voices installed: stay quiet.
   }
 }
 
 function stopSpeaking(): void {
+  if (useGlitchVoice(readAloudVoice, ttsInstalled)) void voiceApi.ttsStop().catch(() => {});
   try {
     if ("speechSynthesis" in window && (speechSynthesis.speaking || speechSynthesis.pending)) speechSynthesis.cancel();
   } catch {
@@ -196,19 +282,31 @@ function stopSpeaking(): void {
 void listen<VoiceEvent>("voice", (e) => micDispatch({ type: "voice", event: e.payload }));
 void listen<VoiceDownloadEvent>("voice-download", (e) => onDownload(e.payload));
 void listen<Settings>("settings-changed", () => refreshVoice());
+// "Hey Glitch" armed / disarmed: the bubble shows it while the mic is open.
+void listen<WakeStatus>("wake", (e) => view.setArmed(e.payload.armed));
+void listen("tts-download", () => refreshVoice());
 
 // ------------------------------------------------------- show / hide
 
 let visible = false;
 let hiddenAt: number | null = null;
+/** Esc / ×: the window hides once the close animation has played. */
+let hideTimer: ReturnType<typeof setTimeout> | null = null;
+const CLOSE_MS = 160;
 
 function onShown(): void {
+  if (hideTimer) {
+    clearTimeout(hideTimer);
+    hideTimer = null;
+  }
   if (!visible) {
     visible = true;
     const awayMs = hiddenAt === null ? null : Date.now() - hiddenAt;
     hiddenAt = null;
     dispatch({ type: "shown", awayMs });
     view.enter();
+    keepWarm(true);
+    void updates.opened();
   }
   view.focus();
 }
@@ -217,6 +315,7 @@ function onHidden(): void {
   if (!visible) return;
   visible = false;
   hiddenAt = Date.now();
+  keepWarm(false);
   // Closing the chat stops listening and talking.
   micDispatch({ type: "cancel" });
   stopSpeaking();
@@ -224,8 +323,20 @@ function onHidden(): void {
 }
 
 function hide(): void {
+  if (hideTimer) return;
+  // With a close animation: call bubbleClosing() when it starts and
+  // hideBubble() when it ends (Rust ignores the hide if Glitch was clicked
+  // meanwhile and the bubble reopened; "bubble-shown" fires then).
+  void api.bubbleClosing().catch(() => {});
   onHidden();
-  void api.hideBubble().catch(() => {});
+  const calm = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  hideTimer = setTimeout(
+    () => {
+      hideTimer = null;
+      void api.hideBubble().catch(() => {});
+    },
+    calm ? 0 : CLOSE_MS,
+  );
 }
 
 document.addEventListener("keydown", (e) => {
@@ -256,7 +367,15 @@ new ResizeObserver(() => {
 void listen<BubbleLayout>("bubble-layout", (e) => applyLayout(e.payload));
 void listen("bubble-shown", () => onShown());
 // Rust tells us about hides too (not every webview fires visibilitychange).
-void listen("bubble-hidden", () => onHidden());
+// One that beats our close timer (e.g. Glitch clicked mid-close) makes the
+// timer moot: drop it, so it can't later hide a bubble reopened meanwhile.
+void listen("bubble-hidden", () => {
+  if (hideTimer) {
+    clearTimeout(hideTimer);
+    hideTimer = null;
+  }
+  onHidden();
+});
 
 // --------------------------------------------------------------- go
 

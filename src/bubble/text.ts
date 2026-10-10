@@ -75,6 +75,35 @@ export function graphemes(text: string): string[] {
   return Array.from(text);
 }
 
+const URL_RE = /\bhttps?:\/\/[^\s<>"“”]+/gi;
+const URL_SEPARATORS = "/?&=+#";
+
+/**
+ * Where links in a reply may wrap: after the separators inside each URL
+ * (not in "https://"), so a long link breaks at "/" or "&" instead of
+ * mid-word. Returns grapheme indices to break after. Unit-tested.
+ */
+export function urlBreaks(chars: string[]): Set<number> {
+  const out = new Set<number>();
+  const text = chars.join("");
+  if (!/https?:\/\//i.test(text)) return out;
+  // Character offset where each grapheme ends.
+  const ends: number[] = [];
+  let at = 0;
+  for (const c of chars) ends.push((at += c.length));
+  for (const m of text.matchAll(URL_RE)) {
+    // Keep "https://" with the host name.
+    const start = (m.index ?? 0) + m[0].indexOf("//") + 2;
+    const end = (m.index ?? 0) + m[0].length;
+    for (let i = 0; i < chars.length; i++) {
+      const offset = ends[i] - chars[i].length;
+      if (offset < start || ends[i] >= end) continue;
+      if (URL_SEPARATORS.includes(chars[i]) && !URL_SEPARATORS.includes(chars[i + 1] ?? "")) out.add(i);
+    }
+  }
+  return out;
+}
+
 /** Typing speed: about 60 characters a second, but never longer than this. */
 export const TYPE_MS_PER_CHAR = 16;
 export const TYPE_MAX_MS = 1000;
@@ -122,4 +151,23 @@ export function tailWithin(anchor: number, left: number, size: number, inset: nu
 export function breakChunks(s: string): string[] {
   // (No lookbehind: Safari 14 can't parse it.)
   return s.match(/[^\\/?&=]*[\\/?&=]+|[^\\/?&=]+/g) ?? [];
+}
+
+/**
+ * Smallest whole width in [lo, hi] for which `fits(width)` holds, assuming
+ * everything wider fits too. `hi` itself is always tested (never trusted),
+ * so a rounded-down measurement can't squeeze text onto an extra line.
+ * Returns null when not even `hi` fits.
+ */
+export function narrowestFit(lo: number, hi: number, fits: (width: number) => boolean): number | null {
+  lo = Math.ceil(lo);
+  hi = Math.ceil(hi);
+  if (!fits(hi)) return null;
+  // Invariant: hi fits; everything below lo is assumed not to.
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (fits(mid)) hi = mid;
+    else lo = mid + 1;
+  }
+  return hi;
 }

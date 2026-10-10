@@ -7,7 +7,8 @@
 // clinging on walls): `restMs` keeps him calm, and creature.ts rests at
 // least 3x as long as the last activity took.
 
-import type { AnimationName } from "./animations";
+import { ANIMATIONS, type AnimationName } from "./animations";
+import { chaosAnim } from "./chaos";
 import {
   clampTo,
   cornerAt,
@@ -25,9 +26,39 @@ import {
 
 export type Gait = "walk" | "run" | "climb";
 
+/**
+ * Something Glitch drags along while he walks (chaos mode: another app's
+ * window, his sticky note, the cursor). See chaos.ts.
+ */
+export interface Haul {
+  /**
+   * He has moved (dx, dy) physical px since the walk began: move the thing.
+   * Resolves to the offset actually applied (it may be clamped), or null to
+   * let go (refused, the user took over...).
+   */
+  move(dx: number, dy: number): Vec | null | Promise<Vec | null>;
+  /** The walk ended (arrived, interrupted or refused). */
+  release(): void;
+  /**
+   * Set when he stands on the window he drags (its top is this ledge): he
+   * then rides along with it instead of walking off its end.
+   */
+  ledgeId?: number;
+}
+
 export type Step =
-  /** Walk along the current surface to coordinate `to` (centre x on floors/tops/ceiling, y on walls). */
-  | { do: "walk"; to: number; gait: Gait }
+  /**
+   * Walk along the current surface to coordinate `to` (centre x on
+   * floors/tops/ceiling, y on walls). Chaos extras: `anim` instead of the
+   * gait's animation, `backwards` (face against the way he walks), `haul`
+   * (drag something along).
+   */
+  | { do: "walk"; to: number; gait: Gait; anim?: AnimationName; backwards?: boolean; haul?: Haul }
+  /**
+   * Run some code (chaos mode: ask Rust, open a note...). false = abandon the
+   * plan; a list of steps = do these next; true = carry on.
+   */
+  | { do: "call"; run: () => boolean | Step[] | Promise<boolean | Step[]> }
   /** Turn the corner at this end of the current surface onto the next screen edge. */
   | { do: "corner"; end: -1 | 1 }
   /** Play an animation: one-shots until they end, loops for `ms`. */
@@ -35,11 +66,28 @@ export type Step =
   /** Face this way along the surface (+1 = increasing coordinate). */
   | { do: "face"; dir: 1 | -1 }
   /** Crouch, then a ballistic jump to this centre point (physical px). `spin` in degrees over the flight (a flip). */
-  | { do: "jump"; to: Vec; ledgeId?: number; spin?: number }
+  | {
+      do: "jump";
+      to: Vec;
+      ledgeId?: number;
+      spin?: number;
+      /** Apex height above the higher end (CSS px; default JUMP.clearance). */
+      height?: number;
+      /** Animation in the air instead of airUp/airDown. */
+      anim?: AnimationName;
+      /** Stop dead at `to` in mid-air (a wall-jump kick off a window's side); the next jump starts there. */
+      touch?: boolean;
+      /** Barely pause after landing (bouncing). */
+      quick?: boolean;
+    }
   /** Hop off the end of a window top. */
   | { do: "hop"; dir: 1 | -1 }
-  /** Let go of the wall / ceiling. */
-  | { do: "drop" }
+  /** Let go of the wall / ceiling. `float`: come down slowly, tail spinning like a helicopter or gliding, drifting `drift` CSS px/s sideways. */
+  | { do: "drop"; float?: "copter" | "glide"; drift?: number }
+  /** At the end of a window top: hang off its edge by the paws for `ms`, then pull himself back up. */
+  | { do: "hang"; ms: number }
+  /** Slide down a window's side to centre (x, y) physical px: onto the taskbar (`land`) or let go there. */
+  | { do: "slide"; x: number; y: number; land: boolean }
   /** Glitch out, reappear on `surface` at `s`. */
   | { do: "teleport"; surface: Surface; s: number }
   /** Jump straight up `height` CSS px and conjure a glitch platform at the top. */
@@ -66,7 +114,18 @@ export type BehaviourName =
   | "drop"
   | "lookBack"
   | "sleep"
-  | "celebrate";
+  | "celebrate"
+  // Playful moves (see the end of plan()).
+  | "copter"
+  | "hangOn"
+  | "slideDown"
+  | "trampoline"
+  | "fish"
+  | "wallJump"
+  /** Chaos mode (planned by chaos.ts, never picked by the dice here). */
+  | "mischief"
+  /** Reacting to what the user does (planned by context.ts, never picked by the dice). */
+  | "react";
 
 export interface Plan {
   name: BehaviourName;
@@ -116,6 +175,14 @@ export const BEHAVIOURS: Record<BehaviourName, Entry> = {
   lookBack: { weight: 1, cooldown: 6, moves: false },
   sleep: { weight: 0, cooldown: 0, moves: false },
   celebrate: { weight: 0, cooldown: 0, moves: false },
+  mischief: { weight: 0, cooldown: 0, moves: true },
+  react: { weight: 0, cooldown: 0, moves: false },
+  copter: { weight: 1.1, cooldown: 120, moves: true },
+  hangOn: { weight: 1.3, cooldown: 90, moves: true },
+  slideDown: { weight: 1.2, cooldown: 90, moves: true },
+  trampoline: { weight: 1, cooldown: 100, moves: true },
+  fish: { weight: 0.9, cooldown: 150, moves: true },
+  wallJump: { weight: 1, cooldown: 120, moves: true },
 };
 
 export function isBehaviourName(name: unknown): name is BehaviourName {
@@ -291,7 +358,7 @@ export class Brain {
       case "sitEdge": {
         if (kind !== "ledge") return null;
         const to = lo + (hi - lo) * (0.15 + 0.7 * r());
-        return steps({ do: "walk", to, gait: "walk" }, { do: "anim", name: "sitEdge", ms: 6000 + r() * 9000 });
+        return steps({ do: "walk", to, gait: "walk" }, { do: "anim", name: chaosAnim("sit_edge_swing"), ms: 6000 + r() * 9000 });
       }
       case "peekEdge": {
         if (kind !== "ledge" || hi - lo < 30 * u) return null;
@@ -324,6 +391,47 @@ export class Brain {
         return standing ? steps({ do: "anim", name: "lookAround" }) : null;
       case "sleep":
         return standing ? steps({ do: "anim", name: "yawn" }) : null;
+      case "mischief":
+        return null; // chaos.ts plans these (it needs to ask Rust first)
+      case "react":
+        return null; // context.ts plans these (from what the user is doing)
+      case "copter":
+        return this.planCopter(ctx);
+      case "hangOn": {
+        if (kind !== "ledge" || hi - lo < 60 * u) return null;
+        const dir: -1 | 1 = ctx.s - lo < hi - ctx.s ? -1 : 1;
+        return steps(
+          { do: "walk", to: dir < 0 ? lo : hi, gait: "walk" },
+          { do: "face", dir },
+          { do: "hang", ms: 2500 + r() * 3500 },
+          { do: "anim", name: "lookAround" },
+        );
+      }
+      case "slideDown":
+        return this.planSlide(ctx);
+      case "trampoline": {
+        if (kind !== "floor") return null;
+        const c = restCenter(surface, ctx.s, world);
+        const anim = chaosAnim("bounce");
+        const list: Step[] = [];
+        for (const h of [50, 110, 180]) list.push({ do: "jump", to: { x: c.x, y: c.y }, height: h, anim, quick: true });
+        list.push({ do: "jump", to: { x: c.x, y: c.y }, height: 240, anim, spin: r() < 0.5 ? 360 : -360 });
+        list.push({ do: "anim", name: r() < 0.5 ? "happy" : "laugh" });
+        return steps(...list);
+      }
+      case "fish": {
+        if (kind !== "ledge" || hi - lo < 60 * u) return null;
+        const dir: -1 | 1 = ctx.s - lo < hi - ctx.s ? -1 : 1;
+        const fish = chaosAnim("fish");
+        return steps(
+          { do: "walk", to: dir < 0 ? lo : hi, gait: "walk" },
+          { do: "face", dir },
+          ANIMATIONS_ONCE(fish) ? { do: "anim", name: fish } : { do: "anim", name: fish, ms: 6000 + r() * 6000 },
+          { do: "anim", name: r() < 0.5 ? "happy" : "lookAround" },
+        );
+      }
+      case "wallJump":
+        return this.planWallJump(ctx);
       case "celebrate": {
         if (!standing) return steps({ do: "anim", name: "happy" });
         if (!ctx.movement || r() < 0.4) return steps({ do: "anim", name: r() < 0.3 ? "laugh" : "happy" });
@@ -332,6 +440,112 @@ export class Brain {
         return steps({ do: "jump", to: c, spin: r() < 0.5 ? 360 : -360 }, { do: "anim", name: "happy" });
       }
     }
+  }
+
+  /** Up a screen edge to the very top, let go, and float down (tail copter or flying-squirrel glide). */
+  private planCopter(ctx: BrainContext): Plan | null {
+    const { surface, world } = ctx;
+    const u = world.scale;
+    const r = this.rand;
+    const float: "copter" | "glide" = r() < 0.5 ? "copter" : "glide";
+    const list: Step[] = [];
+    let wall: Surface;
+    if (surface.kind === "floor") {
+      const [lo, hi] = surfaceRange(surface, world);
+      const end: -1 | 1 = Math.abs(ctx.s - lo) < Math.abs(ctx.s - hi) ? -1 : 1;
+      list.push({ do: "walk", to: end < 0 ? lo : hi, gait: "walk" }, { do: "corner", end });
+      wall = cornerAt(surface, end, world)!.surface;
+    } else if (surface.kind === "left" || surface.kind === "right") {
+      wall = surface;
+    } else return null;
+    const [wlo, whi] = surfaceRange(wall, world);
+    if (whi - wlo < 300 * u) return null;
+    list.push({ do: "walk", to: wlo + 20 * u, gait: "climb" }, { do: "anim", name: "lookBack" });
+    // Away from the wall he was on.
+    const drift = (wall.kind === "left" ? 1 : -1) * (float === "glide" ? 70 + r() * 50 : 20 + r() * 25);
+    list.push({ do: "drop", float, drift }, { do: "anim", name: r() < 0.5 ? "happy" : "lookAround" });
+    return { name: "copter", steps: list };
+  }
+
+  /** From the end of a window top, slide down its side (to the taskbar, or let go at the bottom). */
+  private planSlide(ctx: BrainContext): Plan | null {
+    const { surface, world } = ctx;
+    if (surface.kind !== "ledge") return null;
+    const u = world.scale;
+    const a = world.area;
+    const frame = world.frames?.find((f) => f.id === surface.ledge.id);
+    if (!frame) return null;
+    const [lo, hi] = surfaceRange(surface, world);
+    const floorY = a.y + a.h;
+    const options: { dir: -1 | 1; x: number }[] = [];
+    // Only where the top really ends at the window's side (not where something covers it).
+    if (Math.abs(surface.ledge.x - frame.x) < 4 * u) options.push({ dir: -1, x: frame.x - (HALF - 12) * u });
+    if (Math.abs(surface.ledge.x + surface.ledge.w - (frame.x + frame.w)) < 4 * u) options.push({ dir: 1, x: frame.x + frame.w + (HALF - 12) * u });
+    const ok = options.filter((o) => o.x - HALF * u >= a.x && o.x + HALF * u <= a.x + a.w);
+    if (!ok.length) return null;
+    const pick = ok[Math.floor(this.rand() * ok.length)];
+    const bottom = frame.y + frame.h;
+    const land = bottom >= floorY - 30 * u;
+    const y = land ? floorY - HALF * u : bottom - HALF * u;
+    if (y - (surface.ledge.y - HALF * u) < 120 * u) return null;
+    return {
+      name: "slideDown",
+      steps: [
+        { do: "walk", to: pick.dir < 0 ? lo : hi, gait: "walk" },
+        { do: "face", dir: pick.dir },
+        { do: "anim", name: "peekEdge" },
+        { do: "slide", x: pick.x, y, land },
+        { do: "anim", name: "lookAround" },
+      ],
+    };
+  }
+
+  /**
+   * Two windows with a gap between them that reach down near the taskbar:
+   * zig-zag up between their sides (kick, kick, kick) and land on the lower top.
+   */
+  private planWallJump(ctx: BrainContext): Plan | null {
+    const { surface, world } = ctx;
+    if (surface.kind !== "floor") return null;
+    const u = world.scale;
+    const frames = world.frames ?? [];
+    const floorY = world.area.y + world.area.h;
+    const [flo, fhi] = surfaceRange(surface, world);
+    for (const A of frames) {
+      for (const B of frames) {
+        const ax = A.x + A.w;
+        const gap = B.x - ax;
+        if (A.id === B.id || gap < 170 * u || gap > 520 * u) continue;
+        const low = Math.max(A.y, B.y); // the lower top: where he ends up
+        const target = A.y >= B.y ? A : B;
+        const ledge = world.ledges.find((l) => l.id === target.id && (target === A ? l.x + l.w >= ax - 4 * u : l.x <= B.x + 4 * u));
+        if (!ledge) continue;
+        // Both sides must reach down to where his first kick is.
+        const firstY = floorY - (HALF + 130) * u;
+        if (A.y + A.h < firstY || B.y + B.h < firstY || floorY - low < 280 * u) continue;
+        const mid = ax + gap / 2;
+        if (mid < flo || mid > fhi) continue;
+        const steps: Step[] = [{ do: "walk", to: mid, gait: Math.abs(mid - ctx.s) > 450 * u ? "run" : "walk" }];
+        const kick = chaosAnim("wall_jump");
+        let y = firstY;
+        let left = true;
+        let n = 0;
+        while (y > low + 110 * u && n < 6) {
+          const x = left ? ax + (HALF - 4) * u : B.x - (HALF - 4) * u;
+          steps.push({ do: "face", dir: left ? -1 : 1 }, { do: "jump", to: { x, y }, height: 30, touch: true, anim: kick });
+          y -= 140 * u;
+          left = !left;
+          n++;
+        }
+        if (n < 2) continue;
+        const land = target === A ? ax - 50 * u : B.x + 50 * u;
+        const top: Surface = { kind: "ledge", ledge };
+        steps.push({ do: "face", dir: target === A ? -1 : 1 }, { do: "jump", to: restCenter(top, clampTo(top, land, world), world), ledgeId: ledge.id });
+        steps.push({ do: "anim", name: chaosAnim("celebrate") });
+        return { name: "wallJump", steps };
+      }
+    }
+    return null;
   }
 
   /** Find a window top in reach: walk to a takeoff point and jump onto it. */
@@ -441,3 +655,7 @@ export class Brain {
 }
 
 export const JUMP_LIMITS = JUMP;
+
+function ANIMATIONS_ONCE(name: AnimationName): boolean {
+  return !!ANIMATIONS[name]?.once;
+}

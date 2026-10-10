@@ -40,7 +40,7 @@ impl MicError {
     }
 }
 
-pub use imp::open;
+pub use imp::{open, Mic};
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod imp {
@@ -105,6 +105,11 @@ mod imp {
         Ok(Mic { _stream: stream, sample_rate })
     }
 
+    /// Stream errors after which the stream keeps running.
+    pub(super) fn harmless(kind: cpal::ErrorKind) -> bool {
+        matches!(kind, cpal::ErrorKind::Xrun | cpal::ErrorKind::DeviceChanged | cpal::ErrorKind::RealtimeDenied)
+    }
+
     fn build<T>(
         device: &cpal::Device,
         config: cpal::StreamConfig,
@@ -129,7 +134,15 @@ mod imp {
                 mix_to_mono(&mut mono, &interleaved, channels);
                 on_audio(&mono);
             },
-            move |e: cpal::Error| on_error(e.to_string()),
+            move |e: cpal::Error| {
+                // Only errors that end the stream stop the recording. WASAPI
+                // reports a buffer overrun ("Xrun") whenever the audio thread
+                // is a little late (seen on a real Windows 11 laptop within
+                // the first 2 s); that's a tiny glitch, not a failure.
+                if !harmless(e.kind()) {
+                    on_error(e.to_string())
+                }
+            },
             None,
         )
     }
@@ -153,3 +166,19 @@ mod imp {
 
 /// Whether this build can record at all.
 pub const SUPPORTED: bool = cfg!(any(target_os = "windows", target_os = "macos"));
+
+#[cfg(all(test, any(target_os = "windows", target_os = "macos")))]
+mod tests {
+    use cpal::ErrorKind;
+
+    #[test]
+    fn glitches_dont_end_a_recording() {
+        assert!(imp::harmless(ErrorKind::Xrun));
+        assert!(imp::harmless(ErrorKind::DeviceChanged));
+        assert!(!imp::harmless(ErrorKind::DeviceNotAvailable));
+        assert!(!imp::harmless(ErrorKind::StreamInvalidated));
+        assert!(!imp::harmless(ErrorKind::BackendError));
+    }
+
+    use super::imp;
+}

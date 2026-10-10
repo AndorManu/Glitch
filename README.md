@@ -5,8 +5,8 @@ doubles as a small, private AI assistant. Click Glitch to chat. Glitch runs a
 small AI model **on your own computer** with [Ollama](https://ollama.com), so
 your chats don't leave your machine.
 
-This is **milestone 1: the foundation** (plus voice commands). "Chaos mode"
-and Claude Code notifications are planned for later and are not in this build.
+This is **milestone 1: the foundation** (plus voice commands and chaos
+mode). Claude Code notifications are planned for later.
 
 What works in this milestone:
 
@@ -29,13 +29,19 @@ What works in this milestone:
 * Glitch can **open web pages**, **open installed apps**, **search your files
   by name** and **open files or folders**. Anything except opening a web page
   asks you first (an Allow / Nope bubble).
+* **He can see your screen** (when you ask about it) and chain several steps:
+  "what does this error mean?", "summarise this page", "what's 15% of the
+  number I copied?", "find my latest screenshot and open it", "remind me in 10
+  minutes". See [Seeing the screen and multi-step help](#seeing-the-screen-and-multi-step-help).
 * **Memory**: he remembers facts you tell him, compacts long chats into a
   short summary, keeps a one-line-per-day journal, and continues the chat
   after a restart. You can see and delete everything in Settings → Memory.
 * **Voice commands**: hold the mic button in the chat (or Ctrl+Shift+Space /
   Cmd+Shift+Space anywhere), talk, let go. Speech-to-text runs on your
   computer too (see [Voice commands](#voice-commands)).
-* Settings: choose the model, walking on/off, voice, memory, clear chat, quit.
+* **Chaos mode** (on by default, gentle; tray "Chaos mode" or Settings): see
+  [Chaos mode](#chaos-mode).
+* Settings: choose the model, walking on/off, chaos mode, voice, memory, clear chat, quit.
 
 ---
 
@@ -53,7 +59,15 @@ You need these once (all free):
 5. **Git**: <https://git-scm.com/download/win>.
 6. **CMake and LLVM** (to build the speech-to-text engine, whisper.cpp): in
    PowerShell run `winget install Kitware.CMake LLVM.LLVM`, then open a new
-   PowerShell window.
+   PowerShell window. (CMake builds whisper.cpp; LLVM provides `libclang`,
+   which whisper-rs uses to read whisper.cpp's C header. If LLVM lives
+   somewhere other than `C:\Program Files\LLVM`, set `LIBCLANG_PATH` to the
+   folder containing `libclang.dll`.)
+7. **Keep the folder path short**, e.g. `C:\dev\Glitch`. whisper.cpp's CMake
+   build creates deeply nested folders under `target\`, and MSBuild fails
+   with `error MSB6003` once a path passes 260 characters (it happened from a
+   folder like `C:\Users\<you>\CodingProjects\Glitch\.claude\worktrees\<id>`).
+   Alternatively set a short build folder: `$env:CARGO_TARGET_DIR="C:\gt"`.
 
 Then, in a new **PowerShell** window:
 
@@ -71,6 +85,13 @@ and on first run the setup panel opens next to it.
 
 To build a normal installer instead: `npm run tauri build`. The installer ends
 up in `target\release\bundle\nsis\` (named like `Glitch_0.1.0_x64-setup.exe`).
+
+If the build fails in `whisper-rs-sys` with `MSB6003 ... Could not find a part
+of the path`, the folder path is too long for MSBuild (260 characters): clone
+into a short folder (e.g. `C:\src\Glitch`) or set a short build folder first:
+`$env:CARGO_TARGET_DIR = "C:\gt"` (the installer is then in
+`C:\gt\release\bundle\nsis\`). `Unable to find libclang` means LLVM (step 6)
+is missing or `LIBCLANG_PATH` doesn't point at its `bin` folder.
 
 ## 2. Run it on macOS
 
@@ -133,7 +154,7 @@ Intel). These builds are **not code-signed**, so:
   **let go**. Glitch writes down what you said and answers as if you typed it
   (Allow / Nope questions work the same).
 * **Tap** the button instead to talk hands-free: Glitch stops listening by
-  himself about a second after you stop talking (tap again to stop early).
+  himself under a second after you stop talking (tap again to stop early).
 * From anywhere: **hold Ctrl+Shift+Space** (Windows) / **Cmd+Shift+Space**
   (macOS). The bubble opens and Glitch listens until you let go. A quick tap
   works hands-free here too. Esc cancels.
@@ -171,12 +192,173 @@ after the last use.
   explains this and opens the page).
 * If another app already uses the shortcut, Settings → Voice says so; the
   mic button still works.
+* While voice is on, Glitch owns Ctrl+Shift+Space everywhere on Windows, so
+  apps that use it themselves (Visual Studio's Parameter Info, Excel's
+  "select all objects") won't see it. Turning voice off in Settings gives it
+  back.
 
 **Limits**: voice isn't available on Linux builds, and on x86 PCs without
 AVX2 (roughly older than 2013, and some budget Celeron/Pentium chips) voice
 is switched off instead of risking a crash. A future signed/notarized macOS
 build with the hardened runtime will also need the
 `com.apple.security.device.audio-input` entitlement.
+
+## Seeing the screen and multi-step help
+
+Ask Glitch about what you're looking at and he takes one screenshot, looks at
+it with the (local) vision model and answers: he quotes the error text, says
+where it is and gives the fix. While he looks, the bubble shows
+"👀 looking at your screen"; while he works, a short step list ("Reading your
+clipboard ✓", "Calculating 15% of 1299"); the answer streams in as it is
+written.
+
+Try:
+
+* "what's on my screen?", "what does this error mean?", "why does my code
+  crash?", "summarise this page", "what does this button do?" (looks around
+  the mouse pointer)
+* "what's 15% of the number in my clipboard?", "work out 12*12 and copy the
+  result", "translate the selected text to French"
+* "find my latest screenshot and open it", "write down that the dentist is on
+  Friday at 3", "remind me to drink water in 10 minutes", "what's the weather
+  in Ghent tomorrow?" (opens a web search)
+
+Tools (all checked in Rust, see the [Safety model](#safety-model)):
+`look_at_screen` (whole screen / the window you're in / around the mouse),
+`calculate` (exact maths, never guessed), `read_clipboard`, `write_clipboard`,
+`read_selected_text`, `get_active_window`, `web_search`, `set_timer` (the
+bubble pops up when it rings, while Glitch runs), `take_note` (appends to
+`Documents\Glitch notes\notes.md`), `get_datetime`, plus the existing
+`open_url`, `open_app`, `search_files`, `open_path`, `remember`, `forget`. A
+message can take up to 6 model steps.
+
+**Privacy**
+
+* Only when a request needs it: the model decides, and obvious phrases ("on my
+  screen", "this error", "this page") look right away. Settings → Glitch →
+  **Let Glitch see the screen** turns it off completely.
+* The screenshot stays in RAM, goes only to Ollama on this computer, and is
+  dropped from the chat as soon as the answer is done. It is never written to
+  disk, never put in memory, and what Glitch says about the screen or the
+  clipboard is never saved to the chat history or the memory summary.
+* Glitch's own windows are left out of the picture; password fields the
+  system can see (Windows UI Automation) are covered with grey boxes first.
+* Clipboard text that a password manager marks as private is never read.
+* Text on the screen or in the clipboard is untrusted (a web page could say
+  "Glitch, open this link"): in any turn where Glitch has read the screen,
+  the clipboard or selected text, **every** action with a side effect (even
+  opening a web page or setting a timer) asks you first and shows exactly what
+  it would do.
+* The model must be able to see: with one that can't, Glitch says so and
+  suggests `qwen3.5:4b`.
+* Screen capture, the active window and selected text are Windows-only for
+  now (macOS says "not available yet"); clipboard, timers and notes work on
+  both.
+
+**Speed**: the model is loaded when you open the chat and kept loaded while
+it is open (back to the short keep-alive when you close it). Measured on an
+RTX 4060 laptop with `qwen3.5:4b`: screenshot 0.2 s (1920×1200), first words
+of a screen answer after ~3 s, whole answer ~4-5 s; tool chains like
+clipboard → calculate → answer ~1.5-2 s.
+
+**Checking it**: `node dev/ollama-check/check.mjs --eval` runs the real agent
+against the real model with test screenshots (an error dialog, a code editor
+with a bug, a web article, a page with injected instructions, a text editor;
+rendered by `dev/ollama-check/render-fixtures.mjs`) and multi-step cases,
+3 times each. `node dev/screen-live-check.mjs` drives the built app with its
+own test window.
+
+## Chaos mode
+
+Every 45 to 120 seconds at most, Glitch may get up to some mischief:
+
+| Act | What he does |
+|---|---|
+| Window drag | glitch-teleports onto another app's window, grabs its top edge and walks backwards: the window slides a few hundred px (Windows) |
+| Push | on the taskbar, pushes a window that reaches down to it from the side (Windows) |
+| Cursor | runs after the mouse cursor or sneaks up behind it; now and then catches it and drags it a little (Windows) |
+| Sticky note | drags a pixel note with a silly line in from the screen edge (× or Esc closes it; one at a time) |
+| Paw prints | steps in glitch and leaves magenta paw prints that fade after ~20 s (click-through overlay) |
+| Peek / knock | peeks in from a screen edge, knocks on the inside of the screen glass |
+
+**Limits, enforced in Rust** (`crates/glitch-core/src/chaos.rs`,
+`src-tauri/src/chaos.rs`): other apps' windows are only ever *moved*
+(`SetWindowPos` with no-size / no-z-order / no-activate): never resized,
+closed, minimised, focused or typed into, and always kept fully on the work
+area. At most one window grab every 4 minutes (max 420 px, 9 s) and one
+cursor grab every 2 minutes (max 260 px, 1.5 s). Nothing starts unless the
+keyboard and mouse have been idle for 4 s, and any input ends a grab at once;
+moving the mouse against him makes him let go of the cursor. Skipped:
+fullscreen apps / games / presentations (`SHQueryUserNotificationState`),
+maximised, elevated (admin), cloaked, tool and system windows, the window you
+work in, Glitch's own windows. Everything stops the moment chaos or walking is
+switched off or the chat opens. No files are ever touched. macOS: only the
+harmless acts (notes, paw prints, peeking, chasing); moving other apps'
+windows there would need the Accessibility permission.
+
+**Playful moves** (part of his normal roaming, each with a 1.5 to 2.5 minute
+cooldown): `copter` (climbs a screen edge to the top, lets go and floats down
+with his tail spinning, or glides like a flying squirrel), `hangOn` (hangs off
+the end of a window top by his paws, pulls himself up), `slideDown` (slides
+down a window's side to the taskbar), `trampoline` (bounces on the taskbar,
+higher each time, ending in a flip), `fish` (fishes from a window top),
+`wallJump` (zig-zags up between two windows' sides onto the lower top), and
+the window tops he sits on get `sit_edge_swing`. New art names are used when
+they exist, with fallbacks in `src/mascot/chaos.ts` (`ANIM_FALLBACKS`).
+
+**Standing on windows**: he watches only the window he stands on
+(`SetWinEventHook` on Windows, a 30 Hz poll elsewhere, nothing otherwise). He
+rides along slow moves, the window slides under him on a fast yank if it's
+still under his feet, and he falls for real (flailing, splat or landing) when
+it jumps away, drops away, is dragged far by hand, minimised, closed or
+covered. Only window tops at least 140 px long count, his feet sit exactly on
+the edge, with a 2 px contact shadow.
+
+**Trying it out** (debug builds): `GLITCH_CHAOS_DEBUG=window` (or `push`,
+`chase`, `note`, `paws`, `peek`, `knock`, `perch:<window handle>`, or any
+behaviour such as `copter`, `hangOn`, `slideDown`, `trampoline`, `fish`,
+`wallJump`; comma-separated for a sequence 6 s apart) makes Glitch do that 8 s
+after start and every 25 s; `GLITCH_CHAOS_FAST=1` shortens the rate limits to
+5 s. In `npm run tauri dev` the console also has `__glitch.chaos("note")` and
+`__glitch.play("copter")`.
+
+---
+
+## Update me
+
+Glitch tells you when things happen. Settings > Features > Update me has a
+switch for each part:
+
+| Part | Default | What it does |
+|---|---|---|
+| Scripts can ping me | on | A local endpoint on `127.0.0.1` (random port, per-install token in `%APPDATA%\dev.glitch.companion\endpoint.json`). `glitch.exe --notify "build done" [--body ..] [--level success\|warning\|error] [--source ..]` from any script; Glitch knocks on the screen, holds up a sign and says it. Browser requests (Origin header), a wrong Host or token are refused; 20 events a minute at most. |
+| Claude Code buddy | off | "Connect Claude Code..." shows the exact hooks first, then adds `Stop` and `Notification` hooks to `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`) running `"<glitch.exe>" --glitch-claude-hook`. Other settings and hooks stay; one private backup (`settings.json.glitch-backup`) sits next to it; a file that isn't valid JSON is never touched. When a session finishes or needs you, Glitch runs over, knocks, holds "Claude Code is done" / "needs you" and the bubble names the project (the folder of the hook's `cwd`). "Disconnect" removes only Glitch's entries. |
+| What did I miss? | off | Reads Windows' notification feed every 4 s, groups by app ("3 WhatsApp, 1 Teams" on a sign), click Glitch for one-line summaries. Banking, payment, password and authenticator apps are never read (plus your own list), one-time codes and long numbers are hidden first, texts stay in RAM (24 h max). The summary call has no tools and its JSON is validated in Rust; if it is unusable a plain summary is shown. Quiet mode: no sign, you hear it when you open the chat. Windows only. |
+| Reminders | on | "Remind me to call mum at 5" / "tomorrow 9am" / "friday at noon" (the `set_reminder` tool; the time is parsed in Rust). Saved in `reminders.json`, kept after a restart. Glitch nags every 10 min (Done / Snooze 10 min) and gives up after the 4th time. Listed and deletable in Settings. |
+| Daily briefing | on | The first chat of the day: time, weather (Open-Meteo, no key, for the town you pick), today's reminders and open `- [ ]` to-dos from the notes file. Email and calendar have slots for later. |
+
+Outside text (script events, Claude Code messages, notifications) is only
+ever shown in the bubble; it never enters the chat agent's context, so it
+can't make Glitch open, send or change anything.
+
+**Notification access and package identity.** Microsoft documents
+`UserNotificationListener` as needing package identity (a sparse package).
+On this machine (Windows 11 26200, unpackaged exe) `GetAccessStatus` returns
+`Allowed` and toasts can be read, so no package is needed here; access follows
+Settings > Privacy & security > Notifications ("Notification access"). If
+another Windows build reports `Denied`/unavailable, the card says so and the
+feature stays quiet; the fix there is a sparse package: an `AppxManifest.xml`
+with the `userNotificationListener` capability and `allowExternalContent`,
+registered with `winapp create-debug-identity glitch.exe` (dev) or a signed
+sparse MSIX registered by the installer (release).
+
+Animations requested by name (fallbacks while the art lands, see
+`src/mascot/update-act.ts`): `knock_screen` (-> chaos knock -> `startled`),
+`hold_sign` (-> `happy`), `run` (-> `jump`). The sign's text is drawn over
+the canvas, so the sprite only needs an empty board.
+
+Real-app check (own identifier, temp Claude Code dir, fake notification feed,
+dry-run actions): `node dev/update-me-check.mjs <target>/debug/glitch.exe`.
 
 ---
 
@@ -308,8 +490,8 @@ been measured yet**. See the checklist.
 
 ## Safety model
 
-The AI can **only** call four tools, and every call is checked in Rust before
-anything happens (the UI can't skip these checks):
+Every tool call is checked in Rust before anything happens (the UI can't skip
+these checks). The original tools:
 
 | Tool | Runs without asking? | Checks |
 |---|---|---|
@@ -319,7 +501,15 @@ anything happens (the UI can't skip these checks):
 | `open_path` | asks first | must exist inside your home or user folders (after resolving `..` and symlinks); programs, scripts, installers, shortcuts, disk images and `.app` bundles are refused, as are files marked executable |
 | `remember` / `forget` | yes (only Glitch's own notes) | always shown as a chip, visible and deletable in Settings → Memory; passwords, PINs and long numbers are refused |
 
-There is no tool to delete, move, rename or edit files and no shell access.
+The screen-and-helper tools: `look_at_screen`, `read_clipboard`,
+`read_selected_text`, `get_active_window`, `calculate`, `get_datetime`,
+`set_timer` and `web_search` run without asking; `write_clipboard` always
+asks; `take_note` asks the first time. In a turn where Glitch has read the
+screen, clipboard or selected text, everything with a side effect asks (see
+[Privacy](#seeing-the-screen-and-multi-step-help)).
+
+There is no tool to delete, move, rename or edit files, to type or click in
+other apps, and no shell access.
 A confirmation is a one-time ID held in Rust: a stale or replayed "Allow"
 does nothing, and typing a new message cancels any pending request. The rule
 "only URLs run without asking" is one table in `crates/glitch-core/src/confirm.rs`.
@@ -400,6 +590,15 @@ to a tiny code-drawn creature (`src/sprites/glitch.ts`), so the app still works.
   The voice states of the bubble (mic button, listening meter, transcribing,
   model download offer, errors) and Settings → Voice were checked the same
   way, with screenshots.
+* `node dev/voice-check.mjs [tiny|base|small]` (Windows/macOS, not in CI:
+  needs the network, a microphone and ~220 MB of models): speaks four
+  commands with the system's speech synthesizer (SAPI / `say`) in different
+  voices, sample rates and channel counts, then runs the `#[ignore]`d tests
+  in `src-tauri/src/voice/live_check.rs`: real model download with a forced
+  cut-off and resume + SHA-1 check, 2 s of real microphone capture (devices,
+  open time, level), and every phrase through the real voice session with
+  real whisper in hold and hands-free mode, checking the words and printing
+  the latency.
 * CI also **builds the real app on Windows and macOS runners**, which proves
   the OS-specific code compiles and the unit tests pass on both OSes.
 
@@ -420,6 +619,20 @@ off on Linux, so it wasn't part of this run.
 sends Glitch's exact prompts/tools to your local Ollama and checks the model
 calls the right tools (see [dev/ollama-check](dev/ollama-check/check.mjs)).
 
+**Windows end-to-end smoke test:** `node dev/windows-smoke.mjs` launches the
+built `glitch.exe` with WebView2 remote debugging and drives it over the
+DevTools protocol, no mouse needed: first run (setup wizard opens, IPC keeps
+answering), `setup_status`, finishing setup (the bubble page loads), mascot
+clicks toggling the bubble, a real Ollama chat ("open twitter on elon musk's
+page" opens the URL right away, "open the calculator" asks first, small talk,
+remembering a fact, the memory view), the settings panel and quit. After
+every window-creating call it checks `get_settings` still answers within 2 s.
+Your `settings.json`/`memory.json` are moved aside and restored. By default
+opening things is only logged (`GLITCH_DRY_RUN_ACTIONS=1`); pass
+`--real-actions` to really open them. It passed 25/25 on Windows 11 with
+Ollama 0.40 and qwen3.5:4b (2026-10-07), and CI runs it (without Ollama) on
+the Windows build.
+
 **NOT verified (I had no Windows or macOS desktop):**
 
 * transparency (no box/border/white flash behind Glitch) on Windows and macOS
@@ -434,11 +647,18 @@ calls the right tools (see [dev/ollama-check](dev/ollama-check/check.mjs)).
   with a real Ollama model (the smoke test used a mock)
 * macOS file-permission prompts, Gatekeeper/SmartScreen flows
 * actual idle CPU and RAM on Windows/macOS
-* voice with a real microphone and a real speech model on Windows/macOS:
-  recording, the permission prompts, the global shortcut, the real model
-  download from Hugging Face (only tested against a local mock server), and
-  transcription quality/speed (whisper.cpp was only run here with its tiny
-  test model)
+* voice on macOS (everything), and on Windows: talking into a real
+  microphone in the running app, the privacy prompt, and holding the global
+  shortcut in the running app. Verified on Windows 11 (i9-14900HX) with
+  `node dev/voice-check.mjs`: microphone capture (WASAPI, 48 kHz stereo),
+  the real download of tiny + base from Hugging Face cut off at 15 MB and
+  resumed (SHA-1 ok), and SAPI-spoken commands through the real session
+  code (real-time fake mic, VAD, resampling, whisper, language "auto"):
+  all transcribed right with base; text arrives 0.35-0.45 s after you let
+  go (hold) or 1.05-1.3 s after the last word (hands-free, includes the
+  0.8 s silence wait).
+  Opening an idle laptop microphone took ~0.8 s the first time (the device
+  waking up), ~0.15 s after that.
 
 ## Manual test checklist
 

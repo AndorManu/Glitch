@@ -5,10 +5,10 @@ use std::time::Duration;
 
 use glitch_core::agent::{AgentError, Step};
 use glitch_core::ai::ollama::PullProgress;
-use glitch_core::ai::AiError;
+use glitch_core::ai::{AiError, AiProvider};
 use glitch_core::memory::{Fact, JournalEntry, MemoryStore};
 use glitch_core::models::{self, Recommendation};
-use glitch_core::platform::{self, Os, Platform};
+use glitch_core::platform::{self, Os};
 use glitch_core::settings::Settings;
 use glitch_core::world::{self, Ledge, ScreenRect};
 use serde::{Deserialize, Serialize};
@@ -26,7 +26,7 @@ pub struct UiError {
 }
 
 impl UiError {
-    fn new(code: &'static str, message: impl Into<String>) -> Self {
+    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self { code, message: message.into() }
     }
 }
@@ -176,7 +176,9 @@ pub async fn send_message(app: AppHandle, state: State<'_, AppState>, text: Stri
     }
     let model = state.settings().model.ok_or_else(|| UiError::new("no_model", "Pick a model in settings first"))?;
     let _ = app.emit("mood", "thinking");
-    let result = state.agent.lock().await.send(&model, text).await;
+    // Typed or push-to-talk: trusted. Heard after "Hey Glitch": outside content.
+    let origin = crate::voice::origin_of(&app, text);
+    let result = state.agent.lock().await.send_with(&model, text, origin).await;
     let _ = app.emit("mood", mood_after(&result));
     after_turn(&app, &model, &result);
     result.map_err(UiError::from)
@@ -215,7 +217,15 @@ pub async fn confirm_action(
 ) -> Result<Step, UiError> {
     let model = state.settings().model.ok_or_else(|| UiError::new("no_model", "Pick a model first"))?;
     let _ = app.emit("mood", "thinking");
-    let result = state.agent.lock().await.confirm(&model, &id, approved).await;
+    let (result, notes_trusted) = {
+        let mut agent = state.agent.lock().await;
+        let result = agent.confirm(&model, &id, approved).await;
+        (result, agent.notes_trusted())
+    };
+    // The first allowed note: later notes don't ask again (saved).
+    if notes_trusted && !state.settings().notes_trusted {
+        state.update_settings(|s| s.notes_trusted = true);
+    }
     let _ = app.emit("mood", mood_after(&result));
     after_turn(&app, &model, &result);
     result.map_err(UiError::from)
@@ -229,25 +239,79 @@ fn mood_after(result: &Result<Step, AgentError>) -> &'static str {
     }
 }
 
+/// How long the model stays loaded while the chat bubble is open.
+const WARM_KEEP_ALIVE: &str = "10m";
+
+/// The chat bubble is open (called on open and every couple of minutes while
+/// it stays open): load the model now and keep it loaded, so the first answer
+/// doesn't wait for it. Best effort, never an error for the UI.
+#[tauri::command]
+pub async fn warm_model(state: State<'_, AppState>) -> Result<(), UiError> {
+    let Some(model) = state.settings().model else { return Ok(()) };
+    let ollama = state.ollama.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = ollama.warm_up(&model, WARM_KEEP_ALIVE).await {
+            eprintln!("glitch: warming up {model} failed: {e}");
+        }
+    });
+    Ok(())
+}
+
+/// The chat bubble closed: back to the short keep-alive from the settings,
+/// so the model's memory is given back soon (only if it is still loaded:
+/// never load it just for this).
+#[tauri::command]
+pub async fn cool_model(state: State<'_, AppState>) -> Result<(), UiError> {
+    let settings = state.settings();
+    let Some(model) = settings.model else { return Ok(()) };
+    let ollama = state.ollama.clone();
+    tauri::async_runtime::spawn(async move {
+        if ollama.is_loaded(&model).await {
+            let _ = ollama.warm_up(&model, &settings.keep_alive).await;
+        }
+    });
+    Ok(())
+}
+
 /// New chat. With memory on, the old chat is first folded into memory (best
 /// effort: skipped if Ollama is unavailable or slow).
 #[tauri::command]
 pub async fn reset_chat(app: AppHandle, state: State<'_, AppState>) -> Result<(), UiError> {
     let model = state.settings().model;
     let mut agent = state.agent.lock().await;
+    // The chat is cleared either way; problems are reported so the UI can
+    // say what happened instead of failing silently.
+    let mut problem: Option<UiError> = None;
     if let (Some(model), true) = (model, agent.memory().is_some() && !agent.history().is_empty()) {
         // Only if the model is still in RAM: never load gigabytes just to
         // summarise. Otherwise the chat is kept as carry-over instead.
         if state.ollama.is_loaded(&model).await {
-            let _ = tokio::time::timeout(Duration::from_secs(60), agent.compact(&model, true)).await;
+            match tokio::time::timeout(Duration::from_secs(60), agent.compact(&model, true)).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => {
+                    problem = Some(UiError::new(
+                        "chat_not_summarised",
+                        format!("Chat cleared, but I couldn't fold it into my memory first: {e}"),
+                    ))
+                }
+                Err(_) => {
+                    problem = Some(UiError::new(
+                        "chat_not_summarised",
+                        "Chat cleared, but folding it into my memory took too long, so I skipped that.",
+                    ))
+                }
+            }
         } else {
             agent.persist();
         }
     }
     agent.reset();
     agent.persist();
+    if let Some(Err(e)) = agent.memory().map(|m| m.save()) {
+        problem = Some(UiError::new("save_failed", format!("Chat cleared, but I couldn't save my memory: {e}")));
+    }
     let _ = app.emit("memory-changed", ());
-    Ok(())
+    problem.map_or(Ok(()), Err)
 }
 
 #[derive(Serialize)]
@@ -300,8 +364,10 @@ pub fn get_settings(state: State<'_, AppState>) -> Settings {
 pub struct SettingsPatch {
     model: Option<String>,
     movement_enabled: Option<bool>,
+    chaos_enabled: Option<bool>,
     onboarding_done: Option<bool>,
     memory_enabled: Option<bool>,
+    screen_enabled: Option<bool>,
 }
 
 #[tauri::command]
@@ -323,13 +389,22 @@ pub async fn update_settings(
         if let Some(v) = patch.movement_enabled {
             s.movement_enabled = v;
         }
+        if let Some(v) = patch.chaos_enabled {
+            s.chaos_enabled = v;
+        }
         if let Some(v) = patch.onboarding_done {
             s.onboarding_done = v;
         }
         if let Some(v) = patch.memory_enabled {
             s.memory_enabled = v;
         }
+        if let Some(v) = patch.screen_enabled {
+            s.screen_enabled = v;
+        }
     });
+    if let Some(on) = patch.screen_enabled {
+        state.agent.lock().await.set_screen_enabled(on);
+    }
     if let Some(on) = patch.memory_enabled {
         let mut agent = state.agent.lock().await;
         if on && agent.memory().is_none() {
@@ -347,6 +422,9 @@ pub async fn update_settings(
         tauri::async_runtime::spawn(async move {
             let _ = ollama.unload(&old).await;
         });
+    }
+    if !new.chaos_enabled || !new.movement_enabled {
+        crate::chaos::stop_all(&app);
     }
     let _ = app.emit("settings-changed", &new);
     Ok(new)
@@ -387,7 +465,14 @@ pub async fn show_bubble(app: AppHandle) {
 
 #[tauri::command]
 pub fn hide_bubble(app: AppHandle) {
-    windows::hide_bubble(&app);
+    windows::hide_bubble_from_page(&app);
+}
+
+/// The bubble page started its close animation (it calls `hide_bubble` when
+/// done). Until then a click on Glitch reopens the bubble instead of closing it.
+#[tauri::command]
+pub fn bubble_closing() {
+    windows::bubble_closing();
 }
 
 /// The bubble page reports its content height (CSS px); returns where its
@@ -452,6 +537,18 @@ pub struct WorldSnapshot {
     area: ScreenRect,
     scale: f64,
     ledges: Vec<Ledge>,
+    /// Whole frames of the windows that have ledges (for sliding down their
+    /// sides, wall jumps).
+    frames: Vec<WindowFrame>,
+}
+
+#[derive(Serialize)]
+pub struct WindowFrame {
+    id: u64,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
 }
 
 /// Screen edges + other apps' window tops (see glitch_core::world).
@@ -464,15 +561,25 @@ pub async fn world_snapshot(app: AppHandle) -> Result<WorldSnapshot, UiError> {
     let area = ScreenRect { x: area.x, y: area.y, w: area.w, h: area.h };
     // Room above an edge for Glitch to stand (his body is ~90 CSS px tall).
     let headroom = (120.0 * scale) as i32;
-    let min_width = (90.0 * scale) as i32;
+    // Only edges long enough to read as something to stand on.
+    let min_width = (140.0 * scale) as i32;
     let windows =
         tauri::async_runtime::spawn_blocking(move || crate::world_native::app_windows(scale)).await.unwrap_or_default();
-    Ok(WorldSnapshot { area, scale, ledges: world::ledges(&windows, area, headroom, min_width) })
+    let ledges = world::ledges(&windows, area, headroom, min_width);
+    let frames = windows
+        .iter()
+        .filter(|w| ledges.iter().any(|l| l.id == w.id))
+        .map(|w| WindowFrame { id: w.id, x: w.rect.x, y: w.rect.y, w: w.rect.w, h: w.rect.h })
+        .collect();
+    Ok(WorldSnapshot { area, scale, ledges, frames })
 }
 
 /// Which part of the mascot window is Glitch's body (CSS px); `None` = all.
 #[tauri::command]
 pub fn set_hitbox(app: AppHandle, hitbox: State<'_, crate::hover::Hitbox>, rect: Option<crate::hover::LocalRect>) {
+    if rect.is_some() {
+        *hitbox.last_body.lock().unwrap() = rect;
+    }
     *hitbox.body.lock().unwrap() = rect;
     if rect.is_none() {
         // Dragging starts now: catch the mouse immediately, don't wait for the poller.

@@ -46,6 +46,10 @@ export async function renderVoice(root: HTMLElement): Promise<void> {
     root.replaceChildren(h("p", { class: "hint" }, `Couldn’t load voice settings: ${asUiError(e).message}`));
     return;
   }
+  if (!st) {
+    root.replaceChildren(h("p", { class: "hint" }, unavailableText(null)));
+    return;
+  }
   rerender = () => void renderVoice(root);
   live = null;
   const update = (patch: Parameters<typeof voiceApi.updateSettings>[0]) =>
@@ -146,7 +150,7 @@ export async function renderVoice(root: HTMLElement): Promise<void> {
     ...otherRows,
     h("div", { class: "voice-field" }, h("span", { class: "voice-label" }, "I speak"), h("label", { class: "select" }, lang)),
     h("div", { class: "voice-gap" }),
-    toggleSwitch("Read replies aloud", "Short replies only, with your computer’s own voice.", st.speak_replies, (on) => update({ speak_replies: on })),
+    toggleSwitch("Read replies aloud", "Short replies only. Glitch can also get his own voice: see Features below.", st.speak_replies, (on) => update({ speak_replies: on })),
   );
   root.replaceChildren(...parts.filter((p): p is Node => p !== null));
 }

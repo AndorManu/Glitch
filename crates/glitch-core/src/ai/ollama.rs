@@ -13,20 +13,26 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::{AiError, AiProvider, ChatRequest, Message, Role, ToolCall};
+use super::{AiError, AiProvider, ChatRequest, Message, OnText, ToolCall};
 
 pub const DEFAULT_URL: &str = "http://127.0.0.1:11434";
 /// How long Ollama keeps the model in RAM after the last message.
 /// Short on purpose: Glitch should give memory back quickly.
 pub const DEFAULT_KEEP_ALIVE: &str = "2m";
-/// Context window we ask for. Smaller context = less RAM. A desktop
-/// companion's chats are short, so 4096 tokens is plenty.
-pub const DEFAULT_NUM_CTX: u32 = 4096;
+/// Context window we ask for. Smaller context = less RAM, but a screenshot
+/// alone is ~1000 tokens and the tool list ~1500, so 8192. Always the same
+/// value (also when warming up): a different `num_ctx` makes Ollama reload
+/// the model, which costs seconds.
+pub const DEFAULT_NUM_CTX: u32 = 8192;
 
 const QUICK_TIMEOUT: Duration = Duration::from_secs(3);
 /// First message may need to load the model from disk; slow PCs need time.
 const CHAT_TIMEOUT: Duration = Duration::from_secs(300);
-const PULL_STALL_TIMEOUT: Duration = Duration::from_secs(60);
+/// While streaming a reply: no new piece for this long = stalled.
+const STREAM_STALL_TIMEOUT: Duration = Duration::from_secs(120);
+/// No bytes at all for this long = stalled. Generous: after a big blob is
+/// downloaded Ollama verifies its sha256 without sending anything.
+const PULL_STALL_TIMEOUT: Duration = Duration::from_secs(180);
 
 pub struct OllamaClient {
     base_url: String,
@@ -180,7 +186,7 @@ impl OllamaClient {
             Ok(done)
         };
         let mut success = false;
-        // A stalled download must not hang forever: no data for a minute = error.
+        // A stalled download must not hang forever: no data for 3 minutes = error.
         while let Some(chunk) = tokio::time::timeout(PULL_STALL_TIMEOUT, resp.chunk())
             .await
             .map_err(|_| AiError::TimedOut)?
@@ -239,11 +245,15 @@ impl OllamaClient {
 
     /// Builds the `/api/chat` body. Public for tests.
     pub fn chat_body(&self, req: &ChatRequest<'_>, disable_thinking: bool) -> Value {
+        self.chat_body_with(req, disable_thinking, false)
+    }
+
+    fn chat_body_with(&self, req: &ChatRequest<'_>, disable_thinking: bool, stream: bool) -> Value {
         let messages: Vec<Value> = req.messages.iter().map(wire_message).collect();
         let mut body = json!({
             "model": req.model,
             "messages": messages,
-            "stream": false,
+            "stream": stream,
             "keep_alive": self.keep_alive,
             "options": { "num_ctx": self.num_ctx },
         });
@@ -271,6 +281,21 @@ impl OllamaClient {
     }
 }
 
+impl OllamaClient {
+    /// The request body with thinking/tools adjusted to what the model
+    /// supports (`/api/show`). If that fails we assume no thinking and tool
+    /// support rather than failing the whole chat.
+    async fn prepared_body(&self, req: ChatRequest<'_>, stream: bool) -> Value {
+        let caps = self.capabilities(req.model).await.ok();
+        let has = |c: &str| caps.as_ref().map(|caps| caps.iter().any(|x| x == c));
+        let thinking = has("thinking").unwrap_or(false);
+        // Ollama rejects `tools` for models without tool support. Such a model
+        // can still chat; it just can't open things.
+        let req = if has("tools") == Some(false) { ChatRequest { tools: &[], ..req } } else { req };
+        self.chat_body_with(&req, thinking, stream)
+    }
+}
+
 #[async_trait]
 impl AiProvider for OllamaClient {
     fn name(&self) -> &'static str {
@@ -278,17 +303,8 @@ impl AiProvider for OllamaClient {
     }
 
     async fn chat(&self, req: ChatRequest<'_>) -> Result<Message, AiError> {
-        // Only send `think` to models that support it. If /api/show fails we
-        // just leave it out rather than failing the whole chat.
-        // If /api/show fails we just assume no thinking and tool support,
-        // rather than failing the whole chat.
-        let caps = self.capabilities(req.model).await.ok();
-        let has = |c: &str| caps.as_ref().map(|caps| caps.iter().any(|x| x == c));
-        let thinking = has("thinking").unwrap_or(false);
-        // Ollama rejects `tools` for models without tool support. Such a model
-        // can still chat; it just can't open things.
-        let req = if has("tools") == Some(false) { ChatRequest { tools: &[], ..req } } else { req };
-        let body = self.chat_body(&req, thinking);
+        let model = req.model;
+        let body = self.prepared_body(req, false).await;
         let resp = self
             .http
             .post(self.url("/api/chat"))
@@ -297,19 +313,115 @@ impl AiProvider for OllamaClient {
             .send()
             .await
             .map_err(transport_error)?;
-        let parsed: ChatResponse = parse_json(resp, Some(req.model)).await?;
+        let parsed: ChatResponse = parse_json(resp, Some(model)).await?;
         let msg = parsed.message.ok_or_else(|| AiError::InvalidResponse("no message".into()))?;
-        let tool_calls = msg
-            .tool_calls
-            .into_iter()
-            .map(|c| ToolCall { name: c.function.name, arguments: normalise_arguments(c.function.arguments) })
-            .collect();
-        Ok(Message {
-            role: Role::Assistant,
-            content: strip_think_tags(&msg.content).trim().to_string(),
-            tool_calls,
-            tool_name: None,
-        })
+        Ok(assistant_message(&msg.content, msg.tool_calls))
+    }
+
+    async fn chat_streaming(&self, req: ChatRequest<'_>, on_text: &OnText<'_>) -> Result<Message, AiError> {
+        let model = req.model;
+        let body = self.prepared_body(req, true).await;
+        let started = std::time::Instant::now();
+        let mut resp = self.http.post(self.url("/api/chat")).json(&body).send().await.map_err(transport_error)?;
+        if !resp.status().is_success() {
+            return Err(error_from_response(resp, Some(model)).await);
+        }
+        let mut stream = StreamState::default();
+        let mut buf: Vec<u8> = Vec::new();
+        loop {
+            if started.elapsed() > CHAT_TIMEOUT {
+                return Err(AiError::TimedOut);
+            }
+            let chunk = tokio::time::timeout(STREAM_STALL_TIMEOUT, resp.chunk())
+                .await
+                .map_err(|_| AiError::TimedOut)?
+                .map_err(transport_error)?;
+            let Some(chunk) = chunk else { break };
+            buf.extend_from_slice(&chunk);
+            while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+                let line: Vec<u8> = buf.drain(..=pos).collect();
+                stream.line(&line, on_text)?;
+            }
+        }
+        stream.line(&buf, on_text)?;
+        if !stream.done {
+            return Err(AiError::InvalidResponse("the reply stopped half-way".into()));
+        }
+        Ok(assistant_message(&stream.content, stream.tool_calls))
+    }
+
+    async fn supports_vision(&self, model: &str) -> Option<bool> {
+        self.capabilities(model).await.ok().map(|c| c.iter().any(|c| c == "vision"))
+    }
+
+    async fn warm_up(&self, model: &str, keep_alive: &str) -> Result<(), AiError> {
+        // An empty `messages` list only loads the model (documented for
+        // /api/chat). Same num_ctx as real chats, or the next chat reloads it.
+        let resp = self
+            .http
+            .post(self.url("/api/chat"))
+            .json(&json!({
+                "model": model,
+                "messages": [],
+                "keep_alive": keep_alive,
+                "options": { "num_ctx": self.num_ctx },
+            }))
+            .timeout(CHAT_TIMEOUT)
+            .send()
+            .await
+            .map_err(transport_error)?;
+        let _: Value = parse_json(resp, Some(model)).await?;
+        Ok(())
+    }
+}
+
+fn assistant_message(content: &str, tool_calls: Vec<WireToolCall>) -> Message {
+    let tool_calls = tool_calls
+        .into_iter()
+        .map(|c| ToolCall { name: c.function.name, arguments: normalise_arguments(c.function.arguments) })
+        .collect();
+    Message { tool_calls, ..Message::assistant(strip_think_tags(content).trim()) }
+}
+
+/// Collects a streamed `/api/chat` reply (one JSON object per line).
+#[derive(Default)]
+struct StreamState {
+    content: String,
+    tool_calls: Vec<WireToolCall>,
+    /// How much of the visible text was already passed on.
+    shown: usize,
+    done: bool,
+}
+
+impl StreamState {
+    fn line(&mut self, line: &[u8], on_text: &OnText<'_>) -> Result<(), AiError> {
+        #[derive(Deserialize)]
+        struct Line {
+            message: Option<WireMessage>,
+            #[serde(default)]
+            done: bool,
+            error: Option<String>,
+        }
+        if line.iter().all(u8::is_ascii_whitespace) {
+            return Ok(());
+        }
+        let l: Line = serde_json::from_slice(line).map_err(|e| AiError::InvalidResponse(e.to_string()))?;
+        if let Some(err) = l.error {
+            return Err(AiError::Api { status: 200, message: err });
+        }
+        if let Some(m) = l.message {
+            self.content.push_str(&m.content);
+            self.tool_calls.extend(m.tool_calls);
+            // Pass on new visible text (never a leaked <think> block).
+            let visible = strip_think_tags(&self.content);
+            let visible = visible.trim_start();
+            if visible.len() > self.shown && visible.is_char_boundary(self.shown) {
+                on_text(&visible[self.shown..]);
+                self.shown = visible.len();
+            }
+        }
+        self.done |= l.done;
+        Ok(())
     }
 }
 
@@ -349,6 +461,9 @@ fn wire_message(m: &Message) -> Value {
     }
     if let Some(name) = &m.tool_name {
         v["tool_name"] = json!(name);
+    }
+    if !m.images.is_empty() {
+        v["images"] = json!(m.images);
     }
     v
 }

@@ -1,0 +1,6 @@
+#!/bin/bash
+# usage: gen.sh <name> <frames> <view> <motion description>
+name=$1; n=$2; view=$3; desc=$4
+prompt="Use your image generation tool. The attached image is the official character sheet of Glitch, a chunky pixel-art raccoon mascot (grey-brown fur, cream belly and muzzle, dark eye mask, thick black outline, striped tail, pink inner ears, a magenta glitch square over his right eye with small magenta pixel bits). Create a SPRITE SHEET animation of exactly this character in exactly the same pixel art style: same pixel size, same proportions, same colours and shading, same level of detail, same thick black outline. ${view}. One horizontal row of exactly ${n} evenly spaced frames on a plain flat pure white background, nothing else: no text, no labels, no numbers, no ground shadows. Keep the character the same size in every frame and the feet on one common baseline (unless the motion is airborne). Animation: ${desc}. Consecutive frames must differ only a little so it plays as smooth animation at 12 fps; make sure arms/paws, legs/feet, ears, tail and facial expression all actually move. Save the image into the current directory as ${name}.png and reply with the file path."
+codex exec --skip-git-repo-check -s workspace-write -C . -i ref.png -- "$prompt" > "log-${name}.txt" 2>&1
+echo "$name done: $(ls -la ${name}.png 2>&1)"

@@ -8,6 +8,8 @@
 //! * [`vad`]: a tiny energy-based voice detector (auto-stop on silence)
 //! * [`transcript`]: cleaning up whisper output
 //! * [`models`]: which speech model to use, where to download it from
+//! * [`wake`]: the optional "Hey Glitch" wake word (utterances + matching)
+//! * [`tts`]: Glitch's own read-aloud voice (Piper files, pitch, playback)
 //! * [`languages`](LANGUAGES): the language setting
 //!
 //! Push-to-talk only: nothing records unless the user holds the mic button or
@@ -16,7 +18,9 @@
 pub mod audio;
 pub mod models;
 pub mod transcript;
+pub mod tts;
 pub mod vad;
+pub mod wake;
 
 /// Whisper wants 16 kHz mono f32.
 pub const SAMPLE_RATE: u32 = 16_000;
