@@ -362,6 +362,52 @@ dry-run actions): `node dev/update-me-check.mjs <target>/debug/glitch.exe`.
 
 ---
 
+## Let Glitch control apps (Hands)
+
+Settings > Features > "Let Glitch control apps" (off by default). For tasks like
+"open Spotify and play my first playlist" or "open Notepad and type hello" he
+plans, acts one step at a time, checks the result after every action and
+retries a different way (at most 2 retries per step), up to 15 model calls and
+90 seconds. The bubble shows the plan and each step live. Windows only; macOS
+says "not available yet".
+
+Tools: `wait_for_window`, `focus_window` (restores and verifies it is in
+front), `read_ui` (UI Automation snapshot, at most 60 ranked elements with
+`[id]`s), `ui_click`, `ui_set_text`, `ui_press` (whitelisted keys only),
+`ui_scroll`, `media_control` (system media session), `open_link` (`spotify:`,
+`ms-settings:`, ...). Every action result carries a `verify` block (what the
+window shows now, whether it changed, a dialog in front, what is playing).
+Chromium apps like Spotify get their accessibility tree switched on first.
+
+Safety:
+
+- The first control action on an app asks "Control <App> for this" (Allow
+  once / Nope); opening an app inside a task asks once for both.
+- While acting, a "Glitch is driving <App>, press Esc to stop" banner is up.
+  Esc, a click, the wheel or moving the mouse away stops him at once (a
+  low-level hook that tells his own `SendInput` from yours).
+- Right before every click or keystroke he re-checks the window, process,
+  element, password flag, integrity level and the secure desktop.
+- Never: password fields, password managers, banking, terminals and shells,
+  Explorer/Run, IDEs, admin tools, elevated windows, browser address bars.
+  Secrets (cards, keys, tokens, also when split over several calls) are
+  never typed. Sending, buying, deleting, "Allow/Install/OK" buttons and
+  Enter in chat apps get their own card with the exact target or text; text
+  the user didn't say gets a card too.
+- App text is untrusted outside content like a screenshot: it taints the
+  context and every later side effect asks.
+
+Optional "Smarter brain for app control" picks a bigger installed model for
+these tasks only.
+
+Checks: `cargo run -p glitch-core --example live_eval -- --only apps --runs 5`
+(fake Spotify/Notepad/Discord desktop), `cargo test -p glitch hands_live --
+--ignored --nocapture` (real window, real UI Automation, a Notepad stand-in
+the test starts itself and limits Glitch to), `node dev/hands-check.mjs`
+(real debug app with its own identifier, screenshots and a GIF).
+
+---
+
 ## Why Tauri (and not Electron)
 
 | | **Tauri 2** (chosen) | Electron |
