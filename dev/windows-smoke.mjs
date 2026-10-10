@@ -342,6 +342,7 @@ async function main() {
   // animation's late hide_bubble doesn't close it again.
   await step("click during close animation reopens", async () => {
     await bubble.invoke("bubble_closing");
+    await sleep(500); // two clicks within 380 ms are a double-click: that starts Fetch instead
     await mascot.invoke("mascot_clicked");
     const reopened = await visible("bubble");
     await bubble.invoke("hide_bubble"); // the interrupted animation finishing
@@ -349,6 +350,7 @@ async function main() {
     await bubble.invoke("bubble_closing");
     await bubble.invoke("hide_bubble"); // a normal close still works
     const closed = (await visible("bubble")) === false;
+    await sleep(500);
     await mascot.invoke("mascot_clicked");
     record("click during close animation reopens", reopened === true && still === true && closed, `reopened=${reopened} stays=${still} normal close=${closed}`);
   });

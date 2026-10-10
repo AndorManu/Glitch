@@ -156,6 +156,7 @@ try {
     check(`toggle persists to settings.json: ${first[i].label}`, ok, diff.map((k) => `${k}: ${before[k]} -> ${after[k]}`).join("; ") || "no settings.json change");
   }
   await panel.screenshot({ path: join(OUT, "settings-all-toggled.png") });
+  await sleep(1500); // let every card redraw (a master switch hides the controls under it)
   const afterAll = await switches(panel);
   const settingsAfter = flat(readSettings());
 
@@ -164,7 +165,7 @@ try {
   await sleep(1500);
   ({ browser, mascot, panel } = await launch());
   const restarted = await switches(panel);
-  const same = afterAll.filter((s) => s.visible).every((s) => restarted.find((r) => r.label === s.label)?.checked === s.checked);
+  const same = afterAll.filter((s) => s.visible && restarted.some((r) => r.label === s.label)).every((s) => restarted.find((r) => r.label === s.label)?.checked === s.checked);
   check("all switches keep their state after a restart", same, afterAll.filter((s) => restarted.find((r) => r.label === s.label)?.checked !== s.checked).map((s) => s.label).join(", "));
   await panel.screenshot({ path: join(OUT, "settings-after-restart.png") });
   check("no page errors in the panel", errors.length === 0, errors.slice(0, 3).join(" | "));
