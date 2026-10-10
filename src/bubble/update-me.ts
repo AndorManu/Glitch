@@ -49,12 +49,22 @@ export class UpdateMe {
     if (next) this.show(next);
   }
 
-  /** The bubble opened: anything missed, else the day's briefing. */
-  async opened(): Promise<void> {
+  /** The bubble opened: anything missed (true if one was shown). */
+  async showPending(): Promise<boolean> {
     const pending = await updateMeApi.pending().catch(() => null);
-    if (pending) return this.show(pending);
+    if (pending) this.show(pending);
+    return !!pending;
+  }
+
+  /** The day's briefing (once a day, Rust decides). */
+  async showBriefing(): Promise<void> {
     const text = await updateMeApi.briefing().catch(() => null);
     if (text) this.show(briefingSpeech(text, new Date().toDateString()));
+  }
+
+  /** The bubble opened: anything missed, else the day's briefing. */
+  async opened(): Promise<void> {
+    if (!(await this.showPending())) await this.showBriefing();
   }
 
   listen(): void {

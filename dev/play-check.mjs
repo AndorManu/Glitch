@@ -77,29 +77,32 @@ try {
   // ------------------------------------------------------------- fetch
   const xp0 = (await pet()).xp;
   await m.evaluate(() => window.__glitch.game("play:fetch"));
-  const ball = await page("ball.html");
+  const ball = await page("playfield");
   let mode0 = "";
   for (let i = 0; i < 40 && mode0 !== "rest"; i++) {
     await sleep(200);
-    mode0 = await m.evaluate(() => window.__glitch.games.fetch.mode);
+    mode0 = await m.evaluate(() => window.__glitch.games.fetch.sim?.mode);
   }
-  const b0 = await m.evaluate(() => ({ ...window.__glitch.games.fetch.ball, area: window.__glitch.creature.world.area }));
+  const b0 = await m.evaluate(() => ({ ...window.__glitch.games.fetch.sim, area: window.__glitch.creature.world.area }));
   check("fetch: the ball window opens and the ball drops to rest", !!ball && mode0 === "rest", `${mode0} ${JSON.stringify(b0)}`);
   await shot(ball, "2-ball");
   // A throw (as release() would set it from the cursor): up and to the left.
   await m.evaluate(() => {
     const f = window.__glitch.games.fetch;
     f.grab();
-    f.mode = "air";
+    f.sim.mode = "air";
     const u = window.__glitch.creature.world.scale;
-    f.ball.vx = -1300 * u;
-    f.ball.vy = -900 * u;
+    f.sim.vx = -1300 * u;
+    f.sim.vy = -900 * u;
+    f.held = false;
+    f.poke();
+    f.watch();
     f.loop();
   });
   let carried = false;
   let carryShot = false;
   let t0 = Date.now();
-  while (Date.now() - t0 < 30000) {
+  while (Date.now() - t0 < 70000) {
     a = await acc();
     if (a.carrying && !carried) {
       carried = true;

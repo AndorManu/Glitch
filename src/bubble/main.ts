@@ -305,8 +305,7 @@ function onShown(): void {
     dispatch({ type: "shown", awayMs });
     view.enter();
     keepWarm(true);
-    personalHello();
-    void updates.opened();
+    void onOpened();
   }
   view.focus();
 }
@@ -316,14 +315,23 @@ function onShown(): void {
  * hello by name and ask about one of your projects (Rust decides, at most
  * once a day; null = keep the usual greeting). Never over a conversation.
  */
-function personalHello(): void {
-  void playApi.greeting().then(
-    (text) => {
-      if (!text || state.busy || (state.speech && state.speech.kind !== "reply")) return;
-      dispatch({ type: "step", step: { type: "reply", text, actions: [] } });
-    },
-    () => {},
-  );
+async function personalHello(): Promise<boolean> {
+  if (state.busy || (state.speech && state.speech.kind !== "reply")) return false;
+  const text = await playApi.greeting().catch(() => null);
+  if (!text || state.busy) return false;
+  dispatch({ type: "step", step: { type: "reply", text, actions: [] } });
+  return true;
+}
+
+/**
+ * The chat opened: something he missed first, else the day's hello by name,
+ * else the briefing (it waits for the next opening when the hello took the
+ * slot, so the two never fight over the one speech bubble).
+ */
+async function onOpened(): Promise<void> {
+  if (await updates.showPending()) return;
+  if (await personalHello()) return;
+  await updates.showBriefing();
 }
 
 function onHidden(): void {
