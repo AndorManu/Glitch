@@ -41,6 +41,21 @@ pub fn for_setting(app: &AppHandle, enabled: bool) -> Option<Arc<dyn Hands>> {
     Some(NativeHands::new(Some(app.clone()), dry_run))
 }
 
+/// Does the app that owns window `id` have a "save your changes?" prompt or a
+/// Save dialog open (in that window or another window of the same process)?
+/// Used by chaos mode before it grabs a window; reads titles and element
+/// names only, and says `false` when it can't tell (the title check has
+/// already run by then).
+pub fn save_prompt_open(id: u64) -> bool {
+    let all = imp::windows();
+    let Some(pid) = all.iter().find(|w| w.id == id).map(|w| w.pid) else { return false };
+    all.iter().filter(|w| w.pid == pid).take(4).any(|w| {
+        glitch_core::unsaved::is_save_dialog_title(&w.title)
+            || imp::read(w.id)
+                .is_ok_and(|els| glitch_core::unsaved::tree_has_save_prompt(els.iter().map(|e| e.name.as_str())))
+    })
+}
+
 impl NativeHands {
     /// `app`: for the banner window (None in tests: no banner).
     pub fn new(app: Option<AppHandle>, dry_run: bool) -> Arc<Self> {

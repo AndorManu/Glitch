@@ -587,7 +587,17 @@ pub async fn world_snapshot(app: AppHandle) -> Result<WorldSnapshot, UiError> {
     let min_width = (140.0 * scale) as i32;
     let windows =
         tauri::async_runtime::spawn_blocking(move || crate::world_native::app_windows(scale)).await.unwrap_or_default();
-    let ledges = world::ledges(&windows, area, headroom, min_width);
+    // They still hide what is behind them, but Glitch never stands on (or
+    // rides) a window that looks like it holds unsaved work.
+    let mut ledges = world::ledges(&windows, area, headroom, min_width);
+    let dirty: Vec<u64> = ledges
+        .iter()
+        .map(|l| l.id)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .filter(|id| crate::chaos_native::looks_unsaved(*id))
+        .collect();
+    ledges.retain(|l| !dirty.contains(&l.id));
     let frames = windows
         .iter()
         .filter(|w| ledges.iter().any(|l| l.id == w.id))

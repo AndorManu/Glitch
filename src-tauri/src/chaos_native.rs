@@ -46,9 +46,9 @@ mod imp {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowLongW, GetWindowRect,
-        GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed, SetCursorPos,
-        SetWindowPos, ShowWindow, GWL_EXSTYLE, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER,
-        SW_SHOWNOACTIVATE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+        GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
+        SetCursorPos, SetWindowPos, ShowWindow, GWL_EXSTYLE, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOSIZE,
+        SWP_NOZORDER, SW_SHOWNOACTIVATE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     };
 
     const SKIP_CLASSES: &[&str] = &[
@@ -94,6 +94,13 @@ mod imp {
         let mut buf = [0u16; 64];
         let n = unsafe { GetClassNameW(hwnd, buf.as_mut_ptr(), buf.len() as i32) };
         String::from_utf16_lossy(&buf[..n.max(0) as usize])
+    }
+
+    fn window_title(hwnd: HWND) -> String {
+        let n = unsafe { GetWindowTextLengthW(hwnd) }.clamp(0, 1024) as usize;
+        let mut buf = vec![0u16; n + 1];
+        let got = unsafe { GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32) };
+        String::from_utf16_lossy(&buf[..got.max(0) as usize])
     }
 
     fn rect_of(hwnd: HWND) -> Option<RECT> {
@@ -203,6 +210,8 @@ mod imp {
             elevated: !system && elevated(hwnd),
             fullscreen: is_fullscreen(hwnd),
             system,
+            // The title is only read to decide "hands off"; never stored or sent.
+            unsaved: glitch_core::unsaved::title_unsaved(&window_title(hwnd)),
         };
         Some(Target { cand, border: (frame.left - real.left, frame.top - real.top) })
     }
@@ -226,6 +235,12 @@ mod imp {
         // SAFETY: ctx outlives the synchronous enumeration.
         unsafe { EnumWindows(Some(visit), &mut ctx as *mut Ctx as LPARAM) };
         ctx.out
+    }
+
+    /// Does this window's title say it holds unsaved work? (Glitch won't even stand on those.)
+    pub fn looks_unsaved(id: u64) -> bool {
+        let hwnd = id as usize as HWND;
+        (unsafe { IsWindow(hwnd) } != 0) && glitch_core::unsaved::title_unsaved(&window_title(hwnd)).is_some()
     }
 
     /// Re-check one window right now (it may have closed, maximised, got focus...).
@@ -294,6 +309,9 @@ mod imp {
     }
     pub fn candidates() -> Vec<Target> {
         Vec::new()
+    }
+    pub fn looks_unsaved(_id: u64) -> bool {
+        false
     }
     pub fn target(_id: u64) -> Option<Target> {
         None

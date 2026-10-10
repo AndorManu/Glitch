@@ -627,7 +627,7 @@ pub fn notepad() -> MockApp {
     MockApp::new(
         "Notepad",
         "notepad",
-        "Untitled - Notepad",
+        "notes.txt - Notepad",
         vec![(
             "main",
             vec![

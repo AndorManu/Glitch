@@ -353,7 +353,7 @@ export const voiceApi = {
 // windows or the cursor is checked again in Rust: chaos + movement on, chat
 // closed, user not busy, rate limits, travel limits, on-screen clamping.
 
-export type ChaosRefusal = "disabled" | "cooling_down" | "user_active" | "fullscreen" | "not_found" | "ineligible" | "in_use" | "busy";
+export type ChaosRefusal = "disabled" | "cooling_down" | "user_active" | "fullscreen" | "not_found" | "ineligible" | "in_use" | "busy" | "unsaved_work";
 
 export interface ChaosStatus {
   /** Other apps' windows / the cursor can be touched on this OS (Windows). */

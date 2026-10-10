@@ -5,6 +5,8 @@ mod autoupdate;
 #[cfg(test)]
 mod capabilities_check;
 mod chaos;
+#[cfg(test)]
+mod chaos_guard;
 mod chaos_native;
 mod commands;
 mod context;

@@ -182,6 +182,11 @@ pub fn chaos_grab_window(app: AppHandle, chaos: State<'_, ChaosState>, id: u64) 
     let (area, scale) = area_and_scale(&app).ok_or(Refusal::NotFound)?;
     let t = native::target(id).ok_or(Refusal::NotFound)?;
     chaos::eligible(&t.cand, area, idle).inspect_err(|e| dlog(format_args!("grab {id:#x} refused: {e:?}")))?;
+    // A Save prompt open anywhere in that app (its UI tree, not just the title).
+    if crate::hands::save_prompt_open(id) {
+        dlog(format_args!("grab {id:#x} refused: a Save prompt is open"));
+        return Err(Refusal::UnsavedWork);
+    }
     dlog(format_args!("grabbed window {id:#x} at {:?}", t.cand.frame));
     let now = c.now();
     c.window_cd.mark(now);

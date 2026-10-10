@@ -6,6 +6,7 @@
 //! Hard limits (enforced in Rust, the page can't skip them):
 //! * other apps' windows are only ever **moved**: never resized, closed,
 //!   minimised, focused or typed into, and always kept fully on screen;
+//! * never a window that looks like it holds unsaved work ([`crate::unsaved`]);
 //! * at most one window grab every [`WINDOW_COOLDOWN`], one cursor grab
 //!   every [`CURSOR_COOLDOWN`];
 //! * never while the user is using the computer: a grab needs
@@ -21,6 +22,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
+use crate::unsaved::Unsaved;
 use crate::world::ScreenRect;
 
 pub const WINDOW_COOLDOWN: Duration = Duration::from_secs(4 * 60);
@@ -57,6 +59,9 @@ pub struct Candidate {
     pub fullscreen: bool,
     /// Tool windows, cloaked windows, shell windows...
     pub system: bool,
+    /// The title (or an open Save prompt) says the window holds unsaved work.
+    /// Computed from the title by the OS side with [`crate::unsaved::title_unsaved`].
+    pub unsaved: Option<Unsaved>,
 }
 
 /// Why a window can't be grabbed (also returned to the page for logging).
@@ -71,10 +76,16 @@ pub enum Refusal {
     Ineligible,
     InUse,
     Busy,
+    /// The window looks like it holds unsaved work (`*` in the title, a Save prompt...).
+    UnsavedWork,
 }
 
 /// May Glitch touch this window at all, given how long the user has been idle?
 pub fn eligible(c: &Candidate, area: ScreenRect, idle_ms: u32) -> Result<(), Refusal> {
+    // First of all: never anything that may hold work the user hasn't saved.
+    if c.unsaved.is_some() {
+        return Err(Refusal::UnsavedWork);
+    }
     if c.system || c.elevated || c.maximized || c.fullscreen {
         return Err(Refusal::Ineligible);
     }
@@ -230,6 +241,7 @@ mod tests {
             elevated: false,
             fullscreen: false,
             system: false,
+            unsaved: None,
         }
     }
 
@@ -326,5 +338,34 @@ mod tests {
         c.mark(Duration::from_secs(10));
         assert!(!c.ready(Duration::from_secs(60), WINDOW_COOLDOWN));
         assert!(c.ready(Duration::from_secs(10) + WINDOW_COOLDOWN, WINDOW_COOLDOWN));
+    }
+
+    #[test]
+    fn windows_with_unsaved_work_are_never_touched() {
+        let ok = cand(1, 100, 100, 600, 400);
+        for title in [
+            "*reddit-posts.md - Notepad",
+            "*new 1 - Notepad++",
+            "\u{25CF} main.ts - Visual Studio Code",
+            "Untitled - Notepad",
+            "Document1 - Word",
+            "notes.txt [modified] - Editor",
+        ] {
+            let c = Candidate { unsaved: crate::unsaved::title_unsaved(title), ..ok };
+            assert_eq!(eligible(&c, AREA, 10_000), Err(Refusal::UnsavedWork), "{title}");
+            // Not even when the user has been away for hours.
+            assert_eq!(eligible(&c, AREA, u32::MAX), Err(Refusal::UnsavedWork), "{title}");
+        }
+        let clean = Candidate { unsaved: crate::unsaved::title_unsaved("reddit-posts.md - Notepad"), ..ok };
+        assert_eq!(eligible(&clean, AREA, 10_000), Ok(()));
+    }
+
+    #[test]
+    fn the_target_picker_skips_unsaved_windows_even_when_they_are_nearest() {
+        let dirty =
+            Candidate { unsaved: crate::unsaved::title_unsaved("*draft.md - Notepad"), ..cand(1, 100, 100, 600, 400) };
+        let clean = cand(2, 900, 100, 600, 400);
+        assert_eq!(pick_target(&[dirty, clean], AREA, 10_000, (400, 100)).map(|c| c.id), Some(2));
+        assert_eq!(pick_target(&[dirty], AREA, 10_000, (400, 100)), None);
     }
 }

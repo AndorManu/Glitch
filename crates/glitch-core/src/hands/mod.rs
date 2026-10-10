@@ -31,6 +31,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::ai::{ToolCall, ToolSpec};
+use crate::unsaved::{self, Unsaved};
 
 pub const PLAN: &str = "plan";
 pub const WAIT_FOR_WINDOW: &str = "wait_for_window";
@@ -465,6 +466,10 @@ struct Session {
     /// Everything typed this task (the secret check runs over all of it).
     typed: String,
     driving: Option<String>,
+    /// (pid, process start) of every window that was open when the task began.
+    /// A program that is not in it was started during the task (by Glitch), so
+    /// its fresh "Untitled" document is Glitch's own, not the user's work.
+    baseline: Option<std::collections::HashSet<(u32, u64)>>,
 }
 
 /// The tool layer for app control (cheap to clone; shared session).
@@ -542,8 +547,9 @@ impl Driver {
     /// A new user message: forget ids, grants and failures of the last task.
     pub fn new_task(&self, user_text: &str) {
         self.stop();
+        let baseline = self.windows().iter().map(|w| (w.pid, w.started)).collect();
         let mut s = self.s.lock().unwrap();
-        *s = Session { user_text: user_text.to_string(), ..Session::default() };
+        *s = Session { user_text: user_text.to_string(), baseline: Some(baseline), ..Session::default() };
     }
 
     /// The user allowed controlling this app for the current task.
@@ -639,6 +645,51 @@ impl Driver {
         Ok(())
     }
 
+    /// Why Glitch must not act in this window because it may hold unsaved
+    /// work: the title says so (`*notes - Notepad`, `● main.ts`...), or a Save
+    /// dialog / "save your changes?" prompt is open in the window or in
+    /// another window of the same program. Looking (read_ui) is fine; every
+    /// call that focuses, clicks, types, presses or scrolls goes through this.
+    fn unsaved_work(&self, w: &WindowRef) -> Option<Unsaved> {
+        let started_by_glitch =
+            self.s.lock().unwrap().baseline.as_ref().is_some_and(|b| !b.contains(&(w.pid, w.started)));
+        match unsaved::title_unsaved(&w.title) {
+            // A document in a program Glitch opened during this task (a fresh
+            // "Untitled - Notepad", which shows `*` once Glitch types) is
+            // Glitch's own. A Save dialog is never exempt.
+            Some(u) if u != Unsaved::SaveDialog && started_by_glitch => {}
+            Some(u) => return Some(u),
+            None => {}
+        }
+        let mut read = 0;
+        for x in self.windows().into_iter().filter(|x| x.pid == w.pid && !x.minimized) {
+            if x.id != w.id {
+                if let Some(u) = unsaved::title_unsaved(&x.title).filter(|u| *u == Unsaved::SaveDialog) {
+                    return Some(u);
+                }
+            }
+            if read < 4 {
+                read += 1;
+                if let Ok(els) = self.hands.read(&x) {
+                    if unsaved::tree_has_save_prompt(els.iter().map(|e| e.name.as_str())) {
+                        return Some(Unsaved::SavePrompt);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// `check_window` plus the unsaved-work guard, for anything that acts.
+    fn check_window_to_act(&self, w: &WindowRef) -> Result<(), Value> {
+        self.check_window(w)?;
+        if let Some(u) = self.unsaved_work(w) {
+            return Err(json!({ "ok": false, "refused": true,
+                "error": format!("Glitch leaves this window alone because {}: it may hold work that isn't saved.                     Tell the user to save it (or do this one themselves).", u.why()) }));
+        }
+        Ok(())
+    }
+
     fn element_arg(&self, args: &Value) -> Result<(u32, WindowRef, UiElement), Value> {
         let Some(id) = id_arg(args) else {
             return Err(fail("missing \"id\": the [number] of an element from read_ui", &["read_ui first"]));
@@ -687,7 +738,7 @@ impl Driver {
             }
             FOCUS_WINDOW => {
                 let win = self.window_arg(args)?;
-                self.check_window(&win)?;
+                self.check_window_to_act(&win)?;
                 HandsAction::Focus { win }
             }
             READ_UI => {
@@ -698,7 +749,7 @@ impl Driver {
             }
             UI_CLICK => {
                 let (id, win, el) = self.element_arg(args)?;
-                self.check_window(&win)?;
+                self.check_window_to_act(&win)?;
                 if el.password {
                     return Err(
                         json!({ "ok": false, "refused": true, "error": "that is a password field; Glitch never touches those" }),
@@ -714,7 +765,7 @@ impl Driver {
             }
             UI_SET_TEXT => {
                 let (id, win, el) = self.element_arg(args)?;
-                self.check_window(&win)?;
+                self.check_window_to_act(&win)?;
                 if el.password {
                     return Err(
                         json!({ "ok": false, "refused": true, "error": "that is a password field; Glitch never types into those" }),
@@ -752,7 +803,7 @@ impl Driver {
                     None
                 } else {
                     let w = self.window_arg(args)?;
-                    self.check_window(&w)?;
+                    self.check_window_to_act(&w)?;
                     if key == Key::CtrlL && safety::is_browser(&w.exe) {
                         return Err(json!({ "ok": false, "refused": true,
                             "error": "Glitch doesn't use the browser's address bar; use open_url to open a web page." }));
@@ -769,7 +820,7 @@ impl Driver {
                     }
                     None => (self.window_arg(args)?, None),
                 };
-                self.check_window(&win)?;
+                self.check_window_to_act(&win)?;
                 let dir = str_arg(args, &["direction", "dir"]).unwrap_or("down").to_lowercase();
                 HandsAction::Scroll { win, el, down: !dir.starts_with('u') }
             }
@@ -886,7 +937,7 @@ impl Driver {
             if now.pid != w.pid || now.exe != w.exe || (w.started != 0 && now.started != w.started) {
                 return Err(changed("that window now belongs to a different program"));
             }
-            self.check_window(&now)?;
+            self.check_window_to_act(&now)?;
             Ok(now)
         };
         let same_el = |w: &WindowRef, el: &UiElement| -> Result<UiElement, Value> {

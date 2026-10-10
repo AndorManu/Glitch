@@ -329,3 +329,132 @@ fn searching_finds_hidden_playlists_too() {
     run(&d, UI_CLICK, json!({"id": id_of(&c, "Play Classical Essentials")}));
     assert_eq!(m.playing().unwrap().1, "Classical Essentials");
 }
+
+// ------------------------------------------------------------ unsaved work
+
+fn typed_text(d: &Driver, target: &str) -> Value {
+    let r = run(d, READ_UI, json!({"target": target, "query": "text editor"}));
+    run(d, UI_SET_TEXT, json!({"id": id_of(&r, "Text editor"), "text": "hello"}))
+}
+
+/// Click the first button of whatever is in front (a dialog, if one is up).
+fn click_a_button(d: &Driver, target: &str) -> Value {
+    let r = run(d, READ_UI, json!({"target": target}));
+    run(d, UI_CLICK, json!({"id": id_of(&r, "button")}))
+}
+
+fn assert_refused_for_unsaved(v: &Value) {
+    assert_eq!(v["refused"], true, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("isn't saved"), "{v}");
+}
+
+#[test]
+fn dirty_titles_stop_every_acting_call_but_reading_still_works() {
+    for title in [
+        "*reddit-posts.md - Notepad",
+        "\u{25CF} main.ts - Visual Studio Code",
+        "report [modified] - Notepad",
+        "Untitled - Notepad",
+    ] {
+        let mut np = mock::notepad().already_open();
+        np.title = title.into();
+        let (d, m) = driver(vec![np]);
+        // Reading is harmless and allowed.
+        let r = run(&d, READ_UI, json!({"target": "notepad", "query": "text editor"}));
+        assert_eq!(r["ok"], true, "{title}: {r}");
+        let id = id_of(&r, "Text editor");
+        assert_refused_for_unsaved(&run(&d, UI_SET_TEXT, json!({"id": id, "text": "hello"})));
+        assert_refused_for_unsaved(&run(&d, UI_CLICK, json!({"id": id})));
+        assert_refused_for_unsaved(&run(&d, UI_SCROLL, json!({"target": "notepad"})));
+        assert_refused_for_unsaved(&run(&d, UI_PRESS, json!({"target": "notepad", "key": "Enter"})));
+        assert_refused_for_unsaved(&run(&d, FOCUS_WINDOW, json!({"target": "notepad"})));
+        assert_eq!(m.text_of("Notepad"), None, "{title}: nothing was typed");
+        assert!(m.log().iter().all(|l| !l.starts_with("type") && !l.starts_with("click")), "{:?}", m.log());
+    }
+}
+
+#[test]
+fn a_saved_document_is_fine() {
+    let (d, m) = driver(vec![mock::notepad().already_open()]);
+    let r = typed_text(&d, "notepad");
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(m.text_of("Notepad").as_deref(), Some("hello"));
+}
+
+#[test]
+fn a_blank_document_glitch_opened_itself_may_be_typed_into() {
+    // "open notepad and type hello": the new Untitled window is Glitch's own...
+    let mut np = mock::notepad();
+    np.title = "Untitled - Notepad".into();
+    let (d, m) = driver(vec![np]);
+    m.launch("Notepad");
+    assert_eq!(run(&d, WAIT_FOR_WINDOW, json!({"target": "notepad"}))["ready"], true);
+    let r = typed_text(&d, "notepad");
+    assert_eq!(r["ok"], true, "{r}");
+    // ...and stays usable after Notepad adds its `*`.
+    m.state.lock().unwrap().apps[0].title = "*Untitled - Notepad".into();
+    let again = typed_text(&d, "notepad");
+    assert_eq!(again["ok"], true, "{again}");
+}
+
+#[test]
+fn an_untitled_window_that_was_already_open_belongs_to_the_user() {
+    let mut np = mock::notepad().already_open();
+    np.title = "*Untitled - Notepad".into();
+    let (d, _m) = driver(vec![np]);
+    assert_refused_for_unsaved(&typed_text(&d, "notepad"));
+    // A new task re-takes the baseline, the window is still the user's.
+    d.new_task("type hello into notepad");
+    assert_refused_for_unsaved(&typed_text(&d, "notepad"));
+}
+
+#[test]
+fn a_save_prompt_in_the_window_tree_or_a_save_dialog_blocks_acting() {
+    // "Do you want to save changes?" shown as a dialog of the same program.
+    let mut np = mock::notepad().already_open();
+    np.dialog = Some((
+        "Notepad".into(),
+        vec![
+            mock::el("text", "Do you want to save changes to notes.txt?"),
+            mock::el("button", "Save"),
+            mock::el("button", "Don't save").on_click(mock::Effect::Dismiss),
+        ],
+    ));
+    let (d, m) = driver(vec![np]);
+    assert_refused_for_unsaved(&click_a_button(&d, "notepad"));
+    assert!(m.log().iter().all(|l| !l.starts_with("type") && !l.starts_with("click")), "{:?}", m.log());
+
+    // A "Save As" dialog by title.
+    let mut np = mock::notepad().already_open();
+    np.dialog = Some(("Save As".into(), vec![mock::el("edit", "File name"), mock::el("button", "Cancel")]));
+    let (d, _m) = driver(vec![np]);
+    assert_refused_for_unsaved(&click_a_button(&d, "notepad"));
+
+    // The same prompt inside the main window's own tree.
+    let mut np = mock::notepad().already_open();
+    np.screens[0].1.push(mock::el("text", "You have unsaved changes"));
+    let (d, _m) = driver(vec![np]);
+    assert_refused_for_unsaved(&typed_text(&d, "notepad"));
+
+    // An ordinary dialog (an update notice) does not.
+    let mut np = mock::notepad().already_open();
+    np.dialog = Some(mock::update_dialog());
+    let (d, _m) = driver(vec![np]);
+    assert_eq!(click_a_button(&d, "notepad")["ok"], true);
+}
+
+#[test]
+fn a_window_that_turns_dirty_between_approval_and_action_is_not_touched() {
+    let mut np = mock::notepad().already_open();
+    np.title = "notes.txt - Notepad".into();
+    let (d, m) = driver(vec![np]);
+    let r = run(&d, READ_UI, json!({"target": "notepad", "query": "text editor"}));
+    let c = call(UI_SET_TEXT, json!({"id": id_of(&r, "Text editor"), "text": "hello"}));
+    let p = d.prepare(&c).unwrap();
+    // The user types something in the meantime: the title gets its `*`.
+    m.state.lock().unwrap().apps[0].title = "*notes.txt - Notepad".into();
+    let done = d.execute(&p.action, &retry_key(&c));
+    assert!(!done.ok, "{:?}", done.for_model);
+    assert_eq!(done.for_model["refused"], true, "{}", done.for_model);
+    assert_eq!(m.text_of("Notepad"), None);
+}
