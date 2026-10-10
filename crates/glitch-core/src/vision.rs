@@ -125,3 +125,69 @@ mod tests {
         assert!(prepare(broken).is_err());
     }
 }
+
+/// Is this picture (almost) one flat colour? A window that is still loading
+/// shows a blank or near-empty surface; the agent waits a moment and looks
+/// again instead of describing nothing. Samples a grid, so it is cheap.
+pub fn mostly_blank(capture: &Capture) -> bool {
+    const STEP: usize = 7;
+    const BLANK_SHARE: f64 = 0.97;
+    let (w, h) = (capture.width as usize, capture.height as usize);
+    if w == 0 || h == 0 || capture.rgba.len() < w * h * 4 {
+        return false;
+    }
+    let mut bins = std::collections::HashMap::<u16, u32>::new();
+    let mut total = 0u32;
+    for y in (0..h).step_by(STEP) {
+        for x in (0..w).step_by(STEP) {
+            let i = (y * w + x) * 4;
+            let key = ((capture.rgba[i] >> 4) as u16) << 8
+                | ((capture.rgba[i + 1] >> 4) as u16) << 4
+                | (capture.rgba[i + 2] >> 4) as u16;
+            *bins.entry(key).or_default() += 1;
+            total += 1;
+        }
+    }
+    let top = bins.values().copied().max().unwrap_or(0);
+    total > 0 && f64::from(top) / f64::from(total) >= BLANK_SHARE
+}
+
+#[cfg(test)]
+mod blank_tests {
+    use super::*;
+
+    fn flat(shade: u8) -> Capture {
+        Capture { width: 200, height: 120, rgba: vec![shade; 200 * 120 * 4], window: None, redact: vec![] }
+    }
+
+    #[test]
+    fn a_flat_picture_is_blank() {
+        assert!(mostly_blank(&flat(255)));
+        assert!(mostly_blank(&flat(10)));
+    }
+
+    #[test]
+    fn a_picture_with_content_is_not_blank() {
+        let mut c = flat(255);
+        // A dark text-like block over 10% of the picture.
+        for y in 20..44 {
+            for x in 10..160 {
+                let i = (y * 200 + x) * 4;
+                c.rgba[i..i + 3].copy_from_slice(&[10, 10, 10]);
+            }
+        }
+        assert!(!mostly_blank(&c));
+    }
+
+    #[test]
+    fn a_tiny_logo_on_a_flat_background_still_counts_as_loading() {
+        let mut c = flat(0);
+        for y in 50..58 {
+            for x in 90..100 {
+                let i = (y * 200 + x) * 4;
+                c.rgba[i..i + 3].copy_from_slice(&[30, 215, 96]);
+            }
+        }
+        assert!(mostly_blank(&c));
+    }
+}

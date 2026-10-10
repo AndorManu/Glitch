@@ -1602,3 +1602,79 @@ pub fn specs() -> Vec<ToolSpec> {
 
 #[cfg(test)]
 mod tests;
+
+// ------------------------------------------------ asking for app control
+
+/// Verbs that mean "do something inside the app", beyond opening it.
+const INSIDE_VERBS: &[&str] = &[
+    "find", "search", "play", "click", "type", "write", "select", "pick", "choose", "add", "create", "press", "scroll",
+    "skip", "shuffle", "queue", "enter", "fill", "like", "save", "download", "join",
+];
+const INSIDE_NOUNS: &[&str] = &[
+    "playlist", "song", "album", "track", "artist", "podcast", "video", "file", "folder", "document", "message",
+    "email", "tab", "setting", "channel", "game", "note", "photo", "picture", "recipe",
+];
+
+fn plain_words(text: &str) -> Vec<String> {
+    text.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect()
+}
+
+fn after_open(words: &[String]) -> &[String] {
+    let start = words.iter().position(|w| ["open", "launch", "start", "run"].contains(&w.as_str())).unwrap_or(0);
+    &words[start..]
+}
+
+/// Does this request need clicking or typing INSIDE an app (not just opening
+/// it)? "open spotify and find me a playlist" does; "open spotify and tell me
+/// what you see" does not. Only the part after the opening word counts.
+pub fn needs_interaction(text: &str) -> bool {
+    let words = plain_words(text);
+    after_open(&words).iter().any(|w| INSIDE_VERBS.contains(&w.as_str()))
+}
+
+/// "find and play a playlist": what the user wants done inside the app, for
+/// the card ("... but to find and play a playlist I need app control").
+pub fn interaction_summary(text: &str) -> String {
+    let words = plain_words(text);
+    let rest = after_open(&words);
+    let mut verbs: Vec<&str> = Vec::new();
+    for w in rest {
+        if let Some(v) = INSIDE_VERBS.iter().find(|v| **v == w) {
+            if !verbs.contains(v) {
+                verbs.push(v);
+            }
+        }
+    }
+    verbs.truncate(2);
+    if verbs.is_empty() {
+        return "do the rest of that".into();
+    }
+    let noun = rest.iter().find(|w| INSIDE_NOUNS.contains(&w.as_str()));
+    let verbs = verbs.join(" and ");
+    match noun {
+        Some(n) if !verbs.contains("search") => format!("{verbs} a {n}"),
+        _ => verbs,
+    }
+}
+
+#[cfg(test)]
+mod ask_tests {
+    use super::*;
+
+    #[test]
+    fn inside_requests_are_told_from_plain_opens() {
+        assert!(needs_interaction("open Spotify and find me a playlist it can play"));
+        assert!(needs_interaction("launch notepad and type hello"));
+        assert!(!needs_interaction("open spotify"));
+        assert!(!needs_interaction("open Spotify and tell me what you see"));
+        assert!(!needs_interaction("what's the weather"));
+    }
+
+    #[test]
+    fn the_summary_names_what_is_wanted() {
+        assert_eq!(interaction_summary("open Spotify and find me a playlist it can play"), "find and play a playlist");
+        assert_eq!(interaction_summary("open notepad and type hello"), "type");
+        assert_eq!(interaction_summary("open steam and search for portal"), "search");
+        assert_eq!(interaction_summary("open spotify"), "do the rest of that");
+    }
+}

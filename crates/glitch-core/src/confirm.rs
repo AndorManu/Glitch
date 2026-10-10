@@ -60,6 +60,8 @@ pub fn approval_for(action: &Action) -> Approval {
         // didn't say, waits for the user (see hands::Driver::prepare).
         Action::Hands { ask: crate::hands::Ask::No, .. } => Approval::Automatic,
         Action::Hands { .. } => Approval::AskUser,
+        // Changes a setting: always the user's own click.
+        Action::EnableAppControl { .. } => Approval::AskUser,
     }
 }
 
@@ -199,7 +201,7 @@ mod tests {
     fn reading_is_automatic_writing_asks() {
         use crate::desktop::CaptureTarget;
         for a in [
-            Action::LookAtScreen { target: CaptureTarget::Screen },
+            Action::LookAtScreen { target: CaptureTarget::Screen, app: None },
             Action::ReadClipboard,
             Action::ReadSelection,
             Action::ActiveWindow,
@@ -235,7 +237,7 @@ mod tests {
         assert_eq!(approval_in_turn(&forget, false), Approval::Automatic);
         // Reading and calculating stay automatic.
         assert_eq!(
-            approval_in_turn(&Action::LookAtScreen { target: CaptureTarget::Screen }, true),
+            approval_in_turn(&Action::LookAtScreen { target: CaptureTarget::Screen, app: None }, true),
             Approval::Automatic
         );
         assert_eq!(approval_in_turn(&Action::Calculate { expression: "1".into() }, true), Approval::Automatic);
