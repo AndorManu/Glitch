@@ -1001,6 +1001,7 @@ impl Driver {
             Desk::Windows => self.list_windows(),
             Desk::Move { to } => self.pointer_action(
                 &to.win,
+                &[to.win.pid],
                 PointerOp::Move { to: to.point },
                 format!("moved the pointer to {}", to.what()),
                 false,
@@ -1008,6 +1009,7 @@ impl Driver {
             ),
             Desk::Click { at, kind } => self.pointer_action(
                 &at.win,
+                &[at.win.pid],
                 PointerOp::Click { at: at.point, kind: *kind },
                 format!("{} {}", kind.label().to_lowercase(), at.what()),
                 true,
@@ -1015,6 +1017,7 @@ impl Driver {
             ),
             Desk::Drag { from, to } => self.pointer_action(
                 &to.win,
+                &[from.win.pid, to.win.pid],
                 PointerOp::Drag { from: from.point, to: to.point },
                 format!("dragged {} onto {}", from.what(), to.what()),
                 true,
@@ -1022,6 +1025,7 @@ impl Driver {
             ),
             Desk::Scroll { at, notches } => self.pointer_action(
                 &at.win,
+                &[at.win.pid],
                 PointerOp::Scroll { at: at.point, notches: *notches },
                 format!("scrolled {} over {}", if *notches < 0 { "down" } else { "up" }, at.what()),
                 true,
@@ -1180,6 +1184,7 @@ impl Driver {
     fn pointer_action(
         &self,
         win: &WindowRef,
+        pids: &[u32],
         op: PointerOp,
         did: String,
         verify: bool,
@@ -1192,7 +1197,7 @@ impl Driver {
         self.remember_window(&win);
         let before_ui = self.sig_of(&win);
         let before_pic = self.picture_sig(&win);
-        match self.hands.pointer(&op) {
+        match self.hands.pointer(&op, pids) {
             Ok(how) => {
                 let mut v = json!({"ok": true, "did": format!("{did} ({how})")});
                 if verify {

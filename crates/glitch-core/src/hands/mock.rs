@@ -653,7 +653,7 @@ impl Hands for MockHands {
         })
     }
 
-    fn pointer(&self, op: &PointerOp) -> HandsResult<String> {
+    fn pointer(&self, op: &PointerOp, _pids: &[u32]) -> HandsResult<String> {
         {
             let mut s = self.state.lock().unwrap();
             if s.interrupted {

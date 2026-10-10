@@ -200,8 +200,52 @@ pub async fn send_message(app: AppHandle, state: State<'_, AppState>, text: Stri
         crate::play::record(&app, glitch_core::play::PetEvent::Chat);
     }
     let _ = app.emit("mood", mood_after(&result));
+    let _ = app.emit("undo-changed", ());
     after_turn(&app, &model, &result);
     result.map_err(UiError::from)
+}
+
+/// What "Undo last Glitch action" would do.
+#[derive(Serialize)]
+pub struct UndoStatus {
+    /// "Move report.txt back to Desktop"; None: nothing to undo.
+    label: Option<String>,
+    /// How many actions can be undone.
+    count: usize,
+}
+
+#[tauri::command]
+pub fn undo_status(state: State<'_, AppState>) -> UndoStatus {
+    // A chat turn holds the agent for a while: then show what we knew, nothing.
+    match state.agent.try_lock() {
+        Ok(agent) => match agent.undo_info() {
+            Some((label, count)) => UndoStatus { label: Some(label), count },
+            None => UndoStatus { label: None, count: 0 },
+        },
+        Err(_) => UndoStatus { label: None, count: 0 },
+    }
+}
+
+/// "Undo last Glitch action": puts the newest moved file or window back.
+#[tauri::command]
+pub async fn undo_last_action(app: AppHandle, state: State<'_, AppState>) -> Result<String, UiError> {
+    paused_check()?;
+    let driver = {
+        let agent = state
+            .agent
+            .try_lock()
+            .map_err(|_| UiError::new("busy", "Glitch is busy right now, try again in a moment"))?;
+        agent.undo_driver()
+    };
+    let Some(driver) = driver else {
+        return Err(UiError::new("nothing_to_undo", "There is nothing to undo"));
+    };
+    let said = tokio::task::spawn_blocking(move || driver.undo_last())
+        .await
+        .map_err(|e| UiError::new("undo_failed", e.to_string()))?
+        .map_err(|e| UiError::new("undo_failed", e))?;
+    let _ = app.emit("undo-changed", ());
+    Ok(said)
 }
 
 /// After a finished reply: fold old messages into memory if the chat got long
@@ -236,15 +280,17 @@ pub async fn confirm_action(
     state: State<'_, AppState>,
     id: String,
     approved: bool,
+    auto: Option<bool>,
 ) -> Result<Step, UiError> {
     paused_check()?;
     let model = state.settings().model.ok_or_else(|| UiError::new("no_model", "Pick a model first"))?;
     let _ = app.emit("mood", "thinking");
     let (result, notes_trusted) = {
         let mut agent = state.agent.lock().await;
-        let result = agent.confirm(&model, &id, approved).await;
+        let result = agent.confirm_with(&model, &id, approved, auto.unwrap_or(false)).await;
         (result, agent.notes_trusted())
     };
+    let _ = app.emit("undo-changed", ());
     // The first allowed note: later notes don't ask again (saved).
     if notes_trusted && !state.settings().notes_trusted {
         state.update_settings(|s| s.notes_trusted = true);
@@ -395,6 +441,8 @@ pub struct SettingsPatch {
     hands_enabled: Option<bool>,
     /// "Smarter brain for app control": a model name, or "" for the normal brain.
     hands_model: Option<String>,
+    /// Sub-level "Desktop control" (pointer, windows, files).
+    hands_desktop_enabled: Option<bool>,
 }
 
 #[tauri::command]
@@ -439,16 +487,20 @@ pub async fn update_settings(
         if let Some(m) = &patch.hands_model {
             s.hands_model = Some(m.trim().to_string()).filter(|m| !m.is_empty());
         }
+        if let Some(v) = patch.hands_desktop_enabled {
+            s.hands_desktop_enabled = v;
+        }
     });
     if let Some(on) = patch.screen_enabled {
         state.agent.lock().await.set_screen_enabled(on);
     }
-    if patch.hands_enabled.is_some() || patch.hands_model.is_some() {
+    if patch.hands_enabled.is_some() || patch.hands_model.is_some() || patch.hands_desktop_enabled.is_some() {
         let mut agent = state.agent.lock().await;
         if let Some(on) = patch.hands_enabled {
             agent.set_hands(crate::hands::for_setting(&app, on));
         }
         agent.set_hands_model(new.hands_model.clone());
+        crate::state::configure_desktop(&mut agent, &new, &crate::state::data_dir(&state.settings_path));
     }
     if let Some(on) = patch.memory_enabled {
         let mut agent = state.agent.lock().await;

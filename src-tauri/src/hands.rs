@@ -19,7 +19,9 @@
 
 use std::sync::Arc;
 
-use glitch_core::hands::{Hands, HandsResult, Key, Media, MediaStatus, UiElement, WindowRef};
+use glitch_core::hands::pointer::PointerOp;
+use glitch_core::hands::winops::{self, WinGeom, WindowOp};
+use glitch_core::hands::{Hands, HandsResult, Key, MarkShot, Media, MediaStatus, UiElement, WindowRef};
 use tauri::AppHandle;
 
 pub struct NativeHands {
@@ -139,30 +141,77 @@ impl Hands for NativeHands {
     fn drive(&self, app: Option<&str>) {
         match app {
             Some(name) => {
+                STOP_REQUESTED.store(false, std::sync::atomic::Ordering::SeqCst);
                 imp::watch_input(true);
                 if let Some(h) = &self.app {
                     let (h, name) = (h.clone(), name.to_string());
                     // Off this (worker) thread: window creation hops to the main thread.
-                    tauri::async_runtime::spawn(async move { banner::show(&h, &name) });
+                    tauri::async_runtime::spawn(async move {
+                        banner::show(&h, &name);
+                        crate::hands_desktop::overlay::prepare(&h);
+                    });
                 }
             }
             None => {
                 imp::watch_input(false);
                 if let Some(h) = &self.app {
                     banner::hide(h);
+                    crate::hands_desktop::overlay::destroy(h);
                 }
             }
         }
     }
     fn interrupted(&self) -> bool {
-        // The panic button counts as the user taking over: the task ends at once.
-        crate::pause::is_paused() || imp::interrupted()
+        // The panic button and the tray's Stop count as the user taking over:
+        // the task ends at once.
+        crate::pause::is_paused() || stop_requested() || imp::interrupted()
+    }
+
+    fn capture(&self, w: Option<&WindowRef>) -> HandsResult<MarkShot> {
+        crate::hands_desktop::capture(w.map(|w| w.id))
+    }
+    fn window_at(&self, x: i32, y: i32) -> Option<WindowRef> {
+        crate::hands_desktop::window_at(x, y)
+    }
+    fn pointer(&self, op: &PointerOp, pids: &[u32]) -> HandsResult<String> {
+        self.refuse_dry()?;
+        crate::hands_desktop::pointer(self.app.as_ref(), op, pids)
+    }
+    fn cursor(&self) -> Option<(i32, i32)> {
+        crate::hands_desktop::cursor()
+    }
+    fn geometry(&self, w: &WindowRef) -> Option<WinGeom> {
+        crate::hands_desktop::geometry(w.id)
+    }
+    fn work_area(&self, w: &WindowRef) -> winops::Edges {
+        crate::hands_desktop::work_area(w.id)
+    }
+    fn window_op(&self, w: &WindowRef, op: WindowOp) -> HandsResult<WinGeom> {
+        self.refuse_dry()?;
+        crate::hands_desktop::window_op(w.id, op)
     }
 }
 
-/// The panic button: take the "Glitch is driving" banner down.
+/// The tray's "Stop Glitch's current task": like the user pressing Esc.
+static STOP_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn stop_requested() -> bool {
+    STOP_REQUESTED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Stop whatever Glitch is doing in other apps, now (tray item). The flag
+/// clears when the next task starts driving.
+pub fn stop_now(app: &AppHandle) {
+    STOP_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
+    banner::hide(app);
+    crate::hands_desktop::overlay::destroy(app);
+}
+
+/// The panic button: take the "Glitch is driving" banner (and the pointer
+/// ring) down.
 pub fn hide_banner(app: &AppHandle) {
     banner::hide(app);
+    crate::hands_desktop::overlay::destroy(app);
 }
 
 /// The small always-on-top "Glitch is driving <App>, press Esc to stop"
@@ -225,7 +274,7 @@ mod banner {
 }
 
 #[cfg(not(target_os = "windows"))]
-mod imp {
+pub(crate) mod imp {
     use super::*;
 
     const NOT_YET: &str = "controlling apps only works on Windows so far";
@@ -276,7 +325,7 @@ mod imp {
 }
 
 #[cfg(target_os = "windows")]
-mod imp {
+pub(crate) mod imp {
     use std::collections::HashMap;
     use std::hash::{Hash, Hasher};
     use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
@@ -301,11 +350,12 @@ mod imp {
         OpenProcessToken, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
-        MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK,
-        MOUSEEVENTF_WHEEL, MOUSEINPUT, VIRTUAL_KEY, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_LCONTROL, VK_LEFT,
-        VK_LSHIFT, VK_MEDIA_NEXT_TRACK, VK_MEDIA_PLAY_PAUSE, VK_MEDIA_PREV_TRACK, VK_MENU, VK_NEXT, VK_PRIOR,
-        VK_RETURN, VK_RIGHT, VK_SPACE, VK_TAB, VK_UP, VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP,
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
+        KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE,
+        MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEINPUT, VIRTUAL_KEY, VK_DOWN, VK_END, VK_ESCAPE, VK_F5,
+        VK_HOME, VK_LCONTROL, VK_LEFT, VK_LSHIFT, VK_LWIN, VK_MEDIA_NEXT_TRACK, VK_MEDIA_PLAY_PAUSE,
+        VK_MEDIA_PREV_TRACK, VK_MENU, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SPACE, VK_TAB, VK_UP, VK_VOLUME_DOWN,
+        VK_VOLUME_MUTE, VK_VOLUME_UP,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AllowSetForegroundWindow, BringWindowToTop, CallNextHookEx, EnumWindows, FindWindowExW, GetAncestor,
@@ -341,7 +391,7 @@ mod imp {
         String::from_utf16_lossy(&buf[..n.max(0) as usize])
     }
 
-    fn title(hwnd: HWND) -> String {
+    pub(crate) fn title(hwnd: HWND) -> String {
         let len = unsafe { GetWindowTextLengthW(hwnd) };
         if len <= 0 {
             return String::new();
@@ -351,7 +401,7 @@ mod imp {
         String::from_utf16_lossy(&buf[..n.max(0) as usize])
     }
 
-    fn pid_of(hwnd: HWND) -> u32 {
+    pub(crate) fn pid_of(hwnd: HWND) -> u32 {
         let mut pid = 0u32;
         unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
         pid
@@ -383,7 +433,7 @@ mod imp {
     }
 
     /// Debug builds: only these processes (live tests).
-    fn only_pids() -> Option<Vec<u32>> {
+    pub(crate) fn only_pids() -> Option<Vec<u32>> {
         if !cfg!(debug_assertions) {
             return None;
         }
@@ -418,7 +468,7 @@ mod imp {
         1
     }
 
-    fn info(hwnd: HWND, fg: HWND) -> WindowRef {
+    pub(crate) fn info(hwnd: HWND, fg: HWND) -> WindowRef {
         let pid = pid_of(hwnd);
         let (exe, started) = process_info(pid);
         WindowRef {
@@ -440,7 +490,7 @@ mod imp {
         ctx.out.into_iter().map(|h| info(h, fg)).collect()
     }
 
-    fn hwnd(id: u64) -> HandsResult<HWND> {
+    pub(crate) fn hwnd(id: u64) -> HandsResult<HWND> {
         let h = id as usize as HWND;
         if unsafe { IsWindow(h) } == 0 {
             return Err("that window has closed".into());
@@ -465,11 +515,11 @@ mod imp {
         }
     }
 
-    fn root_of(h: HWND) -> HWND {
+    pub(crate) fn root_of(h: HWND) -> HWND {
         unsafe { GetAncestor(h, GA_ROOT) }
     }
 
-    fn in_front(h: HWND) -> bool {
+    pub(crate) fn in_front(h: HWND) -> bool {
         let fg = unsafe { GetForegroundWindow() };
         !fg.is_null() && (fg == h || root_of(fg) == h)
     }
@@ -593,14 +643,18 @@ mod imp {
 
     // ------------------------------------------------------------ input
 
-    fn key_input(vk: VIRTUAL_KEY, up: bool) -> INPUT {
+    pub(crate) fn key_input(vk: VIRTUAL_KEY, up: bool) -> INPUT {
+        // Arrow, Home/End and Page keys must say "extended", or Windows reads
+        // them as the numeric keypad's (Win+Left would not snap a window).
+        let extended = [VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_HOME, VK_END, VK_PRIOR, VK_NEXT].contains(&vk);
         INPUT {
             r#type: INPUT_KEYBOARD,
             Anonymous: INPUT_0 {
                 ki: KEYBDINPUT {
                     wVk: vk,
                     wScan: 0,
-                    dwFlags: if up { KEYEVENTF_KEYUP } else { 0 },
+                    dwFlags: (if up { KEYEVENTF_KEYUP } else { 0 })
+                        | (if extended { KEYEVENTF_EXTENDEDKEY } else { 0 }),
                     time: 0,
                     dwExtraInfo: 0,
                 },
@@ -623,7 +677,7 @@ mod imp {
         }
     }
 
-    fn mouse_input(flags: u32, x: i32, y: i32, data: i32) -> INPUT {
+    pub(crate) fn mouse_input(flags: u32, x: i32, y: i32, data: i32) -> INPUT {
         INPUT {
             r#type: INPUT_MOUSE,
             Anonymous: INPUT_0 {
@@ -632,7 +686,7 @@ mod imp {
         }
     }
 
-    fn send(inputs: &[INPUT]) -> bool {
+    pub(crate) fn send(inputs: &[INPUT]) -> bool {
         let n = unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32) };
         n as usize == inputs.len()
     }
@@ -646,7 +700,7 @@ mod imp {
         }
     }
 
-    fn move_to(x: i32, y: i32) -> INPUT {
+    pub(crate) fn move_to(x: i32, y: i32) -> INPUT {
         let (ax, ay) = absolute(x, y);
         mouse_input(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, ax, ay, 0)
     }
@@ -665,7 +719,7 @@ mod imp {
         }
     }
 
-    fn combo(mods: &[VIRTUAL_KEY], vk: VIRTUAL_KEY) -> Vec<INPUT> {
+    pub(crate) fn combo(mods: &[VIRTUAL_KEY], vk: VIRTUAL_KEY) -> Vec<INPUT> {
         let mut v: Vec<INPUT> = mods.iter().map(|m| key_input(*m, false)).collect();
         v.push(key_input(vk, false));
         v.push(key_input(vk, true));
@@ -697,14 +751,32 @@ mod imp {
             Key::VolumeUp => one(VK_VOLUME_UP),
             Key::VolumeDown => one(VK_VOLUME_DOWN),
             Key::Mute => one(VK_VOLUME_MUTE),
+            Key::AltTab => combo(&[VK_MENU], VK_TAB),
+            Key::WinLeft => combo(&[VK_LWIN], VK_LEFT),
+            Key::WinRight => combo(&[VK_LWIN], VK_RIGHT),
+            Key::WinUp => combo(&[VK_LWIN], VK_UP),
+            Key::WinDown => combo(&[VK_LWIN], VK_DOWN),
+            Key::CtrlC => combo(&[VK_LCONTROL], b'C' as u16),
+            Key::CtrlV => combo(&[VK_LCONTROL], b'V' as u16),
+            Key::CtrlX => combo(&[VK_LCONTROL], b'X' as u16),
+            Key::CtrlA => combo(&[VK_LCONTROL], b'A' as u16),
+            Key::CtrlZ => combo(&[VK_LCONTROL], b'Z' as u16),
+            Key::CtrlT => combo(&[VK_LCONTROL], b'T' as u16),
+            Key::CtrlW => combo(&[VK_LCONTROL], b'W' as u16),
+            Key::CtrlS => combo(&[VK_LCONTROL], b'S' as u16),
+            Key::AltLeft => combo(&[VK_MENU], VK_LEFT),
+            Key::AltRight => combo(&[VK_MENU], VK_RIGHT),
+            Key::F5 => one(VK_F5),
+            Key::DesktopLeft => combo(&[VK_LWIN, VK_LCONTROL], VK_LEFT),
+            Key::DesktopRight => combo(&[VK_LWIN, VK_LCONTROL], VK_RIGHT),
         }
     }
 
     pub fn press(id: Option<u64>, key: Key) -> HandsResult<()> {
         match id {
-            None if key.is_media() => {
+            None if key.is_global() => {
                 ready_to_act()?;
-                send(&key_inputs(key)).then_some(()).ok_or_else(|| "the media key didn't go through".into())
+                send(&key_inputs(key)).then_some(()).ok_or_else(|| "the key didn't go through".into())
             }
             None => Err("say which app to press it in".into()),
             Some(id) => send_to(hwnd(id)?, &key_inputs(key)),

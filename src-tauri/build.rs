@@ -74,6 +74,8 @@ const COMMANDS: &[&str] = &[
     "stream_new_token",
     "stream_status",
     "stream_test_event",
+    "undo_last_action",
+    "undo_status",
     "update_check",
     "update_choose",
     "update_context_settings",

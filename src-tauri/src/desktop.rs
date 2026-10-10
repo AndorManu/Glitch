@@ -145,6 +145,14 @@ impl Desktop for NativeDesktop {
 #[cfg(target_os = "windows")]
 pub use imp::friendly_app;
 
+/// Desktop control's picture: one window (or the screen under the mouse) and
+/// where its top-left corner is on the screen. Same privacy rules as
+/// `capture`: Glitch's own windows left out, password fields covered, RAM only.
+#[cfg(target_os = "windows")]
+pub fn capture_window(h: Option<usize>) -> DesktopResult<(Capture, (i32, i32))> {
+    imp::capture_hwnd(h)
+}
+
 #[cfg(not(target_os = "windows"))]
 mod imp {
     use super::*;
@@ -469,6 +477,31 @@ mod imp {
                 }
             }
         };
+        take(rect, shown, &wins)
+    }
+
+    /// One window (or the screen under the mouse, for `None`) as a picture
+    /// for the numbered boxes: where its top-left corner is on the screen,
+    /// Glitch's own windows left out, password fields covered.
+    pub fn capture_hwnd(h: Option<usize>) -> DesktopResult<(Capture, (i32, i32))> {
+        let wins = windows();
+        let mut cursor = POINT { x: 0, y: 0 };
+        unsafe { GetCursorPos(&mut cursor) };
+        let (rect, shown) = unsafe {
+            match h.map(|h| h as HWND).and_then(|hw| Some((hw, frame(hw)?))) {
+                Some((hw, f)) => {
+                    let mon = monitor_rect(MonitorFromWindow(hw, MONITOR_DEFAULTTONEAREST));
+                    (intersect(f, mon).unwrap_or(mon), Some(hw))
+                }
+                None => (monitor_rect_at(cursor), None),
+            }
+        };
+        let c = take(rect, shown, &wins)?;
+        Ok((c, (rect.left, rect.top)))
+    }
+
+    /// Grab `rect`, hiding Glitch's windows and covering password fields.
+    fn take(rect: RECT, shown: Option<HWND>, wins: &Windows) -> DesktopResult<Capture> {
         // Password fields of the window in front, found while we capture.
         let redact_hwnd = shown.map(|h| h as usize);
         let (tx, rx) = mpsc::channel();

@@ -14,6 +14,9 @@ mod context;
 mod context_native;
 mod desktop;
 mod hands;
+mod hands_desktop;
+#[cfg(test)]
+mod hands_guard;
 #[cfg(all(test, target_os = "windows"))]
 mod hands_live;
 mod hover;
@@ -62,9 +65,11 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let hide = MenuItem::with_id(app, "play_hide", "Play hide and seek", true, None::<&str>)?;
     // The panic button, first: "Hide Glitch / Pause everything" <-> "Show Glitch".
     let pause = pause::tray_items(app, chat.clone())?;
+    // Stops a running app / desktop task at once (like pressing Esc), without hiding him.
+    let stop = MenuItem::with_id(app, "hands_stop", "Stop what Glitch is doing", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
-        &[&pause, &sep_top, &chat, &fetch, &hide, &wander, &chaos, &focus, &wake, &settings, &sep, &quit],
+        &[&pause, &stop, &sep_top, &chat, &fetch, &hide, &wander, &chaos, &focus, &wake, &settings, &sep, &quit],
     )?;
     *state.wander_item.lock().unwrap() = Some(wander);
     *state.chaos_item.lock().unwrap() = Some(chaos);
@@ -101,6 +106,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                         pause::toggle(&app);
                     });
                 }
+                "hands_stop" => hands::stop_now(app),
                 "play_fetch" => play::start_game(app, glitch_core::play::Game::Fetch),
                 "play_hide" => play::start_game(app, glitch_core::play::Game::HideSeek),
                 "focus" => context::tray_toggle(app),
@@ -175,6 +181,8 @@ fn main() {
             commands::pull_model,
             commands::send_message,
             commands::confirm_action,
+            commands::undo_last_action,
+            commands::undo_status,
             commands::reset_chat,
             commands::warm_model,
             commands::cool_model,

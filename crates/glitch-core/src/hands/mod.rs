@@ -411,7 +411,10 @@ pub trait Hands: Send + Sync {
     /// Move the real pointer / click / drag / scroll. Shows the ring and paw
     /// at the target first, moves in small eased steps, checks for the user's
     /// own input at every step and stops within 100 ms of it.
-    fn pointer(&self, _op: &pointer::PointerOp) -> HandsResult<String> {
+    /// `pids`: for each spot of the action (`PointerOp::spots`), the process
+    /// of the window that was approved there; the real one refuses to act if
+    /// something else is under that spot.
+    fn pointer(&self, _op: &pointer::PointerOp, _pids: &[u32]) -> HandsResult<String> {
         Err("moving the pointer isn't available here".into())
     }
     /// Where the pointer is now.

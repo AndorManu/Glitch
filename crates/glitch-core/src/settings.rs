@@ -47,6 +47,10 @@ pub struct Settings {
     /// "Smarter brain for app control": a bigger model used only for app
     /// tasks (`None`: the normal brain).
     pub hands_model: Option<String>,
+    /// Sub-level of "Let Glitch control apps": "Desktop control" (pointer,
+    /// windows, files, numbered-box vision). Off by default; needs
+    /// `hands_enabled`.
+    pub hands_desktop_enabled: bool,
     /// "He reacts to what you're doing" (music, coding, games, focus...).
     /// Missing in older files -> defaults (all on except focus auto-suggest).
     pub context: ContextSettings,
@@ -250,6 +254,7 @@ impl Default for Settings {
             auto_update: UpdateSettings::default(),
             hands_enabled: false,
             hands_model: None,
+            hands_desktop_enabled: false,
             context: ContextSettings::default(),
             update_me: UpdateMeSettings::default(),
             safety: SafetySettings::default(),
@@ -390,6 +395,7 @@ mod tests {
         assert!(s.screen_enabled && !s.notes_trusted);
         assert_eq!(s.keep_alive, "2m");
         assert!(!s.hands_enabled && s.hands_model.is_none(), "app control is off by default");
+        assert!(!s.hands_desktop_enabled, "desktop control is off by default");
     }
 
     #[test]

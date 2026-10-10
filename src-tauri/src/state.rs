@@ -77,6 +77,48 @@ fn progress_sink(app: AppHandle) -> ProgressSink {
     })
 }
 
+/// Where Glitch's data lives (undo.json sits next to settings.json).
+pub fn data_dir(settings_path: &Path) -> PathBuf {
+    settings_path.parent().map(Path::to_path_buf).unwrap_or_default()
+}
+
+/// Desktop control for the agent: the switch (it needs app control too),
+/// where files may be moved (the user's own folders), and the undo log.
+/// Debug builds: `GLITCH_DESKTOP_FILE_ROOT=<folder>` limits file moves to
+/// exactly that folder (the live tests use a temp folder).
+pub fn configure_desktop(agent: &mut Agent, settings: &Settings, data_dir: &Path) {
+    use glitch_core::hands::fsmove::FileGuard;
+    use glitch_core::hands::undo::UndoLog;
+    let on = settings.hands_enabled && settings.hands_desktop_enabled;
+    if !on {
+        // Off: but "Undo" still works for what was moved before.
+        agent.set_desktop_control(
+            false,
+            None,
+            settings.hands_enabled.then(|| UndoLog::open(data_dir.join("undo.json"))),
+        );
+        return;
+    }
+    let guard = match std::env::var_os("GLITCH_DESKTOP_FILE_ROOT").filter(|_| cfg!(debug_assertions)) {
+        Some(root) => Some(FileGuard::with_roots(vec![PathBuf::from(root)])),
+        None => dirs::home_dir().map(|home| {
+            let extra: Vec<PathBuf> = [
+                dirs::desktop_dir(),
+                dirs::document_dir(),
+                dirs::download_dir(),
+                dirs::picture_dir(),
+                dirs::video_dir(),
+                dirs::audio_dir(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            FileGuard::for_home(&home, &extra)
+        }),
+    };
+    agent.set_desktop_control(true, guard, Some(UndoLog::open(data_dir.join("undo.json"))));
+}
+
 impl AppState {
     pub fn new(app: &AppHandle, config_dir: PathBuf) -> Self {
         let settings_path = config_dir.join("settings.json");
@@ -108,6 +150,7 @@ impl AppState {
         agent.set_notes_trusted(settings.notes_trusted);
         agent.set_hands(crate::hands::for_setting(app, settings.hands_enabled));
         agent.set_hands_model(settings.hands_model.clone());
+        configure_desktop(&mut agent, &settings, &config_dir);
         if settings.memory_enabled {
             agent.set_memory(Some(MemoryStore::load(&memory_path)));
         }

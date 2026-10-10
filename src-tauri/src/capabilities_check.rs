@@ -88,6 +88,9 @@ fn only_the_bubble_talks_to_the_agent() {
         assert_eq!(who(cmd), ["panel"], "{cmd}");
     }
     assert_eq!(who("update_install"), ["bubble", "panel"]);
+    // "Undo last Glitch action" (file moves, window moves): the bubble and Settings.
+    assert_eq!(who("undo_last_action"), ["bubble", "panel"]);
+    assert_eq!(who("undo_status"), ["bubble", "panel"]);
     // The panic button, its hotkey and "Start with Windows" are Settings only:
     // a web page in another window must never be able to turn the safety off.
     for cmd in ["safety_status", "safety_set_paused", "safety_set_hotkey", "safety_set_autostart"] {

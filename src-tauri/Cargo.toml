@@ -41,6 +41,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # Clipboard text for the read_clipboard / write_clipboard tools.
 arboard = { version = "3", default-features = false }
 open = "5"
+# The user's Documents / Desktop / ... folders for move_file (already in the tree via glitch-core).
+dirs = "6"
 
 # Microphone capture (WASAPI / CoreAudio). Linux isn't a target and would
 # need the ALSA dev headers, so voice is unavailable there.
