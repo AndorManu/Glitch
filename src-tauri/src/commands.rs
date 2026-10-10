@@ -163,6 +163,17 @@ pub async fn pull_model(
         .map_err(UiError::from)
 }
 
+/// Chat is turned away while the panic button is on.
+fn paused_check() -> Result<(), UiError> {
+    if crate::pause::is_paused() {
+        return Err(UiError::new(
+            "paused",
+            "Glitch is paused. Show him again from the tray icon or with the panic shortcut.",
+        ));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn send_message(app: AppHandle, state: State<'_, AppState>, text: String) -> Result<Step, UiError> {
     let text = text.trim();
@@ -174,6 +185,7 @@ pub async fn send_message(app: AppHandle, state: State<'_, AppState>, text: Stri
     if text.chars().count() > MAX_INPUT_CHARS {
         return Err(UiError::new("too_long", "That's a lot of text! Could you make it shorter?"));
     }
+    paused_check()?;
     let model = state.settings().model.ok_or_else(|| UiError::new("no_model", "Pick a model in settings first"))?;
     let _ = app.emit("mood", "thinking");
     let result = state.agent.lock().await.send(&model, text).await;
@@ -215,6 +227,7 @@ pub async fn confirm_action(
     id: String,
     approved: bool,
 ) -> Result<Step, UiError> {
+    paused_check()?;
     let model = state.settings().model.ok_or_else(|| UiError::new("no_model", "Pick a model first"))?;
     let _ = app.emit("mood", "thinking");
     let (result, notes_trusted) = {
@@ -455,6 +468,10 @@ pub async fn update_settings(
 /// What a click on Glitch (or the tray's "Chat") does: the chat bubble, or
 /// the setup wizard if setup isn't finished yet.
 pub fn open_chat(app: &AppHandle, toggle: bool) {
+    // The panic button is on: starting Glitch again or clicking "Chat" does not bring him back.
+    if crate::pause::is_paused() {
+        return;
+    }
     if app.state::<AppState>().settings().onboarding_done {
         if toggle {
             windows::toggle_bubble(app)

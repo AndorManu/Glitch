@@ -128,6 +128,9 @@ impl Hands for NativeHands {
         open::that_detached(uri).map_err(|e| format!("couldn't open {uri}: {e}"))
     }
     fn ready_to_act(&self) -> HandsResult<()> {
+        if crate::pause::is_paused() {
+            return Err("Glitch is paused (the panic button), so he won't touch anything".into());
+        }
         imp::ready_to_act()
     }
     fn elevated(&self, w: &WindowRef) -> bool {
@@ -152,8 +155,14 @@ impl Hands for NativeHands {
         }
     }
     fn interrupted(&self) -> bool {
-        imp::interrupted()
+        // The panic button counts as the user taking over: the task ends at once.
+        crate::pause::is_paused() || imp::interrupted()
     }
+}
+
+/// The panic button: take the "Glitch is driving" banner down.
+pub fn hide_banner(app: &AppHandle) {
+    banner::hide(app);
 }
 
 /// The small always-on-top "Glitch is driving <App>, press Esc to stop"

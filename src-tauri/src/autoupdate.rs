@@ -145,7 +145,7 @@ pub fn setup(app: &AppHandle) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(FIRST_CHECK_SECS)).await;
         loop {
-            if app.state::<AppState>().settings().auto_update.auto_check {
+            if app.state::<AppState>().settings().auto_update.auto_check && !crate::pause::is_paused() {
                 let _ = check(&app, true).await;
             }
             tokio::time::sleep(Duration::from_secs(CHECK_EVERY_SECS)).await;

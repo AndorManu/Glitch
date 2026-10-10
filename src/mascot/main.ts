@@ -149,10 +149,31 @@ window.addEventListener("contextmenu", (e) => e.preventDefault());
  * something was played.
  */
 export function playAction(name: unknown): boolean {
+  if (paused) return false;
   return creature?.playAction(name) ?? false;
 }
 
+/**
+ * The panic button (src-tauri/src/pause.rs): while paused he does nothing at
+ * all. Rust hides the window and refuses every chaos call; this page also
+ * stops walking and ignores events, so nothing is left running behind it.
+ */
+let paused = false;
+
+function setPaused(on: boolean, s: Settings | null): void {
+  paused = on;
+  if (on) {
+    creature?.setMovement(false);
+    creature?.setChaos(false);
+    creature?.setMood("idle");
+  } else if (s) {
+    creature?.setMovement(s.movement_enabled);
+    creature?.setChaos(s.chaos_enabled ?? true);
+  }
+}
+
 function applySettings(s: Settings): void {
+  if (paused) return; // the panic button wins; leaving it re-applies these
   creature?.setMovement(s.movement_enabled);
   creature?.setChaos(s.chaos_enabled ?? true);
   mirrorOn = s.stream_overlay?.enabled === true;
@@ -166,6 +187,7 @@ function applySettings(s: Settings): void {
 
 let mirrorOn = false;
 let mirrored = "";
+let lastSettings: Settings | null = null;
 
 function mirrorTick(c: Creature, r: Renderer): void {
   if (!mirrorOn) return;
@@ -193,19 +215,27 @@ async function main(): Promise<void> {
   let settings: Settings | null = null;
   try {
     settings = await api.getSettings();
+    lastSettings = settings;
     c.movement = settings.movement_enabled;
     c.chaosOn = settings.chaos_enabled ?? true;
     mirrorOn = settings.stream_overlay?.enabled === true;
+    if (settings.safety?.paused) setPaused(true, settings);
   } catch (e) {
     console.error("could not load settings", e);
   }
   const pos = await win.outerPosition().catch(() => ({ x: 0, y: 0 }));
   await c.start({ x: pos.x, y: pos.y });
 
-  await listen<Settings>("settings-changed", (e) => applySettings(e.payload));
+  await listen<Settings>("settings-changed", (e) => {
+    lastSettings = e.payload;
+    applySettings(e.payload);
+  });
+  await listen<boolean>("pause-changed", (e) => setPaused(e.payload === true, lastSettings));
   await listen<boolean>("panel-visibility", (e) => c.setPanelOpen(e.payload));
   // Unknown moods fall back to idle inside setMood.
-  await listen<string>("mood", (e) => c.setMood(e.payload));
+  await listen<string>("mood", (e) => {
+    if (!paused) c.setMood(e.payload);
+  });
   await listen<boolean>("mascot-hover", (e) => {
     c.setHovered(e.payload);
     reactor?.setHovered(e.payload);
@@ -218,7 +248,9 @@ async function main(): Promise<void> {
   const r = new ContextReactor(c, { now: () => performance.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (id) => clearTimeout(id as ReturnType<typeof setTimeout>) }, Math.random, countdownLabel());
   reactor = r;
   if (c.onEvent) r.onEvent = (what) => c.onEvent?.(`context:${what}`);
-  await listen<Reaction>("context", (e) => void r.handle(e.payload));
+  await listen<Reaction>("context", (e) => {
+    if (!paused) void r.handle(e.payload);
+  });
   await listen<ContextStatus>("focus", (e) => r.status(e.payload));
   void contextApi.status().then((s) => r.status(s), () => {});
   // "Update me": run over, knock on the screen, hold up a sign (update-act.ts).
@@ -226,12 +258,15 @@ async function main(): Promise<void> {
     { play: playAction, setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (t) => clearTimeout(t as ReturnType<typeof setTimeout>) },
     domSignStage(document.body),
   );
-  await listen<UpdateAct>("mascot-update", (e) => actor.run(e.payload));
+  await listen<UpdateAct>("mascot-update", (e) => {
+    if (!paused) actor.run(e.payload);
+  });
   // The bubble shows a reply: he says it (mouth moving while it appears).
   await listen<number>(MASCOT_TALK_EVENT, (e) => c.talk(Number(e.payload) || 0));
   window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener("change", () => renderer.redraw());
   // Show only now that the first frame is drawn (no blank/white flash).
-  await win.show();
+  // Saved panic button: stay hidden until he is shown again from the tray.
+  if (!paused) await win.show();
   // First run: open the setup wizard next to Glitch.
   if (settings && !settings.onboarding_done) void api.showPanel();
 }

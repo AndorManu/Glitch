@@ -197,6 +197,10 @@ fn deliver(app: &AppHandle, act: Option<MascotUpdate>, speech: UpdateSpeech, bub
 
 /// An event from the endpoint (a script, a build, the Claude Code hook).
 fn on_event(app: &AppHandle, e: UpdateEvent) {
+    // The panic button: events from scripts and Claude Code are dropped while paused.
+    if crate::pause::is_paused() {
+        return;
+    }
     let f = feature(app);
     let claude = e.source == "claude-code";
     if claude && !f.claude_code_enabled {
@@ -342,6 +346,10 @@ pub fn add_reminder(app: &AppHandle, due: i64, text: &str) -> Result<(), String>
 }
 
 fn tick_reminders(app: &AppHandle) {
+    // Due reminders wait (they stay due) until Glitch is shown again.
+    if crate::pause::is_paused() {
+        return;
+    }
     if !feature(app).reminders_enabled {
         return;
     }
@@ -388,6 +396,10 @@ fn digest_speech(app: &AppHandle) -> Option<UpdateSpeech> {
 }
 
 fn poll_once(app: &AppHandle) {
+    // Not even reading the notification list while paused.
+    if crate::pause::is_paused() {
+        return;
+    }
     let f = feature(app);
     let me = um(app);
     if me.source.access() != Access::Allowed {

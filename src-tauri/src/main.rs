@@ -1,6 +1,7 @@
 // No console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod autostart;
 mod autoupdate;
 #[cfg(test)]
 mod capabilities_check;
@@ -21,6 +22,7 @@ mod ledge_watch;
 #[cfg(target_os = "windows")]
 mod notify_win;
 mod os;
+mod pause;
 mod state;
 mod stream;
 mod update_me;
@@ -50,7 +52,10 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let focus = context::tray_item(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Glitch", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&chat, &wander, &chaos, &focus, &settings, &sep, &quit])?;
+    let sep_top = PredefinedMenuItem::separator(app)?;
+    // The panic button, first: "Hide Glitch / Pause everything" <-> "Show Glitch".
+    let pause = pause::tray_items(app, chat.clone())?;
+    let menu = Menu::with_items(app, &[&pause, &sep_top, &chat, &wander, &chaos, &focus, &settings, &sep, &quit])?;
     *state.wander_item.lock().unwrap() = Some(wander);
     *state.chaos_item.lock().unwrap() = Some(chaos);
 
@@ -79,6 +84,12 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                         chaos::stop_all(app);
                     }
                     let _ = app.emit("settings-changed", &s);
+                }
+                "pause" => {
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        pause::toggle(&app);
+                    });
                 }
                 "focus" => context::tray_toggle(app),
                 "quit" => {
@@ -114,6 +125,8 @@ fn main() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             app.manage(AppState::new(app.handle(), app.path().app_config_dir()?));
+            pause::setup(app.handle());
+            autostart::sync_on_start(app.handle());
             update_me::setup(app.handle(), app.path().app_config_dir()?);
             app.manage(hover::Hitbox::default());
             app.manage(chaos::ChaosState::default());
@@ -128,6 +141,7 @@ fn main() {
             // wizard on first run (so the panel can be placed next to it).
             // Dragging Glitch keeps the chat bubble attached (see place_mascot).
             windows::place_mascot(app.handle());
+            pause::after_windows(app.handle());
             chaos::debug_trigger(app.handle());
             context::start(app.handle());
             context::debug_trigger(app.handle());
@@ -176,6 +190,10 @@ fn main() {
             chaos::chaos_note_close,
             chaos::chaos_note_open_now,
             chaos::chaos_debug_log,
+            pause::safety_status,
+            pause::safety_set_paused,
+            pause::safety_set_hotkey,
+            pause::safety_set_autostart,
             context::context_status,
             context::focus_start,
             context::update_context_settings,

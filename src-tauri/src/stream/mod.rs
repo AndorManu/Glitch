@@ -193,7 +193,11 @@ pub fn setup(app: &AppHandle) {
 
 /// Bring the server and the connections in line with the settings.
 pub fn apply(app: &AppHandle) {
-    let s = app.state::<AppState>().settings().stream_overlay;
+    let mut s = app.state::<AppState>().settings().stream_overlay;
+    // The panic button: the server and the Twitch / Streamer.bot connections stop.
+    if crate::pause::is_paused() {
+        s.enabled = false;
+    }
     let h = hub(app);
     *h.config.lock().unwrap() = Some(h.send("config", &config_json(&s)));
     let mut run = h.run.lock().unwrap();
@@ -249,7 +253,7 @@ pub fn apply(app: &AppHandle) {
 /// Returns false when it was dropped (reactions off, chat hidden, flood).
 pub fn handle_event(app: &AppHandle, e: &StreamEvent, test: bool) -> bool {
     let s = app.state::<AppState>().settings().stream_overlay;
-    if !s.enabled || (!s.react && !test) || (e.kind == EventKind::Chat && !s.show_chat) {
+    if crate::pause::is_paused() || !s.enabled || (!s.react && !test) || (e.kind == EventKind::Chat && !s.show_chat) {
         return false;
     }
     let h = hub(app);

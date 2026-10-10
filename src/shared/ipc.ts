@@ -29,6 +29,15 @@ export interface Settings {
   context?: import("./context").ContextSettings;
   /** "Update me" features (missing from old builds: defaults). */
   update_me?: UpdateMeSettings;
+  /** Panic button and "Start with Windows" (missing from old builds: defaults). */
+  safety?: SafetySettings;
+}
+
+/** Saved part of the safety switches (see the safety section). */
+export interface SafetySettings {
+  paused: boolean;
+  panic_hotkey: string;
+  start_with_windows: boolean;
 }
 
 export interface MemoryFact {
@@ -346,6 +355,29 @@ export const voiceApi = {
   cancelDownload: () => invoke<void>("voice_cancel_download"),
   deleteModel: (model: string) => invoke<void>("voice_delete_model", { model }),
   openMicSettings: () => invoke<void>("voice_open_mic_settings"),
+};
+
+// ------------------------------------------------------------------ safety
+// The panic button and "Start with Windows" (src-tauri/src/pause.rs,
+// autostart.rs). "pause-changed" (boolean) is sent whenever the panic button flips.
+
+export interface SafetyStatus {
+  paused: boolean;
+  hotkey: { combo: string; registered: boolean; error: string | null };
+  default_hotkey: string;
+  start_with_windows: boolean;
+  autostart_supported: boolean;
+  /** What the Windows registry says right now (the saved setting is the wish). */
+  autostart_active: boolean;
+  autostart_error: string | null;
+}
+
+export const safetyApi = {
+  status: () => invoke<SafetyStatus>("safety_status"),
+  setPaused: (paused: boolean) => invoke<SafetyStatus>("safety_set_paused", { paused }),
+  /** Rejects with a UiError whose message says why (too easy to hit by accident, taken...). */
+  setHotkey: (combo: string) => invoke<SafetyStatus>("safety_set_hotkey", { combo }),
+  setAutostart: (enabled: boolean) => invoke<SafetyStatus>("safety_set_autostart", { enabled }),
 };
 
 // ------------------------------------------------------------------ chaos

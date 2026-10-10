@@ -161,6 +161,10 @@ pub fn show_bubble_unfocused(app: &AppHandle) {
 }
 
 fn show_bubble_with(app: &AppHandle, focus: bool) {
+    // The panic button: nothing pops up while Glitch is hidden / paused.
+    if crate::pause::is_paused() {
+        return;
+    }
     let bubble = match app.get_webview_window(BUBBLE) {
         Some(b) => b,
         None => match create_bubble(app) {

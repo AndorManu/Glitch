@@ -70,14 +70,16 @@ fn cfg(app: &AppHandle) -> ContextSettings {
 
 /// Glitch keeps his paws to himself: a game/fullscreen app or a focus session.
 pub fn blocks_chaos(app: &AppHandle) -> bool {
-    app.try_state::<ContextState>().is_some_and(|c| {
-        let c = c.lock().unwrap();
-        c.sensor.quiet() || c.focus.focusing()
-    })
+    crate::pause::is_paused()
+        || app.try_state::<ContextState>().is_some_and(|c| {
+            let c = c.lock().unwrap();
+            c.sensor.quiet() || c.focus.focusing()
+        })
 }
 
+/// Games and presentations, and the panic button: reminders wait.
 fn quiet(app: &AppHandle) -> bool {
-    app.try_state::<ContextState>().is_some_and(|c| c.lock().unwrap().sensor.quiet())
+    crate::pause::is_paused() || app.try_state::<ContextState>().is_some_and(|c| c.lock().unwrap().sensor.quiet())
 }
 
 /// Reminders wait while the user games or presents (at most two hours).
@@ -179,6 +181,10 @@ fn want(cfg: &ContextSettings) -> Want {
 
 /// One poll: read, decide, send. Returns how long to sleep.
 fn poll(app: &AppHandle, cpu: &mut native::CpuMeter) -> Duration {
+    // Paused: don't even look at what the user is doing.
+    if crate::pause::is_paused() {
+        return POLL_OFF;
+    }
     let settings: Settings = app.state::<AppState>().settings();
     let cfg = &settings.context;
     let c = app.state::<ContextState>();

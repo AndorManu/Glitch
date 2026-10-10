@@ -88,6 +88,11 @@ fn only_the_bubble_talks_to_the_agent() {
         assert_eq!(who(cmd), ["panel"], "{cmd}");
     }
     assert_eq!(who("update_install"), ["bubble", "panel"]);
+    // The panic button, its hotkey and "Start with Windows" are Settings only:
+    // a web page in another window must never be able to turn the safety off.
+    for cmd in ["safety_status", "safety_set_paused", "safety_set_hotkey", "safety_set_autostart"] {
+        assert_eq!(who(cmd), ["panel"], "{cmd}");
+    }
     // The updater plugin is driven from Rust only: no webview may call it.
     for entry in std::fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities")).unwrap() {
         let text = std::fs::read_to_string(entry.unwrap().path()).unwrap();

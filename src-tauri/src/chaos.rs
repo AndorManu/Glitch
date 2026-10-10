@@ -80,6 +80,10 @@ fn dlog(what: std::fmt::Arguments) {
 
 /// Chaos is allowed at all right now (settings + chat closed + user not busy).
 fn allowed(app: &AppHandle) -> Result<(), Refusal> {
+    // The panic button: no chaos at all while Glitch is hidden / paused.
+    if crate::pause::is_paused() {
+        return Err(Refusal::Disabled);
+    }
     let s = app.state::<AppState>().settings();
     if !s.chaos_enabled || !s.movement_enabled {
         return Err(Refusal::Disabled);
@@ -279,6 +283,16 @@ pub fn stop_all(app: &AppHandle) {
         let mut c = c.lock().unwrap();
         c.window = None;
         c.cursor = None;
+    }
+}
+
+/// The panic button: close his sticky note and paw-print overlay too.
+pub fn close_extras(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window(NOTE) {
+        let _ = w.destroy();
+    }
+    if let Some(w) = app.get_webview_window(PAWS) {
+        let _ = w.hide();
     }
 }
 

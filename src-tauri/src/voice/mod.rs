@@ -141,6 +141,10 @@ fn emit(app: &AppHandle, e: &VoiceEvent) {
 /// Start listening. Does nothing if a voice command is already running.
 /// Everything that happens next arrives as "voice" events.
 pub fn start(app: &AppHandle, mode: Mode) {
+    // The panic button: the microphone stays off.
+    if crate::pause::is_paused() {
+        return;
+    }
     let vs = app.state::<VoiceState>();
     let settings = app.state::<AppState>().settings();
     if !settings.voice.enabled {
