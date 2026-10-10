@@ -652,3 +652,4 @@ button.danger-text.armed:hover:not(:disabled) { background: var(--danger); }
 }
 .chaos-confirm p { margin: 6px 0 10px; font-size: 13px; line-height: 1.4; }
 .chaos-confirm .row { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.chaos-feature > .row { margin: 10px 0 4px; display: flex; gap: 8px; }

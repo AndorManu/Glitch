@@ -114,6 +114,12 @@ def trace(out, pids, ms, hz, hwnds, trigger, sim, delay):
                         else:
                             note = "skipped: not our window under the cursor"
                     else:
+                        # Wait (up to 6 s) for the focus to be on one of our windows: keys only ever go to ours.
+                        for _ in range(120):
+                            if pid_of(user32.GetForegroundWindow()) in pids:
+                                break
+                            time.sleep(0.05)
+                        fired = round((time.perf_counter() - t0) * 1000, 2)
                         fg = user32.GetForegroundWindow()
                         if pid_of(fg) in pids:
                             if kind == "esc":

@@ -848,13 +848,12 @@ pub fn start_sampler(app: &AppHandle) {
             }
             slow += 1;
             // Remember what is in front (needs a level that can minimise), every second.
-            if (watching && slow % 10 == 0) || (!watching && slow % 2 == 0) {
-                if level_of(&app) >= ChaosLevel::Mischief {
-                    if let Some(id) = native::foreground_id() {
-                        let mut i = inner();
-                        let now = i.now_ms();
-                        i.front.record(id, now);
-                    }
+            let due = if watching { slow.is_multiple_of(10) } else { slow.is_multiple_of(2) };
+            if due && level_of(&app) >= ChaosLevel::Mischief {
+                if let Some(id) = native::foreground_id() {
+                    let mut i = inner();
+                    let now = i.now_ms();
+                    i.front.record(id, now);
                 }
             }
         }

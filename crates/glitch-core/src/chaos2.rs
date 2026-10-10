@@ -1532,7 +1532,7 @@ mod tests {
     #[test]
     fn user_input_aborts_on_the_very_next_tick_for_every_reason() {
         // Eight ms per tick: the abort is felt long inside the 100 ms budget.
-        assert!(TICK_MS * 2 <= ABORT_BUDGET_MS / 5);
+        const { assert!(TICK_MS * 2 <= ABORT_BUDGET_MS / 5) };
         let base = || script(CursorAct::Hook(HookStyle::Circle), ChaosLevel::FullVirus);
         let cases: [(Sample, AbortReason); 6] = [
             (Sample { stop: true, ..quiet(1000, (900, 500)) }, AbortReason::Stopped),
@@ -1887,7 +1887,7 @@ mod tests {
             Closed,
         }
         for seed in 0..300u64 {
-            let mut rnd = |n: u64| -> u64 { (hash01(seed, n) * 1_000_000.0) as u64 };
+            let rnd = |n: u64| -> u64 { (hash01(seed, n) * 1_000_000.0) as u64 };
             let mut book = MinimizeBook::default();
             let mut wins = [Win::Open; 5];
             // The user minimised window 4 himself before Glitch started: it stays that way.
@@ -1941,13 +1941,10 @@ mod tests {
                 // The watcher: restore what is due, forget what the user changed.
                 for id in book.due(now) {
                     let y = book.remove(id).unwrap();
-                    match restore_check(true, wins[y.id as usize] == Win::MinByGlitch, true) {
-                        RestoreCheck::Restore => {
-                            wins[y.id as usize] = Win::Open;
-                            minimised_since[y.id as usize] = None;
-                            restored_by_glitch.push(y.id);
-                        }
-                        _ => {}
+                    if restore_check(true, wins[y.id as usize] == Win::MinByGlitch, true) == RestoreCheck::Restore {
+                        wins[y.id as usize] = Win::Open;
+                        minimised_since[y.id as usize] = None;
+                        restored_by_glitch.push(y.id);
                     }
                 }
                 for y in book.items().to_vec() {

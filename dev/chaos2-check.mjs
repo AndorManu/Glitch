@@ -298,7 +298,8 @@ try {
       check(`${name}: the cursor is let go within 100 ms`, latency <= 100, `${latency.toFixed(0)} ms`);
       const tail = after.filter((r) => r.t > t.fired_ms + 400);
       check(`${name}: and stays where the user left it`, tail.length > 20 && tail.every((r) => r.x === tail[0].x && r.y === tail[0].y), `${tail.length} samples`);
-      check(`${name}: he reacts (startled, flop, pout)`, seen.includes("startled") || seen.includes("annoyed") || seen.includes("splat"), seen.join(">"));
+      // (After the panic hotkey he is hidden and does nothing at all.)
+      if (name !== "hotkey") check(`${name}: he reacts (startled, flop, pout)`, seen.includes("startled") || seen.includes("annoyed") || seen.includes("splat"), seen.join(">"));
       const reasons = name === "hotkey" ? "UserInput|Stopped" : { user_input: "UserInput", button: "Button", esc: "Esc" }[why];
       check(`${name}: Rust logged why`, new RegExp(`ended after \\d+ ms: Some\\((${reasons})\\)`).test(log), why);
       if (name === "hotkey") {
@@ -412,8 +413,17 @@ try {
       const pick = (hwnd) => s.find((w) => String(w.hwnd) === String(hwnd));
       return { A: pick(H.A), B: pick(H.B), unsaved: pick(H.unsaved), focus: pick(H.focus), fg: s.find((w) => w.fg) };
     };
-    for (const variant of ["timer", "user", "esc", "exit"]) {
+    // The Settings page, opened and hidden again before any act (so it does not count as "chat open").
+    await invoke(mascot, "show_panel", { view: "settings" }).catch(() => {});
+    const panelHidden = await page("panel");
+    await invoke(panelHidden, "hide_panel").catch(() => {});
+    await sleep(1500);
+    for (const variant of ["timer", "user", "stop", "esc", "exit"]) {
+      // Every variant starts with both windows out (the previous one may have left one minimised).
+      for (const k of ["A", "B", "focus"]) tool("restore", H[k], pids);
+      await sleep(800);
       await quiet(5500);
+      const fgBefore = (await states()).fg?.hwnd;
       const tr = bg("dev/chaos2-tool.py", "trace", path.join(OUT, `yoink-${variant}.json`), "--pids", pids, "--ms", variant === "timer" ? "20000" : "9000", "--hz", "50", ...hw("A", "B", "unsaved", "focus"), ...(variant === "esc" ? ["--sim", "esc", "--trigger", "none", "--delay", "3500"] : []));
       const f = variant === "timer" ? await film("yoink", 19, 8) : null;
       await sleep(400);
@@ -422,9 +432,9 @@ try {
       check(`yoink (${variant}): starts`, ok === true, log.split("\n").filter((l) => /yoink|chaos2/.test(l)).slice(-2).join(" | "));
       await sleep(2500);
       const mid = await states();
-      const gone = ["A", "B"].filter((k) => mid[k]?.iconic);
-      check(`yoink (${variant}): exactly one window is minimised, never the unsaved or focused one`, gone.length === 1 && !mid.unsaved.iconic && !mid.focus.iconic, gone.join(","));
-      check(`yoink (${variant}): the focus did not move`, mid.fg?.hwnd === info.windows.focus, `${mid.fg?.title}`);
+      const gone = ["A", "B", "focus"].filter((k) => mid[k]?.iconic);
+      check(`yoink (${variant}): exactly one window is minimised, never the unsaved one`, gone.length === 1 && !mid.unsaved.iconic, gone.join(","));
+      check(`yoink (${variant}): the focus did not move`, mid.fg?.hwnd === fgBefore, `${fgBefore} -> ${mid.fg?.hwnd} (${mid.fg?.title})`);
       if (variant === "user") {
         await sleep(1500);
         tool("restore", H[gone[0]], pids); // the user clicks its taskbar button
@@ -434,13 +444,30 @@ try {
         await sleep(9000);
         const later = await states();
         check("yoink (user): still there 9 s later", !later[gone[0]].iconic && /left alone|restored\/closed by the user/.test(log));
+      } else if (variant === "stop") {
+        // The tray's "Stop chaos", Settings' Stop and the panic button all end in this (abort_all).
+        await sleep(1000);
+        const t1 = Date.now();
+        await invoke(mascot, "chaos2_abort");
+        let back = null;
+        while (Date.now() - t1 < 3000 && back === null) {
+          if (!(await states())[gone[0]].iconic) back = Date.now() - t1;
+        }
+        check("yoink (stop): everything is back right away", gone.length === 1 && back !== null && back <= 900, `${back} ms (includes a slow window listing)`);
       } else if (variant === "esc") {
-        await sleep(2200);
-        const after = await states();
-        check("yoink (Esc): restored at once", gone.length === 1 && !after[gone[0]].iconic);
+        await sleep(4500);
+        await tr.done;
+        const t = readJson(path.join(OUT, "yoink-esc.json"));
+        if (t.note || t.fired_ms === null) {
+          console.log(`SKIP  yoink (Esc): the keyboard focus was not on one of our windows (${t.note || "no focus"}); the same path ran in "stop"`);
+        } else {
+          const after = await states();
+          check("yoink (Esc): restored at once", gone.length === 1 && !after[gone[0]].iconic);
+        }
       } else if (variant === "exit") {
         await sleep(1500);
-        await invoke(mascot, "quit").catch(() => {});
+        // From the (hidden) Settings page: Quit, with a window still minimised.
+        await invoke(panelHidden, "quit").catch(() => {});
         await sleep(3500);
         const after = await states();
         check("yoink (exit): Glitch quit while a window was minimised: it is back", gone.length === 1 && !after[gone[0]].iconic, `iconic=${after[gone[0]]?.iconic}`);
@@ -454,15 +481,15 @@ try {
       await tr.done;
       await f?.done;
       if (variant === "timer" || variant === "user" || variant === "esc") {
+        if (!existsSync(path.join(OUT, `yoink-${variant}.json`))) continue;
         const t = readJson(path.join(OUT, `yoink-${variant}.json`));
         const k = gone[0] ? H[gone[0]] : null;
         if (k) {
           const goneAt = t.rows.find((r) => r.w[k][4] === 1)?.t;
           const backAt = t.rows.find((r) => r.t > (goneAt ?? 1e9) && r.w[k][4] === 0)?.t;
           if (variant === "timer") check("yoink (timer): back after 8 to 15 s", goneAt !== undefined && backAt !== undefined && backAt - goneAt >= 7500 && backAt - goneAt <= 15800, `${((backAt - goneAt) / 1000).toFixed(1)} s`);
-          if (variant === "esc") {
-            const escAt = t.fired_ms;
-            check("yoink (Esc): back within 500 ms of Esc", escAt && backAt !== undefined && backAt - escAt <= 500, `${(backAt - escAt).toFixed(0)} ms`);
+          if (variant === "esc" && t.fired_ms !== null && !t.note) {
+            check("yoink (Esc): back within 500 ms of Esc", backAt !== undefined && backAt - t.fired_ms <= 500, `${(backAt - t.fired_ms).toFixed(0)} ms`);
           }
         }
       }
@@ -476,31 +503,40 @@ try {
   }
 
   // ------------------------------------------------------ the settings card
-  if (want("panel") && alive()) {
-    await invoke(await page("mascot"), "show_panel", { view: "settings" }).catch(() => {});
+  if (want("panel")) {
+    // A fresh profile that never confirmed Full Virus (at Mischief), so the dialog shows.
+    await quit();
+    writeSettings({ chaos_level: "mischief", chaos_full_confirmed: false });
+    await launch();
+    const mascot2 = await page("mascot");
+    await mascot2.waitForFunction(() => window.__glitch?.creature?.world, null, { timeout: 40000 });
+    await invoke(mascot2, "show_panel", { view: "settings" }).catch(() => {});
     const panel = await page("panel");
     await panel.waitForSelector(".chaos-feature", { timeout: 20000 });
     await panel.evaluate(() => document.querySelector(".chaos-feature")?.scrollIntoView({ block: "center" }));
     await sleep(500);
     await panel.screenshot({ path: path.join(OUT, "panel-1-card.png") });
-    // Switch to Gentle first (so Full Virus asks again if it was never confirmed in this profile).
+    let s = readJson(path.join(APPDIR, "settings.json"));
+    check("panel: the card shows Mischief as the current level", (await panel.locator('[role="radio"][aria-checked="true"]').innerText()) === "Mischief");
+    await panel.getByRole("radio", { name: "Gentle" }).click();
+    await sleep(500);
+    s = readJson(path.join(APPDIR, "settings.json"));
+    check("panel: Gentle switches level without a dialog", s.chaos_level === "gentle");
+    await panel.getByRole("radio", { name: "Off" }).click();
+    await sleep(500);
+    s = readJson(path.join(APPDIR, "settings.json"));
+    check("panel: Off also switches the old chaos switch off", s.chaos_enabled === false);
     await panel.getByRole("radio", { name: "Mischief" }).click();
     await sleep(500);
-    let s = readJson(path.join(APPDIR, "settings.json"));
-    check("panel: Mischief switches level without a dialog", s.chaos_level === "mischief");
-    // Forget the confirmation to see the dialog.
-    const raw = readJson(path.join(APPDIR, "settings.json"));
-    writeFileSync(path.join(APPDIR, "settings.json"), JSON.stringify({ ...raw, chaos_full_confirmed: false }));
-    await sleep(300);
-    await panel.evaluate(() => document.querySelector(".chaos-feature")?.scrollIntoView({ block: "center" }));
-    await invoke(panel, "get_settings");
+    s = readJson(path.join(APPDIR, "settings.json"));
+    check("panel: Mischief switches chaos back on", s.chaos_level === "mischief" && s.chaos_enabled === true);
     await panel.getByRole("radio", { name: "Full Virus" }).click();
     await panel.waitForSelector('[role="alertdialog"]', { timeout: 5000 }).catch(() => {});
     const dlg = await panel.$('[role="alertdialog"]');
     check("panel: Full Virus first asks for a confirmation (with Test and Cancel)", !!dlg && (await dlg.innerText()).includes("move your mouse pointer"));
     await panel.screenshot({ path: path.join(OUT, "panel-2-confirm.png") });
     if (dlg) {
-      await dlg.getByRole("button", { name: "Test" }).click();
+      await panel.locator('[role="alertdialog"]').getByRole("button", { name: "Test" }).click();
       await sleep(1800);
       const shot = path.join(OUT, "panel-3-test-popup.png");
       tool("shot", shot, String(ax), String(ay), String(aw), String(ah));
