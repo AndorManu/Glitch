@@ -19,7 +19,7 @@ type BoolKey = "fetch" | "hide_seek" | "feeding" | "mood" | "growth" | "levels";
 
 /** The feature switches, in the order shown. */
 export const PLAY_SWITCHES: readonly { key: BoolKey; label: string; hint: string }[] = [
-  { key: "fetch", label: "Fetch", hint: "Tray “Play fetch” or say “let's play”: flick the glowing ball, he brings it back." },
+  { key: "fetch", label: "Fetch", hint: "Tray “Play fetch”, say “let's play fetch”, or double-click him: flick the glowing ball, he brings it back." },
   { key: "hide_seek", label: "Hide and seek", hint: "Tray or “hide and seek”: he hides behind an edge. Point at him to find him." },
   { key: "mood", label: "Mood & energy", hint: "Hearts and stars when you pet him (hover). Bored: a bit more mischief. Happy: more dances. Never sad or needy." },
   { key: "growth", label: "Personality growth", hint: "Greets you by name and asks about your projects, at most once a day. Uses his memory (needs Memory on)." },

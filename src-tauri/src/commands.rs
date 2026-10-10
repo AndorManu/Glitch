@@ -485,6 +485,16 @@ pub fn show_panel_view(app: &AppHandle, view: &str) {
 
 #[tauri::command]
 pub async fn mascot_clicked(app: AppHandle) {
+    // A double-click starts fetch when it is on (the first click already
+    // opened the chat; start_game closes it again). Otherwise it is a click.
+    static LAST_CLICK: std::sync::Mutex<Option<u64>> = std::sync::Mutex::new(None);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+    let prev = LAST_CLICK.lock().unwrap().replace(now);
+    if glitch_core::play::is_double_click(prev, now) && app.state::<AppState>().settings().play.fetch {
+        *LAST_CLICK.lock().unwrap() = None;
+        crate::play::start_game(&app, glitch_core::play::Game::Fetch);
+        return;
+    }
     open_chat(&app, true);
 }
 

@@ -442,6 +442,15 @@ pub enum Game {
 
 /// A short chat message that asks for a game ("let's play", "hide and seek").
 /// Longer messages (real questions that happen to mention fetch) go to the model.
+/// Two clicks on him this close together (ms) are a double-click.
+pub const DOUBLE_CLICK_MS: u64 = 380;
+
+/// Is a click at `now_ms` the second of a double-click, given the previous
+/// click's time (a double-click's second click never counts as a new first).
+pub fn is_double_click(prev_ms: Option<u64>, now_ms: u64) -> bool {
+    matches!(prev_ms, Some(p) if now_ms >= p && now_ms - p <= DOUBLE_CLICK_MS)
+}
+
 pub fn chat_game(text: &str) -> Option<Game> {
     let t: String = text
         .to_lowercase()
@@ -584,6 +593,13 @@ pub fn personal_greeting(p: &mut PetState, facts: &[Fact], today: &str, now: i64
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn double_click_window() {
+        assert!(super::is_double_click(Some(1000), 1300));
+        assert!(!super::is_double_click(Some(1000), 1500));
+        assert!(!super::is_double_click(None, 1000));
+    }
+
     use super::*;
 
     fn fact(id: u64, text: &str) -> Fact {
