@@ -82,7 +82,7 @@ let log = "";
 proc.stderr.on("data", (d) => (log += d));
 
 // Desktop frames: the test window's region (with banner and ring), never the whole screen.
-const grabber = spawn("python", ["dev/hands-frames.py", "grab", FRAMES, String(DP.x - 60), "0", String(DP.w + 120), String(DP.y + DP.h + 60)], { stdio: "ignore" });
+const grabber = spawn("python", ["dev/hands-frames.py", "grab", FRAMES, String(DP.x - 60), "0", String(DP.w + 120), String(DP.y + DP.h + 60)], { stdio: "ignore", env: { ...process.env, FRAME_GAP: "0.12" } });
 
 let browser;
 const page = async (part) => {

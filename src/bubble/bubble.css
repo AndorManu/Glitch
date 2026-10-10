@@ -438,6 +438,12 @@ button:focus:not(:focus-visible) { outline: none; }
   overflow: hidden;
 }
 
+.detail.long {
+  -webkit-line-clamp: 9;
+  max-width: 270px;
+  white-space: pre-wrap;
+}
+
 .chips {
   list-style: none;
   display: flex;

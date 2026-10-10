@@ -25,7 +25,7 @@ def grab(out, x, y, w, h):
     while not os.path.exists(stop):
         t = int(time.time() * 1000)
         ImageGrab.grab(bbox=(x, y, x + w, y + h), all_screens=True).save(os.path.join(out, f"d_{t}.png"))
-        time.sleep(0.35)
+        time.sleep(float(os.environ.get("FRAME_GAP", "0.35")))
 
 
 def frames(out, prefix):

@@ -438,7 +438,9 @@ export class BubbleView {
     if (main) balloon.append(scroll);
 
     if (speech.kind === "confirm" && speech.detail) {
-      const detail = h("p", { class: "detail", title: speech.detail });
+      // Desktop control cards (exact paths, the next step) need more than two lines.
+      const long = speech.detail.includes("\n") || speech.detail.length > 110;
+      const detail = h("p", { class: long ? "detail long" : "detail", title: speech.detail });
       for (const part of breakChunks(speech.detail)) detail.append(part, h("wbr"));
       balloon.append(detail);
     }
