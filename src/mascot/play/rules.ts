@@ -7,14 +7,12 @@
 import { type AnimationName, isAnimationName } from "../animations";
 import type { Step } from "../brain";
 import {
-  type Body,
   clampTo,
   HALF,
   isStanding,
   isTop,
   planJump,
   restCenter,
-  stepAir,
   type Surface,
   surfaceRange,
   type Vec,
@@ -30,8 +28,14 @@ import {
 export const PLAY_ANIMS: Record<string, readonly string[]> = {
   /** Trotting back with the ball in his mouth. */
   fetch_ball: ["walk"],
-  /** Waiting for the next throw, tail wagging. */
-  wag: ["happy", "idle"],
+  /** Sitting, tail wagging, waiting for the next throw. */
+  idle_tail: ["sit", "happy", "idle"],
+  /** Watching the ball fly, ready to run. */
+  ready: ["listen", "idle"],
+  /** Batting the ball along. */
+  bat: ["happy"],
+  /** The end of a game: a little bow. */
+  bow: ["wave", "happy"],
   /** Peeking out from behind an edge (only his head shows). */
   hide_peek: ["listen", "idle"],
   /** After a meal, for the rest of the day. */
@@ -54,14 +58,8 @@ export function playAnim(name: string, has: (n: string) => boolean = isAnimation
 
 // ------------------------------------------------------------------- ball
 
-/** Ball radius, CSS px (ball.html draws it this size). */
+/** Ball radius, CSS px (the play overlay draws it this size). */
 export const BALL_R = 9;
-/** Faster than this (CSS px/s) on landing: it bounces again. */
-export const BALL_BOUNCE_MIN = 140;
-export const BALL_BOUNCE = 0.5;
-/** Fastest throw, CSS px/s. */
-export const BALL_MAX_THROW = 3200;
-
 /**
  * Glitch's flight physics works on a body HALF css px "tall": a world grown
  * by (HALF - r) on every side, with window tops lowered by the same amount,
@@ -74,44 +72,6 @@ export function ballWorld(w: World, r = BALL_R): World {
     area: { x: w.area.x - d, y: w.area.y - d, w: w.area.w + 2 * d, h: w.area.h + 2 * d },
     ledges: w.ledges.map((l) => ({ ...l, y: l.y + d })),
   };
-}
-
-export interface Ball {
-  /** Centre, physical px; velocity physical px/s. */
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-}
-
-/**
- * Fly the ball for `dt` s: gravity, air drag, bouncing off the screen edges,
- * the floor and window tops. Returns the surface it came to rest on (null:
- * still flying). `world` is the real world (not ballWorld).
- */
-export function stepBall(b: Ball, world: World, dt: number, bw: World = ballWorld(world)): Surface | null {
-  const u = world.scale;
-  const body: Body = { x: b.x, y: b.y, vx: b.vx, vy: b.vy, angle: 0, spin: 0 };
-  let vx = b.vx;
-  const contacts = stepAir(body, bw, dt, { drag: true, canSplat: false, keepSpin: true });
-  let rest: Surface | null = null;
-  for (const c of contacts) {
-    if (c.kind === "bounce") vx = body.vx;
-    if (c.kind !== "land") continue;
-    if (c.speed > BALL_BOUNCE_MIN) {
-      // A ball bounces where Glitch would just land.
-      body.vy = -c.speed * BALL_BOUNCE * u;
-      body.vx = vx * 0.8;
-    } else {
-      const hit = c.surface;
-      rest = isTop(hit) ? { kind: "ledge", ledge: world.ledges.find((l) => l.id === hit.ledge.id) ?? hit.ledge } : hit;
-    }
-  }
-  b.x = body.x;
-  b.y = body.y;
-  b.vx = rest ? 0 : body.vx;
-  b.vy = rest ? 0 : body.vy;
-  return rest;
 }
 
 // ------------------------------------------------------------- getting there

@@ -1,9 +1,0 @@
-{
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "ball",
-  "description": "The fetch ball: no app commands at all; it only tells the mascot (events) that it was grabbed or let go.",
-  "windows": [
-    "ball"
-  ],
-  "permissions": []
-}

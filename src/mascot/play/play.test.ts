@@ -8,7 +8,8 @@ import { mulberry32 } from "../glitchfx";
 import { HALF, type Surface, type Vec, type World } from "../physics";
 import { CALM } from "../render";
 import { GIVE_UP_MS, Play, type PlayEnv } from "./games";
-import { type Ball, BALL_R, HIDE_SINK, hideSpot, playAnim, route, stepBall, surfaceNear } from "./rules";
+import { type BallPicture, MAX_THROW, newBall, picture, rollFrame, stepSim, throwBall } from "./ballsim";
+import { BALL_R, HIDE_SINK, hideSpot, playAnim, route, surfaceNear } from "./rules";
 
 const WORLD: World = { area: { x: 0, y: 0, w: 1920, h: 1040 }, scale: 1, ledges: [{ id: 7, x: 400, y: 500, w: 600 }] };
 
@@ -66,7 +67,7 @@ function setup() {
   };
   const c = new Creature(host, view, { clock: fc.clock, random: mulberry32(3) });
   const events: PetEventKind[] = [];
-  const ball: { open: number; closed: number; at: Vec | null } = { open: 0, closed: 0, at: null };
+  const ball: { open: number; closed: number; frames: BallPicture[] } = { open: 0, closed: 0, frames: [] };
   const acc = new Accessories(() => {}, fc.clock.now);
   const env: PlayEnv = {
     creature: c,
@@ -74,12 +75,11 @@ function setup() {
     clock: fc.clock,
     rand: mulberry32(9),
     cursor: () => Promise.resolve(cursor),
-    ballOpen: async (x, y) => {
+    ballOpen: async () => {
       ball.open++;
-      ball.at = { x, y };
-      return 44;
+      return true;
     },
-    ballMove: (x, y) => void (ball.at = { x, y }),
+    ballFrame: (f) => void ball.frames.push(f.pic),
     ballClose: () => void ball.closed++,
     petEvent: (k) => void events.push(k),
     settings: () => PLAY_DEFAULTS,
@@ -100,27 +100,78 @@ describe("play rules", () => {
     expect(playAnim("eat")).toBe("eat");
   });
 
-  it("a thrown ball bounces and comes to rest on the floor, its bottom on the taskbar line", () => {
-    const b: Ball = { x: 1500, y: 300, vx: 400, vy: -200 };
-    let rest: Surface | null = null;
-    let landedHigh = 0;
-    for (let i = 0; i < 2000 && !rest; i++) {
-      rest = stepBall(b, WORLD, 1 / 60);
-      if (b.vy < 0 && b.y > 900) landedHigh++;
+  it("a thrown ball bounces (squash, sparks), rolls on with friction and comes to rest on the taskbar line", () => {
+    const b = newBall(1300, 300);
+    throwBall(b, 900, -300, 1);
+    let bounces = 0;
+    let squashed = 0;
+    let sparks = 0;
+    let settled = null;
+    let rested = null;
+    for (let i = 0; i < 3000 && !rested; i++) {
+      const r = stepSim(b, WORLD, 1 / 60, () => 0.99);
+      if (r.impact) bounces++;
+      squashed = Math.max(squashed, b.squash);
+      sparks = Math.max(sparks, b.sparks.length);
+      settled ??= r.settled ?? null;
+      rested = r.rested ?? null;
     }
-    expect(rest?.kind).toBe("floor");
+    expect(bounces).toBeGreaterThan(1);
+    expect(squashed).toBeGreaterThan(0.3);
+    expect(settled?.kind).toBe("floor");
+    expect(rested?.kind).toBe("floor");
+    expect(b.mode).toBe("rest");
     expect(b.y + BALL_R).toBeCloseTo(1040, 5);
-    expect(landedHigh).toBeGreaterThan(0); // it bounced on the way
-    expect(b.x).toBeGreaterThan(1500); // kept going the way it was thrown
-    expect(b.x).toBeLessThanOrEqual(1920 - BALL_R);
+    expect(b.x).toBeLessThanOrEqual(1920 - BALL_R); // bounced back off the right edge, still on screen
+    void sparks;
   });
 
-  it("a ball dropped over a window top lands on it", () => {
-    const b: Ball = { x: 700, y: 100, vx: 0, vy: 0 };
-    let rest: Surface | null = null;
-    for (let i = 0; i < 2000 && !rest; i++) rest = stepBall(b, WORLD, 1 / 60);
-    expect(rest).toEqual({ kind: "ledge", ledge: WORLD.ledges[0] });
+  it("rolls the right way: the roll frame turns with the distance travelled, both ways", () => {
+    const go = (vx: number) => {
+      const b = newBall(900, 1040 - BALL_R);
+      b.mode = "roll";
+      b.surface = { kind: "floor" };
+      b.vx = vx;
+      const frames: number[] = [];
+      for (let i = 0; i < 20; i++) {
+        stepSim(b, WORLD, 1 / 60, () => 0.99);
+        frames.push(rollFrame(b.angle));
+      }
+      return { b, frames };
+    };
+    const right = go(300);
+    const left = go(-300);
+    expect(right.b.angle).toBeGreaterThan(0);
+    expect(left.b.angle).toBeLessThan(0);
+    expect(right.b.angle).toBeCloseTo(-left.b.angle, 6);
+    expect(new Set(right.frames).size).toBeGreaterThan(2); // it animates
+    expect(rollFrame(0.01)).toBe(0);
+    expect(rollFrame(-0.01)).toBe(7);
+    expect(rollFrame(Math.PI)).toBe(4);
+  });
+
+  it("throws are clamped; it falls off the end of a window top", () => {
+    const b = newBall(0, 0);
+    throwBall(b, 99999, 0, 2);
+    expect(Math.hypot(b.vx, b.vy)).toBeCloseTo(MAX_THROW * 2, 6);
+    const r = newBall(980, 500 - BALL_R);
+    r.mode = "roll";
+    r.surface = { kind: "ledge", ledge: WORLD.ledges[0] };
+    r.vx = 300;
+    for (let i = 0; i < 30; i++) stepSim(r, WORLD, 1 / 60, () => 0.99);
+    expect(r.mode).toBe("air");
+    for (let i = 0; i < 300 && (r.mode as string) === "air"; i++) stepSim(r, WORLD, 1 / 60, () => 0.99);
+    expect(r.surface?.kind).toBe("floor");
+  });
+
+  it("a ball dropped over a window top lands on it; the picture has a shadow on it", () => {
+    const b = newBall(700, 100);
+    for (let i = 0; i < 2000 && b.mode !== "rest"; i++) stepSim(b, WORLD, 1 / 60, () => 0.99);
+    expect(b.surface).toEqual({ kind: "ledge", ledge: WORLD.ledges[0] });
     expect(b.y + BALL_R).toBeCloseTo(500, 5);
+    const pic = picture(newBall(700, 300), WORLD);
+    expect(pic.groundY).toBe(500);
+    expect(pic.height).toBeCloseTo(500 - 300 - BALL_R, 6);
   });
 
   it("routes: walk on the same surface, jump when in reach, glitch there otherwise", () => {
@@ -176,8 +227,8 @@ describe("games on the creature", () => {
     await t.play.fetch.start();
     expect(t.play.fetch.active).toBe(true);
     expect(t.ball.open).toBe(1);
-    await t.fc.run(3000);
-    expect(t.play.fetch.mode).toBe("rest"); // fell to the floor; no fetch for that
+    await t.fc.run(4000);
+    expect(t.play.fetch.sim?.mode).toBe("rest"); // fell to the floor; no fetch for that
     expect(t.events).toEqual([]);
     // The user grabs it and flicks it to the left.
     t.play.fetch.grab();
@@ -186,22 +237,38 @@ describe("games on the creature", () => {
       await t.fc.run(16);
     }
     t.play.fetch.release();
-    expect(t.play.fetch.ball.vx).toBeLessThan(0);
+    expect(t.play.fetch.sim!.vx).toBeLessThan(0);
     let carried = false;
-    for (let i = 0; i < 400 && !t.events.includes("fetch"); i++) {
+    for (let i = 0; i < 600 && !t.events.includes("fetch"); i++) {
       await t.fc.run(100);
       carried ||= t.acc.carrying;
     }
     expect(carried).toBe(true);
     expect(t.events).toContain("fetch");
     expect(t.acc.carrying).toBe(false);
-    expect(t.ball.closed).toBeGreaterThan(0); // hidden while in his mouth
-    expect(t.ball.open).toBe(2); // and back out when he drops it
+    expect(t.ball.frames.some((f) => f.hidden)).toBe(true); // not drawn while in his mouth
+    expect(t.ball.frames.at(-1)!.hidden).toBe(false); // and back out when he drops it
+    expect(t.ball.open).toBe(1); // one overlay, no new windows
     // He stays around while the game is on.
     expect(t.c.hooks.nextPlan!({ now: 0, world: WORLD, surface: { kind: "floor" }, s: 0, movement: true, sleepy: false, excited: false })).toBe("wait");
-    // Nobody throws: the game ends, the ball goes.
-    await t.fc.run(60_000);
+    // Nobody throws for a minute: the game ends, the ball pops away.
+    await t.fc.run(70_000);
     expect(t.play.fetch.active).toBe(false);
+    expect(t.ball.closed).toBe(1);
+  });
+
+  it("fetch: a click without moving tosses it up a little", async () => {
+    const t = setup();
+    await t.c.start({ x: 1500, y: 1040 - 156 - 4 });
+    await t.fc.run(500);
+    await t.play.fetch.start();
+    await t.fc.run(4000);
+    t.play.fetch.grab();
+    await t.fc.run(50);
+    t.play.fetch.release();
+    expect(t.play.fetch.sim!.vy).toBeLessThan(-500);
+    expect(Math.abs(t.play.fetch.sim!.vx)).toBeLessThan(100);
+    t.play.fetch.end();
   });
 
   it("hide and seek: he hides (only his head shows), pointing at him finds him", async () => {

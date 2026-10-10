@@ -6,7 +6,8 @@
 /// src/capabilities_check.rs fails otherwise.
 const COMMANDS: &[&str] = &[
     "ball_close",
-    "ball_move",
+    "ball_frame",
+    "ball_hold",
     "ball_open",
     "belly_choose_folder",
     "belly_list",
@@ -51,6 +52,8 @@ const COMMANDS: &[&str] = &[
     "panel_view",
     "pet_event",
     "pet_state",
+    "playfield_idle",
+    "playfield_ready",
     "pull_model",
     "quit",
     "reminder_delete",

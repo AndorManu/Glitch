@@ -16,6 +16,7 @@ mod ledge_watch;
 mod notify_win;
 mod os;
 mod play;
+mod play_native;
 mod state;
 mod update_me;
 mod voice;
@@ -178,7 +179,10 @@ fn main() {
             play::pet_event,
             play::update_play_settings,
             play::ball_open,
-            play::ball_move,
+            play::ball_frame,
+            play::playfield_ready,
+            play::playfield_idle,
+            play::ball_hold,
             play::ball_close,
             play::growth_greeting,
             play::belly_list,

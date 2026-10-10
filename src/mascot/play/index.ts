@@ -24,8 +24,8 @@ export async function initPlay(
     clock: { now: () => performance.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (id) => clearTimeout(id as ReturnType<typeof setTimeout>) },
     rand: Math.random,
     cursor,
-    ballOpen: (x, y) => playApi.ballOpen(x, y).catch(() => null),
-    ballMove: (x, y) => void playApi.ballMove(x, y).catch(() => {}),
+    ballOpen: () => playApi.ballOpen().catch(() => false),
+    ballFrame: (f) => void playApi.ballFrame(f).catch(() => {}),
     ballClose: () => void playApi.ballClose().catch(() => {}),
     petEvent: (kind) =>
       void playApi.event(kind).then(
@@ -43,10 +43,10 @@ export async function initPlay(
   await listen<string>("mascot-action", (e) => void play.action(String(e.payload)));
   await listen<boolean>("panel-visibility", (e) => play.check(!!e.payload));
   await listen<boolean>("mascot-hover", (e) => play.hover(!!e.payload));
-  // The ball window (ball.html).
+  // The play overlay (playfield.html, src-tauri/src/play.rs): the ball pressed, let go, hovered.
   await listen("ball-grab", () => play.fetch.grab());
   await listen("ball-release", () => play.fetch.release());
-  await listen("ball-quit", () => play.fetch.end());
+  await listen<boolean>("ball-hover", (e) => play.fetch.hoverBall(!!e.payload));
   // Files dragged onto him (only Rust reads the paths; see play.rs watch_drops).
   await listen<boolean>("feed-drag", (e) => play.feeding.drag(!!e.payload));
   await listen<FeedResult>("feed-result", (e) => play.feeding.result(e.payload));

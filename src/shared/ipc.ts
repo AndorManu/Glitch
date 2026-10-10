@@ -490,9 +490,11 @@ export const playApi = {
   event: (kind: PetEventKind) => invoke<PetView>("pet_event", { kind }),
   /** hat "" = no hat. */
   updateSettings: (patch: PlayPatch) => invoke<Settings>("update_play_settings", { patch }),
-  /** The fetch ball window at (x, y) physical px (top-left): its size in physical px, or null. */
-  ballOpen: (x: number, y: number) => invoke<number | null>("ball_open", { x, y }),
-  ballMove: (x: number, y: number) => invoke<boolean>("ball_move", { x, y }),
+  /** Bring up the invisible play overlay the fetch ball is drawn on. */
+  ballOpen: () => invoke<boolean>("ball_open"),
+  /** The ball's picture for the overlay; centre/radius in physical px (where the mouse can grab it). */
+  ballFrame: (frame: { x: number; y: number; r: number; pic: unknown }) => invoke<void>("ball_frame", { frame }),
+  /** The ball pops away and the overlay goes. */
   ballClose: () => invoke<void>("ball_close"),
   /** Once a day: hello by name + a question about a project (null = the usual greeting). */
   greeting: () => invoke<string | null>("growth_greeting"),

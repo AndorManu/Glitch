@@ -1,33 +1,49 @@
 //! Games, play and growth, the app side: Glitch's mood/energy/XP file
 //! (`pet.json`), his belly (feeding: files are moved, never deleted, into a
-//! folder the user picked, `belly.json` lists them for "restore"), the fetch
-//! ball window, the tray / chat entries that start a game, and the daily
+//! folder the user picked, `belly.json` lists them for "restore"), the play
+//! overlay the fetch ball lives in, the tray / chat entries that start a game, and the daily
 //! personal greeting. The rules themselves are in `glitch_core::play` and
 //! `glitch_core::belly` (unit-tested).
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use glitch_core::belly::{Belly, BellyError, Eaten, MAX_PER_MEAL};
 use glitch_core::play::{self, Game, PetEvent, PetStore, PetView, PlaySettings};
 use glitch_core::settings::Settings;
 use serde::{Deserialize, Serialize};
 use tauri::{
-    AppHandle, DragDropEvent, Emitter, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindowBuilder, Window,
-    WindowEvent,
+    AppHandle, DragDropEvent, Emitter, Manager, PhysicalPosition, PhysicalSize, State, WebviewUrl,
+    WebviewWindowBuilder, Window, WindowEvent,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult};
 
 use crate::state::AppState;
 use crate::windows;
 
-pub const BALL: &str = "ball";
-/// CSS px, must match ball.html.
-const BALL_CSS: f64 = 44.0;
+/// The play overlay: an invisible, click-through layer over the work area
+/// that the fetch ball is drawn on (playfield.html). No title bar, no
+/// taskbar button, no Alt+Tab entry, never focused; it only catches the
+/// mouse right over the ball (so you can grab it) and while you hold it.
+pub const PLAYFIELD: &str = "playfield";
+
+/// Where the ball is (physical px), for the mouse: grab it, hover glow.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct BallHit {
+    pub x: f64,
+    pub y: f64,
+    pub r: f64,
+    pub shown: bool,
+    pub held: bool,
+}
 
 pub struct PlayState {
     pub pet: Mutex<PetStore>,
     pub belly: Mutex<Belly>,
+    pub ball: Mutex<BallHit>,
+    poller: AtomicBool,
 }
 
 impl PlayState {
@@ -35,6 +51,8 @@ impl PlayState {
         Self {
             pet: Mutex::new(PetStore::load(&config_dir.join("pet.json"))),
             belly: Mutex::new(Belly::load(&config_dir.join("belly.json"))),
+            ball: Mutex::new(BallHit::default()),
+            poller: AtomicBool::new(false),
         }
     }
 }
@@ -207,17 +225,19 @@ pub fn chat_hook(app: &AppHandle, text: &str) -> Option<glitch_core::agent::Step
     Some(glitch_core::agent::Step::Reply { text: reply.into(), actions: vec![] })
 }
 
-/// The fetch ball: a tiny always-on-top window at (x, y) (physical px, top-left).
+/// Fetch starts: the play overlay over the work area of Glitch's screen,
+/// created hidden; the page shows it (`playfield_ready`) once it has drawn.
 #[tauri::command]
-pub async fn ball_open(app: AppHandle, window: Window, x: i32, y: i32) -> Option<i32> {
+pub async fn ball_open(app: AppHandle, window: Window) -> bool {
     if only_from(&window, &[windows::MASCOT]).is_err() || !app.state::<AppState>().settings().play.fetch {
-        return None;
+        return false;
     }
-    let win = match app.get_webview_window(BALL) {
+    let Some(mascot) = app.get_webview_window(windows::MASCOT) else { return false };
+    let Some(area) = windows::work_area_of(&mascot) else { return false };
+    let win = match app.get_webview_window(PLAYFIELD) {
         Some(w) => w,
-        None => WebviewWindowBuilder::new(&app, BALL, WebviewUrl::App("ball.html".into()))
-            .title("Glitch's ball")
-            .inner_size(BALL_CSS, BALL_CSS)
+        None => match WebviewWindowBuilder::new(&app, PLAYFIELD, WebviewUrl::App("playfield.html".into()))
+            .title("Glitch play")
             .transparent(true)
             .decorations(false)
             .shadow(false)
@@ -231,28 +251,172 @@ pub async fn ball_open(app: AppHandle, window: Window, x: i32, y: i32) -> Option
             .accept_first_mouse(true)
             .visible(false)
             .build()
-            .map_err(|e| eprintln!("glitch: ball window failed: {e}"))
-            .ok()?,
+        {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("glitch: play overlay failed: {e}");
+                return false;
+            }
+        },
     };
-    let _ = win.set_position(PhysicalPosition::new(x, y));
-    crate::chaos::show_quietly(&win);
-    let _ = win.set_position(PhysicalPosition::new(x, y));
-    Some((BALL_CSS * win.scale_factor().unwrap_or(1.0)).round() as i32)
-}
-
-#[tauri::command]
-pub fn ball_move(app: AppHandle, window: Window, x: i32, y: i32) -> bool {
-    if only_from(&window, &[windows::MASCOT]).is_err() {
-        return false;
+    #[cfg(target_os = "windows")]
+    if let Ok(h) = win.hwnd() {
+        crate::play_native::make_tool_window(h.0 as isize);
     }
-    app.get_webview_window(BALL).is_some_and(|w| w.set_position(PhysicalPosition::new(x, y)).is_ok())
+    let _ = win.set_position(PhysicalPosition::new(area.x, area.y));
+    let _ = win.set_size(PhysicalSize::new(area.w as u32, area.h as u32));
+    let _ = win.set_ignore_cursor_events(true);
+    app.state::<PlayState>().ball.lock().unwrap().shown = true;
+    let _ = win.emit("ball-begin", ());
+    start_poller(&app);
+    true
 }
 
+#[derive(Deserialize)]
+pub struct BallFrame {
+    /// Centre and radius in physical screen px (for the mouse).
+    x: f64,
+    y: f64,
+    r: f64,
+    /// What to draw (playfield.ts BallPicture), passed on as is.
+    pic: serde_json::Value,
+}
+
+/// A new picture of the ball (the mascot runs its physics).
 #[tauri::command]
-pub fn ball_close(app: AppHandle) {
-    if let Some(w) = app.get_webview_window(BALL) {
+pub fn ball_frame(app: AppHandle, window: Window, frame: BallFrame) {
+    if only_from(&window, &[windows::MASCOT]).is_err() {
+        return;
+    }
+    {
+        let ps = app.state::<PlayState>();
+        let mut b = ps.ball.lock().unwrap();
+        b.x = frame.x;
+        b.y = frame.y;
+        b.r = frame.r;
+    }
+    let _ = app.emit_to(PLAYFIELD, "ball-frame", frame.pic);
+}
+
+/// Fetch is over: the ball pops into pixels, then the overlay goes away (`playfield_idle`).
+#[tauri::command]
+pub fn ball_close(app: AppHandle, window: Window) {
+    if only_from(&window, &[windows::MASCOT]).is_err() {
+        return;
+    }
+    let _ = app.emit_to(PLAYFIELD, "ball-end", ());
+    let ps = app.state::<PlayState>();
+    let mut b = ps.ball.lock().unwrap();
+    b.held = false;
+}
+
+/// The overlay page drew its first frame: show it without taking focus.
+#[tauri::command]
+pub fn playfield_ready(app: AppHandle, window: Window) {
+    if only_from(&window, &[PLAYFIELD]).is_err() {
+        return;
+    }
+    let Some(win) = app.get_webview_window(PLAYFIELD) else { return };
+    if !app.state::<PlayState>().ball.lock().unwrap().shown {
+        return;
+    }
+    let _ = win.set_ignore_cursor_events(true);
+    crate::chaos::show_quietly(&win);
+    #[cfg(target_os = "windows")]
+    if let Ok(h) = win.hwnd() {
+        crate::play_native::make_tool_window(h.0 as isize);
+    }
+    // Glitch stays above his ball.
+    if let Some(m) = app.get_webview_window(windows::MASCOT) {
+        let _ = m.set_always_on_top(true);
+    }
+}
+
+/// The ball has popped away: hide the overlay, stop watching the mouse.
+#[tauri::command]
+pub fn playfield_idle(app: AppHandle, window: Window) {
+    if only_from(&window, &[PLAYFIELD]).is_err() {
+        return;
+    }
+    app.state::<PlayState>().ball.lock().unwrap().shown = false;
+    if let Some(w) = app.get_webview_window(PLAYFIELD) {
+        let _ = w.set_ignore_cursor_events(true);
         let _ = w.hide();
     }
+}
+
+/// The page: the ball was pressed / let go (keeps the overlay catching the mouse meanwhile).
+#[tauri::command]
+pub fn ball_hold(app: AppHandle, window: Window, held: bool) {
+    if only_from(&window, &[PLAYFIELD]).is_err() {
+        return;
+    }
+    app.state::<PlayState>().ball.lock().unwrap().held = held;
+}
+
+/// Is the cursor on the ball (with a small margin)? Physical px.
+pub fn on_ball(b: &BallHit, cursor: (f64, f64), margin: f64) -> bool {
+    b.shown && b.r > 0.0 && (cursor.0 - b.x).hypot(cursor.1 - b.y) <= b.r + margin
+}
+
+/// While the overlay is up: let the mouse through except over the ball (and
+/// while it is held), tell the mascot about hovering, and (Windows) notice a
+/// release the page missed. 60 Hz near the ball, nothing once fetch ends.
+fn start_poller(app: &AppHandle) {
+    let ps = app.state::<PlayState>();
+    if ps.poller.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let mut catching = false;
+        let mut hover = false;
+        let mut up_polls = 0;
+        loop {
+            std::thread::sleep(Duration::from_millis(16));
+            let ps = app.state::<PlayState>();
+            let b = *ps.ball.lock().unwrap();
+            let Some(win) = app.get_webview_window(PLAYFIELD) else { break };
+            if !b.shown {
+                if catching {
+                    let _ = win.set_ignore_cursor_events(true);
+                }
+                break;
+            }
+            let scale = win.scale_factor().unwrap_or(1.0);
+            let cursor = crate::play_native::cursor().or_else(|| app.cursor_position().ok().map(|p| (p.x, p.y)));
+            let Some(cursor) = cursor else { continue };
+            let over = on_ball(&b, cursor, 8.0 * scale);
+            if b.held {
+                // Windows: the button is up but the page never said so (it lost the pointer).
+                if crate::play_native::left_down() == Some(false) {
+                    up_polls += 1;
+                    if up_polls >= 3 {
+                        ps.ball.lock().unwrap().held = false;
+                        let _ = app.emit_to(windows::MASCOT, "ball-release", ());
+                    }
+                } else {
+                    up_polls = 0;
+                }
+            } else {
+                up_polls = 0;
+            }
+            let want = over || b.held;
+            if want != catching {
+                catching = want;
+                let _ = win.set_ignore_cursor_events(!want);
+            }
+            if over != hover {
+                hover = over;
+                let _ = app.emit_to(windows::MASCOT, "ball-hover", over);
+                let _ = app.emit_to(PLAYFIELD, "ball-hover", over);
+            }
+        }
+        if hover {
+            let _ = app.emit_to(windows::MASCOT, "ball-hover", false);
+        }
+        app.state::<PlayState>().poller.store(false, Ordering::SeqCst);
+    });
 }
 
 // ----------------------------------------------------------------- growth
@@ -539,11 +703,20 @@ mod tests {
     fn commands_are_per_window() {
         // Settings (incl. feeding and "don't ask again") and restores: the panel only.
         assert!(label_ok("panel", &[windows::PANEL]));
-        for other in ["mascot", "bubble", "ball", "note", "pawprints", "Panel", ""] {
+        for other in ["mascot", "bubble", "playfield", "note", "pawprints", "Panel", ""] {
             assert!(!label_ok(other, &[windows::PANEL]), "{other}");
         }
         assert!(label_ok("mascot", &[windows::MASCOT]));
-        assert!(!label_ok("ball", &[windows::MASCOT]));
+        assert!(!label_ok("playfield", &[windows::MASCOT]));
+    }
+
+    #[test]
+    fn the_ball_catches_the_mouse_only_on_itself() {
+        let b = BallHit { x: 100.0, y: 100.0, r: 9.0, shown: true, held: false };
+        assert!(on_ball(&b, (100.0, 100.0), 8.0));
+        assert!(on_ball(&b, (116.0, 100.0), 8.0));
+        assert!(!on_ball(&b, (118.0, 100.0), 8.0));
+        assert!(!on_ball(&BallHit { shown: false, ..b }, (100.0, 100.0), 8.0));
     }
 
     #[test]

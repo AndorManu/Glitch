@@ -8,7 +8,7 @@
     "panel",
     "note",
     "pawprints",
-    "ball"
+    "playfield"
   ],
   "permissions": [
     "core:default"

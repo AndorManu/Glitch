@@ -10,6 +10,7 @@
 
 import type { FrameImage } from "../sprites/types";
 import { HAT_CELL, HAT_SPRITES, HEAD_DX, HEAD_HALF } from "./hats-data";
+import { BALL_ART, ballGrid, toCanvas } from "./play/ballart";
 
 /** canvas setTransform matrix [a b c d e f]. */
 export type Mat = [number, number, number, number, number, number];
@@ -227,11 +228,16 @@ export class Accessories implements AccessoryLayer {
     }
   }
 
-  /** The glowing glitch ball in his mouth (just under and in front of the eye). */
+  /** The fetch ball in his mouth (its own pixel art, at his art scale: under and in front of the eye). */
   private drawBall(f: AccessoryFrame, art: Mat): void {
-    const [x, y] = apply(art, f.eye![0] * ART_W + 3, f.eye![1] * ART_H + 9);
-    drawBallAt(f.ctx, x * f.dpr, y * f.dpr, 6 * f.dpr, f.tick);
+    this.ballImg ??= toCanvas(ballGrid(1));
+    const half = BALL_ART / 2;
+    f.ctx.setTransform(...mul([f.dpr, 0, 0, f.dpr, 0, 0], art));
+    f.ctx.imageSmoothingEnabled = false;
+    f.ctx.drawImage(this.ballImg, Math.round(f.eye![0] * ART_W + 4 - half), Math.round(f.eye![1] * ART_H + 11 - half), BALL_ART, BALL_ART);
   }
+
+  private ballImg: HTMLCanvasElement | null = null;
 
   /** Hiding behind an edge: nothing below the surface line shows. */
   private cutBelowSurface(f: AccessoryFrame): void {
@@ -257,28 +263,5 @@ export class Accessories implements AccessoryLayer {
       rows.forEach((row, ry) => [...row].forEach((ch, rx) => ch === "#" && f.ctx.fillRect(Math.round(x + (rx - 3) * unit), Math.round(y + ry * unit), unit, unit)));
     }
     f.ctx.globalAlpha = 1;
-  }
-}
-
-/** The fetch ball: a glowing glitch orb (also drawn by the ball window). */
-export function drawBallAt(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, tick: number): void {
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  const glow = ctx.createRadialGradient(x, y, r * 0.3, x, y, r * 2);
-  glow.addColorStop(0, "rgba(255, 60, 220, 0.55)");
-  glow.addColorStop(1, "rgba(255, 60, 220, 0)");
-  ctx.fillStyle = glow;
-  ctx.fillRect(x - r * 2, y - r * 2, r * 4, r * 4);
-  const px = Math.max(1, Math.round(r / 3));
-  // A pixel disc: magenta body, pale highlight, a cyan glitch row now and then.
-  for (let gy = -3; gy <= 3; gy++) {
-    for (let gx = -3; gx <= 3; gx++) {
-      if (gx * gx + gy * gy > 10) continue;
-      let c = "#c000f0";
-      if (gx * gx + gy * gy <= 4) c = "#ff3fd6";
-      if (gx === -1 && gy === -1) c = "#ffe6fb";
-      if (gy === ((tick >> 1) % 7) - 3 && tick % 3 === 0) c = "#29f1ff";
-      ctx.fillStyle = c;
-      ctx.fillRect(Math.round(x + gx * px - px / 2), Math.round(y + gy * px - px / 2), px, px);
-    }
   }
 }

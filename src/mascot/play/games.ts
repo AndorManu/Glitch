@@ -10,9 +10,10 @@ import type { Accessories } from "../accessories";
 import { isAnimationName, type AnimationName } from "../animations";
 import type { BrainContext, Plan, Step } from "../brain";
 import type { Creature } from "../creature";
-import { capSpeed, VelocityTracker } from "../drag";
-import { isStanding, type Surface, type Vec } from "../physics";
-import { type Ball, BALL_MAX_THROW, ballWorld, HIDE_SINK, hideSpot, playAnim, route, stepBall, surfaceNear } from "./rules";
+import { VelocityTracker } from "../drag";
+import { clampTo, FLOOR, isStanding, restCenter, type Surface, type Vec, type World } from "../physics";
+import { type BallPicture, type BallSim, newBall, picture, stepSim, throwBall } from "./ballsim";
+import { BALL_R, ballWorld, HIDE_SINK, hideSpot, playAnim, route, surfaceNear } from "./rules";
 
 export interface PlayClock {
   now(): number;
@@ -27,9 +28,11 @@ export interface PlayEnv {
   clock: PlayClock;
   rand(): number;
   cursor(): Promise<Vec>;
-  /** Show the ball window with its top-left at (x, y) physical px: its size in physical px. */
-  ballOpen(x: number, y: number): Promise<number | null>;
-  ballMove(x: number, y: number): void;
+  /** Bring up the play overlay the ball is drawn on. */
+  ballOpen(): Promise<boolean>;
+  /** A new picture of the ball (centre and radius in physical px, for the mouse). */
+  ballFrame(f: { x: number; y: number; r: number; pic: BallPicture }): void;
+  /** The ball pops away, the overlay goes. */
   ballClose(): void;
   petEvent(kind: PetEventKind): void;
   settings(): PlaySettings;
@@ -48,54 +51,73 @@ function run(env: PlayEnv, p: Plan): boolean {
 // ------------------------------------------------------------------ fetch
 
 /** No throw for this long: the game ends. */
-export const FETCH_IDLE_MS = 45_000;
+export const FETCH_IDLE_MS = 60_000;
+/** Physics frame while the ball moves / rests (glow pulse). */
 const BALL_FRAME_MS = 16;
+const BALL_REST_MS = 100;
+/** Held this briefly without moving: a little toss up instead of a throw. */
+const TOSS_MS = 300;
 
-type BallMode = "rest" | "held" | "air" | "carried";
+/** What happens when he reaches the ball (chances per catch). */
+export const FETCH_ODDS = { fumble: 0.15, bat: 0.12, spin: 0.2, runOff: 0.07 };
 
 export class Fetch {
   active = false;
-  mode: BallMode = "rest";
-  ball: Ball = { x: 0, y: 0, vx: 0, vy: 0 };
-  /** The ball he just dropped (landing doesn't send him after it). */
+  /** The ball, or null while it is in his mouth. */
+  sim: BallSim | null = null;
+  held = false;
+  carried = false;
+  hover = false;
+  /** The ball he just dropped / that fell out on its own: landing doesn't send him after it. */
   private dropped = false;
-  private size = 0;
+  /** This throw already had its fumble / bat (once each). */
+  private tricks = { fumble: false, bat: false };
   private timer: unknown = null;
   private idleTimer: unknown = null;
-  private tracker = new VelocityTracker(90);
+  private tracker = new VelocityTracker(80);
+  private heldAt = 0;
   private cursorBusy = false;
+  private last = 0;
+  private chasing = false;
 
   constructor(private readonly env: PlayEnv) {}
 
-  /** The ball appears at the cursor; he gets excited. */
+  private get u(): number {
+    return this.env.creature.world?.scale ?? 1;
+  }
+
+  /** The ball appears at the cursor and drops; he gets excited. */
   async start(): Promise<void> {
     if (this.active || !this.env.settings().fetch) return;
     const c = this.env.creature;
-    const w = c.world;
-    if (!w) return;
+    if (!c.world) return;
     const p = await this.env.cursor();
-    const size = await this.env.ballOpen(Math.round(p.x - 22 * w.scale), Math.round(p.y - 22 * w.scale));
-    if (!size) return;
+    if (!(await this.env.ballOpen())) return;
     this.active = true;
-    this.size = size;
-    this.ball = { x: p.x, y: p.y, vx: 0, vy: 0 };
-    this.dropped = true; // it falls to the ground first; he waits for a real throw
-    this.mode = "air";
+    this.sim = newBall(p.x, p.y, 0, 0);
+    this.dropped = true;
+    this.carried = false;
     this.loop();
     this.poke();
-    run(this.env, plan({ do: "anim", name: playAnim("celebrate") }, { do: "anim", name: playAnim("wag"), ms: 1500 }));
+    run(this.env, plan({ do: "anim", name: playAnim("celebrate") }, { do: "anim", name: playAnim("idle_tail"), ms: 2500 }));
   }
 
+  /** Over: if he has it he tucks it away; the ball pops into pixels and he bows. */
   end(happy = true): void {
     if (!this.active) return;
     this.active = false;
+    this.held = false;
     for (const t of [this.timer, this.idleTimer]) if (t !== null) this.env.clock.clearTimeout(t);
     this.timer = this.idleTimer = null;
     this.env.acc.carrying = false;
-    this.env.ballClose();
+    this.carried = false;
     this.env.creature.repaint();
+    this.env.ballClose();
+    this.sim = null;
     const c = this.env.creature;
-    if (c.mode === "stand" && (!c.plan || c.plan.name === "play")) c.react(plan({ do: "anim", name: happy ? playAnim("laugh") : "lookAround" }));
+    if (c.mode === "stand" && (!c.plan || c.plan.name === "play")) {
+      c.react(plan({ do: "anim", name: happy ? playAnim("bow") : "lookAround" }));
+    }
   }
 
   /** Something happened: the game goes on a while longer. */
@@ -103,142 +125,256 @@ export class Fetch {
     if (this.idleTimer !== null) this.env.clock.clearTimeout(this.idleTimer);
     this.idleTimer = this.env.clock.setTimeout(() => {
       this.idleTimer = null;
-      // Not while he is busy with the ball.
-      if (this.mode === "carried" || this.mode === "held") return this.poke();
+      if (this.held || this.chasing) return this.poke();
       this.end();
     }, FETCH_IDLE_MS);
   }
 
-  /** The user grabbed the ball (ball window). */
+  /** Pressed on the ball (play overlay). */
   grab(): void {
-    if (!this.active || this.mode === "carried") return;
-    this.mode = "held";
+    if (!this.active || !this.sim || this.carried) return;
+    this.held = true;
+    this.heldAt = this.env.clock.now();
     this.tracker.clear();
     this.dropped = false;
     this.poke();
     this.loop();
   }
 
-  /** Let go: thrown with the cursor's speed. */
+  /** Let go: thrown with the cursor's speed of the last ~80 ms, or a little toss. */
   release(): void {
-    if (!this.active || this.mode !== "held") return;
-    const w = this.env.creature.world;
-    const u = w?.scale ?? 1;
-    const v = capSpeed(this.tracker.velocity(this.env.clock.now()), BALL_MAX_THROW * u);
-    this.ball.vx = v.x;
-    this.ball.vy = v.y;
-    this.mode = "air";
+    if (!this.active || !this.held || !this.sim) return;
+    this.held = false;
+    const now = this.env.clock.now();
+    const u = this.u;
+    let v = this.tracker.velocity(now);
+    if (Math.hypot(v.x, v.y) < 120 * u && now - this.heldAt < TOSS_MS) {
+      // A click: a small toss straight up.
+      v = { x: (this.env.rand() - 0.5) * 120 * u, y: -720 * u };
+    }
+    throwBall(this.sim, v.x, v.y, u);
+    this.tricks = { fumble: false, bat: false };
     this.poke();
     this.loop();
+    this.watch();
+  }
+
+  /** He sees the throw: turns to the ball, crouches, ready to run. */
+  private watch(): void {
+    const c = this.env.creature;
+    const b = this.sim;
+    if (!b || c.mode !== "stand" || this.carried || this.chasing) return;
+    const dir: 1 | -1 = b.x + b.vx * 0.3 >= c.body.x ? 1 : -1;
+    run(this.env, plan({ do: "face", dir }, { do: "anim", name: "crouch" }, { do: "anim", name: playAnim("ready"), ms: 4000 }));
+  }
+
+  hoverBall(on: boolean): void {
+    this.hover = on;
+    if (this.sim && !this.timer) this.send();
   }
 
   /** Glitch was grabbed (or fell) while carrying the ball: it drops where he is. */
   creatureEvent(what: string): void {
     if (!this.active) return;
-    if (this.mode === "carried" && (what === "grab" || what.startsWith("ledge-gone"))) this.dropFromMouth(false);
+    if (what === "grab" || what.startsWith("ledge-gone")) {
+      this.chasing = false;
+      if (this.carried) this.dropFromMouth(false);
+    }
   }
 
   private loop(): void {
-    if (this.timer !== null) return;
+    if (this.timer !== null || !this.active) return;
+    const resting = this.sim?.mode === "rest" && !this.held;
     this.timer = this.env.clock.setTimeout(() => {
       this.timer = null;
       this.tick();
-    }, BALL_FRAME_MS);
+    }, resting ? BALL_REST_MS : BALL_FRAME_MS);
   }
 
-  private last = 0;
-
   private tick(): void {
-    if (!this.active) return;
     const w = this.env.creature.world;
-    if (!w) return;
+    const b = this.sim;
+    if (!this.active || !w || !b) return;
     const now = this.env.clock.now();
     const dt = Math.min(0.05, this.last ? (now - this.last) / 1000 : BALL_FRAME_MS / 1000);
     this.last = now;
-    if (this.mode === "held") {
+    if (this.held) {
       if (!this.cursorBusy) {
         this.cursorBusy = true;
         void this.env.cursor().then(
           (p) => {
             this.cursorBusy = false;
-            if (this.mode !== "held") return;
-            this.ball.x = p.x;
-            this.ball.y = p.y;
+            if (!this.held || !this.sim) return;
             this.tracker.add(this.env.clock.now(), p);
-            this.place();
+            // Sticks to the cursor with a small lag.
+            this.sim.x += (p.x - this.sim.x) * 0.55;
+            this.sim.y += (p.y - this.sim.y) * 0.55;
+            this.sim.vx = this.sim.vy = 0;
+            this.sim.mode = "air";
           },
           () => (this.cursorBusy = false),
         );
       }
+      this.send();
       return this.loop();
     }
-    if (this.mode !== "air") {
-      this.last = 0;
-      return;
+    const r = stepSim(b, w, dt, this.env.rand);
+    this.send();
+    if ((r.settled || r.rested) && !this.dropped && !this.chasing && !this.carried) this.chase();
+    this.loop();
+  }
+
+  /** The picture to the play overlay, and where the ball is for the mouse. */
+  private send(): void {
+    const w = this.env.creature.world;
+    const b = this.sim;
+    if (!w || !b) return;
+    this.env.ballFrame({ x: b.x, y: b.y, r: BALL_R * w.scale, pic: picture(b, w, this.hover || this.held) });
+  }
+
+  /** Where the ball will stop, if left alone (for running there straight away). */
+  private predictRest(): { surface: Surface; x: number } | null {
+    const w = this.env.creature.world;
+    const b = this.sim;
+    if (!w || !b) return null;
+    const ghost: BallSim = { ...b, trail: [], sparks: [] };
+    const bw = ballWorld(w);
+    for (let i = 0; i < 600; i++) {
+      stepSim(ghost, w, 1 / 60, () => 0.99, bw);
+      if (ghost.mode === "rest" && ghost.surface) return { surface: ghost.surface, x: ghost.x };
     }
-    const rest = stepBall(this.ball, w, dt, ballWorld(w));
-    this.place();
-    if (!rest) return this.loop();
-    this.last = 0;
-    this.mode = "rest";
-    if (this.dropped) return;
-    this.fetchFrom(rest);
+    return ghost.surface ? { surface: ghost.surface, x: ghost.x } : null;
   }
 
-  private place(): void {
-    this.env.ballMove(Math.round(this.ball.x - this.size / 2), Math.round(this.ball.y - this.size / 2));
-  }
-
-  /** Run to the ball, pick it up, bring it back near the cursor, drop it, wait wagging. */
-  private fetchFrom(surface: Surface): void {
+  /** Run to the ball (where it will stop), pounce when close, then catch / fumble / bat it. */
+  private chase(tries = 0): void {
     const c = this.env.creature;
     const w = c.world;
-    if (!w || c.mode !== "stand") return;
-    const steps: Step[] = [
-      ...route(c, surface, this.ball.x, w, { gait: "run" }),
+    const target = this.predictRest();
+    if (!w || !target || c.mode !== "stand" || !this.sim) return;
+    this.chasing = true;
+    const u = w.scale;
+    const dir: 1 | -1 = target.x >= c.body.x ? 1 : -1;
+    const approach = target.x - dir * 64 * u;
+    const steps: Step[] = [...route(c, target.surface, approach, w, { gait: "run" })];
+    steps.push(
       call(() => {
-        if (!this.active) return false;
-        // Picked up: the ball window goes, the ball is in his mouth.
-        this.mode = "carried";
-        this.env.ballClose();
-        this.env.acc.carrying = true;
-        c.repaint();
-        return true;
+        const b = this.sim;
+        if (!this.active || !b || !c.world) return false;
+        const near = Math.abs(b.x - c.body.x) < 150 * u && Math.abs(b.y - c.body.y) < 90 * u;
+        if (!near || b.mode === "air") {
+          // It got away: after it again (a few times, then he just glitches over to it).
+          if (tries < 3) {
+            this.chasing = false;
+            this.env.clock.setTimeout(() => this.chase(tries + 1), 300);
+            return false;
+          }
+          return [{ do: "teleport", surface: b.surface ?? FLOOR, s: b.x }, call(() => this.catchNow())];
+        }
+        // Pounce onto it.
+        const at = c.surface;
+        const to = restCenterOf(at, b.x, c.world);
+        return to ? [{ do: "face", dir: b.x >= c.body.x ? 1 : -1 }, { do: "jump", to, height: 40, anim: "airDown" }] : true;
       }),
-      { do: "anim", name: "lookAround" },
+      call(() => this.reach()),
+    );
+    run(this.env, plan(...steps));
+  }
+
+  /** At the ball: a fumble, a bit of batting it around, or the catch. */
+  private reach(): boolean | Step[] {
+    const b = this.sim;
+    const c = this.env.creature;
+    const u = this.u;
+    if (!this.active || !b) return false;
+    const dir = c.facingLeft ? -1 : 1;
+    const roll = this.env.rand();
+    if (!this.tricks.fumble && roll < FETCH_ODDS.fumble) {
+      // Off his nose: up and away, and after it again.
+      this.tricks.fumble = true;
+      throwBall(b, dir * (220 + this.env.rand() * 200) * u, -620 * u, u);
+      this.chasing = false;
+      this.loop();
+      return [{ do: "anim", name: "startled" }, { do: "anim", name: playAnim("laugh") }];
+    }
+    if (!this.tricks.bat && roll < FETCH_ODDS.fumble + FETCH_ODDS.bat) {
+      // Bats it along the ground a couple of times, then goes after it.
+      this.tricks.bat = true;
+      throwBall(b, dir * (360 + this.env.rand() * 160) * u, -160 * u, u);
+      this.chasing = false;
+      this.loop();
+      return [{ do: "anim", name: playAnim("bat") }];
+    }
+    return this.catchNow();
+  }
+
+  /** Caught: into his mouth, maybe a happy spin, maybe a cheeky run off, then back to you. */
+  private catchNow(): boolean | Step[] {
+    const c = this.env.creature;
+    if (!this.active || !this.sim) return false;
+    this.carried = true;
+    this.chasing = true;
+    this.sim = { ...this.sim, mode: "rest" };
+    this.env.ballFrame({ x: 0, y: 0, r: 0, pic: { ...picture(this.sim, c.world!, false, true) } });
+    this.env.acc.carrying = true;
+    c.repaint();
+    const steps: Step[] = [];
+    if (this.env.rand() < FETCH_ODDS.spin) steps.push({ do: "anim", name: "chaosSpin" });
+    if (this.env.rand() < FETCH_ODDS.runOff) {
+      // Keep-away! A short dash the other way, a look back, a laugh.
+      steps.push(
+        call(async () => {
+          const w = c.world;
+          if (!w) return true;
+          const p = await this.env.cursor();
+          const away = c.body.x + (c.body.x >= p.x ? 1 : -1) * 320 * w.scale;
+          return [...route(c, c.surface, away, w, { gait: "run", anim: playAnim("fetch_ball") }), { do: "anim", name: "lookBack" }, { do: "anim", name: playAnim("laugh") }];
+        }),
+      );
+    }
+    steps.push(
       call(async () => {
         if (!this.active || !c.world) return false;
-        const back = surfaceNear(c.world, await this.env.cursor());
-        return route(c, back.surface, back.s, c.world, { gait: "walk", anim: playAnim("fetch_ball") });
+        const p = await this.env.cursor();
+        const back = surfaceNear(c.world, p);
+        // Stop a little before the cursor, facing it.
+        const side = c.body.x >= p.x ? 1 : -1;
+        return route(c, back.surface, back.s + side * 46 * c.world.scale, c.world, { gait: "walk", anim: playAnim("fetch_ball") });
+      }),
+      call(async () => {
+        const p = await this.env.cursor();
+        return [{ do: "face", dir: p.x >= c.body.x ? 1 : -1 }];
       }),
       call(() => {
         this.dropFromMouth(true);
         return true;
       }),
-      { do: "anim", name: playAnim("wag"), ms: 2500 },
-    ];
-    run(this.env, plan(...steps));
+      { do: "anim", name: playAnim("idle_tail"), ms: 5000 },
+    );
+    return steps;
   }
 
-  /** The ball falls out of his mouth (brought back: XP and energy). */
+  /** The ball falls out of his mouth and rolls a little (brought back: XP and energy). */
   private dropFromMouth(brought: boolean): void {
     const c = this.env.creature;
     const w = c.world;
-    if (!this.active || this.mode !== "carried" || !w) return;
+    if (!this.active || !this.carried || !w) return;
     const u = w.scale;
+    this.carried = false;
+    this.chasing = false;
     this.env.acc.carrying = false;
     c.repaint();
     const dir = c.facingLeft ? -1 : 1;
-    this.ball = { x: c.body.x + dir * 30 * u, y: c.body.y - 6 * u, vx: dir * 60 * u, vy: -150 * u };
+    this.sim = newBall(c.body.x + dir * 30 * u, c.body.y - 4 * u, dir * 140 * u, -180 * u);
     this.dropped = true;
-    this.mode = "air";
-    void this.env.ballOpen(Math.round(this.ball.x - this.size / 2), Math.round(this.ball.y - this.size / 2)).then((s) => {
-      if (s) this.size = s;
-    });
     this.loop();
     this.poke();
     if (brought) this.env.petEvent("fetch");
   }
+}
+
+function restCenterOf(s: Surface, x: number, w: World): Vec | null {
+  return isStanding(s) ? restCenter(s, clampTo(s, x, w), w) : null;
 }
 
 // ----------------------------------------------------------- hide and seek
