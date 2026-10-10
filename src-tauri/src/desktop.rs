@@ -916,3 +916,130 @@ mod imp {
         }
     }
 }
+
+/// Live check on a real desktop with the REAL window listing and capture,
+/// against stand-in apps this test starts itself (examples/fake_slow_app.rs):
+/// it never looks at or touches any other window (debug builds scope the
+/// listing to the pids in GLITCH_HANDS_ONLY_PIDS).
+///
+///   cargo build -p glitch --example fake_slow_app
+///   cargo test -p glitch slow_app_live -- --ignored --nocapture
+///   (GLITCH_QA_SHOTS=<dir> also saves the pictures)
+#[cfg(all(test, target_os = "windows"))]
+mod live_tests {
+    use std::process::{Child, Command};
+    use std::time::Duration;
+
+    use glitch_core::appwait::{self, AppMatcher, RealClock, WaitOutcome};
+
+    use super::*;
+
+    struct Kill(Child);
+    impl Drop for Kill {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+        }
+    }
+
+    fn save(name: &str, c: &Capture) {
+        if let Some(dir) = std::env::var_os("GLITCH_QA_SHOTS") {
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = image::save_buffer(
+                std::path::Path::new(&dir).join(name),
+                &c.rgba,
+                c.width,
+                c.height,
+                image::ExtendedColorType::Rgba8,
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "live: needs a desktop; see the module docs"]
+    fn slow_app_live() {
+        let deps = std::env::current_exe().unwrap();
+        let fake = deps.parent().unwrap().parent().unwrap().join("examples").join("fake_slow_app.exe");
+        assert!(fake.exists(), "build it first: cargo build -p glitch --example fake_slow_app");
+        let dir = tempfile::Builder::new().prefix("glitch-slow-app-").tempdir().unwrap();
+        let exe = dir.path().join("SlowTune.exe");
+        std::fs::copy(&fake, &exe).unwrap();
+        let cover_exe = dir.path().join("CoverUp.exe");
+        std::fs::copy(&fake, &cover_exe).unwrap();
+        // Nothing is visible to Glitch but the two stand-ins.
+        std::env::set_var("GLITCH_HANDS_ONLY_PIDS", "0");
+        let desktop_before = imp::app_windows();
+        assert!(desktop_before.is_empty(), "scoped listing must be empty before the stand-in exists");
+
+        // 3 s until the window exists, then 2 s of an empty white surface.
+        let child = Kill(Command::new(&exe).args(["SlowTune", "3", "2", "300", "150", "800", "500"]).spawn().unwrap());
+        let pid = child.0.id();
+        std::env::set_var("GLITCH_HANDS_ONLY_PIDS", pid.to_string());
+
+        let clock = RealClock::new();
+        let matcher = AppMatcher::launched("SlowTune", &desktop_before);
+        let desktop = NativeDesktopForTests;
+        let outcome = appwait::wait_for_window(
+            &desktop,
+            &clock,
+            &matcher,
+            Duration::from_secs(20),
+            appwait::POLL,
+            &mut |t| eprintln!("  waiting {} s", t.as_secs()),
+        );
+        let WaitOutcome::Ready { window, waited, kind } = outcome else { panic!("{outcome:?}") };
+        eprintln!("ready after {waited:?}: {window:?} ({kind:?})");
+        assert!(waited >= Duration::from_secs(3), "{waited:?}");
+        assert_eq!(window.process, "slowtune");
+        assert_eq!(window.title, "SlowTune");
+        assert!(window.responsive && !window.minimized);
+
+        // The first look finds the white loading screen, waits and looks again.
+        let shot = appwait::capture_app(&desktop, &clock, &matcher, Some(window.id), "SlowTune").unwrap();
+        save("slowtune-visible.png", &shot.capture);
+        assert!(!shot.still_blank, "the content should be there after the retry");
+
+        // Now cover it with another window and look again: its OWN picture.
+        let cover = Kill(
+            Command::new(&cover_exe).args(["CoverUp", "0", "0", "250", "100", "1000", "700"]).spawn().unwrap(),
+        );
+        std::env::set_var("GLITCH_HANDS_ONLY_PIDS", format!("{pid},{}", cover.0.id()));
+        std::thread::sleep(Duration::from_millis(1200));
+        let all = imp::app_windows();
+        let cover_win = all.iter().find(|w| w.title == "CoverUp").expect("cover window listed");
+        assert!(all.iter().position(|w| w.id == cover_win.id) < all.iter().position(|w| w.id == window.id));
+        let behind = imp::capture_window(window.id).expect("a window behind others can be captured");
+        save("slowtune-behind.png", &behind);
+        assert!(!glitch_core::vision::mostly_blank(&behind), "PrintWindow shows the app, not the cover");
+        assert_eq!(behind.window.as_ref().map(|w| w.title.as_str()), Some("SlowTune"));
+        drop(cover);
+        drop(child);
+    }
+
+    struct NativeDesktopForTests;
+    impl Desktop for NativeDesktopForTests {
+        fn capture(&self, _: CaptureTarget) -> DesktopResult<Capture> {
+            Err("unused".into())
+        }
+        fn active_window(&self) -> Option<WindowInfo> {
+            None
+        }
+        fn read_clipboard(&self) -> DesktopResult<ClipboardText> {
+            Err("unused".into())
+        }
+        fn write_clipboard(&self, _: &str) -> DesktopResult<()> {
+            Err("unused".into())
+        }
+        fn selected_text(&self) -> DesktopResult<Option<String>> {
+            Ok(None)
+        }
+        fn set_timer(&self, _: Duration, _: &str) -> DesktopResult<()> {
+            Err("unused".into())
+        }
+        fn app_windows(&self) -> Vec<AppWindow> {
+            imp::app_windows()
+        }
+        fn capture_window(&self, id: u64) -> DesktopResult<Capture> {
+            imp::capture_window(id)
+        }
+    }
+}
