@@ -33,6 +33,7 @@ const COMMANDS: &[&str] = &[
     "chaos2_cursor_act",
     "chaos2_dance",
     "chaos2_fx_idle",
+    "chaos2_fx_ready",
     "chaos2_fx_squash",
     "chaos2_fx_start",
     "chaos2_melt_frame",

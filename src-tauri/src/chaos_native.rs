@@ -200,7 +200,25 @@ mod imp {
         }
     }
 
+    /// Debug builds only: `GLITCH_CHAOS_ONLY_PIDS=123,456` limits chaos mode to the windows of
+    /// those processes (the QA test windows), so a test run never touches anybody's real windows.
+    fn scoped_mode() -> bool {
+        cfg!(debug_assertions) && std::env::var_os("GLITCH_CHAOS_ONLY_PIDS").is_some()
+    }
+
+    fn scoped_out(hwnd: HWND) -> bool {
+        if !scoped_mode() {
+            return false;
+        }
+        let Ok(v) = std::env::var("GLITCH_CHAOS_ONLY_PIDS") else { return false };
+        let pid = pid_of(hwnd);
+        !v.split(',').filter_map(|p| p.trim().parse::<u32>().ok()).any(|p| p == pid)
+    }
+
     fn describe(hwnd: HWND, fg: HWND) -> Option<Target> {
+        if scoped_out(hwnd) {
+            return None;
+        }
         if unsafe { IsWindow(hwnd) } == 0
             || unsafe { IsWindowVisible(hwnd) } == 0
             || unsafe { IsIconic(hwnd) } != 0
@@ -210,7 +228,9 @@ mod imp {
             return None;
         }
         let ex = unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) } as u32;
-        let system = ex & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST) != 0
+        // Always-on-top windows are left alone, except in a scoped QA run (the scope already limits it to test windows).
+        let topmost = if scoped_mode() { 0 } else { WS_EX_TOPMOST };
+        let system = ex & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | topmost) != 0
             || cloaked(hwnd)
             || SKIP_CLASSES.contains(&class_name(hwnd).as_str());
         let frame = frame_of(hwnd)?;

@@ -103,7 +103,7 @@ fn only_the_bubble_talks_to_the_agent() {
     assert_eq!(granted["pawprints"].iter().collect::<Vec<_>>(), ["chaos_paws_idle"]);
     // Chaos mode 2: the effects overlay can fetch the melt picture once and hide itself, the fake popup can
     // only close itself, and only Settings may test or stop from outside the mascot.
-    assert_eq!(granted["chaosfx"].iter().collect::<Vec<_>>(), ["chaos2_fx_idle", "chaos2_melt_frame"]);
+    assert_eq!(granted["chaosfx"].iter().collect::<Vec<_>>(), ["chaos2_fx_idle", "chaos2_fx_ready", "chaos2_melt_frame"]);
     assert_eq!(granted["virus"].iter().collect::<Vec<_>>(), ["chaos2_popup_close"]);
     for cmd in ["chaos2_test", "chaos2_stop"] {
         assert_eq!(who(cmd), ["panel"], "{cmd}");

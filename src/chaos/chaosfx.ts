@@ -114,7 +114,13 @@ interface FxEvent {
 
 const pt = (a: [number, number] | undefined): P | null => (a ? { x: a[0], y: a[1] } : null);
 
+/** Debug builds: the last events and the hook, for dev/chaos2-check.mjs. */
+const DEBUG = import.meta.env.DEV || import.meta.env.TAURI_ENV_DEBUG === "true";
+const debugLog: string[] = [];
+if (DEBUG) (window as unknown as { __fx: unknown }).__fx = { log: debugLog, state: () => ({ hook: hook && { phase: hook.phase, rod: hook.rod, cursor: hook.cursor, scale: hook.scale, origin: hook.origin }, W, H, dpr, timer: timer !== null }) };
+
 function onEvent(e: FxEvent): void {
+  if (DEBUG) debugLog.push(`${Math.round(performance.now())} ${JSON.stringify(e).slice(0, 160)}`);
   fit();
   const t = now();
   switch (e.kind) {
@@ -544,12 +550,14 @@ function drawPops(t: number): void {
 
 // ------------------------------------------------------------------ start
 
-void listen<FxEvent>("chaos2-fx", (e) => onEvent(e.payload));
 // The rod tip moves with every drawn frame of Glitch (physical px): the line starts exactly there.
-void listen<{ x: number; y: number }>("chaos2-rod", (e) => {
-  if (!hook) return;
-  hook.rod = { x: (e.payload.x - hook.origin[0]) / hook.scale, y: (e.payload.y - hook.origin[1]) / hook.scale };
-});
+void Promise.all([
+  listen<FxEvent>("chaos2-fx", (e) => onEvent(e.payload)),
+  listen<{ x: number; y: number }>("chaos2-rod", (e) => {
+    if (!hook) return;
+    hook.rod = { x: (e.payload.x - hook.origin[0]) / hook.scale, y: (e.payload.y - hook.origin[1]) / hook.scale };
+  }),
+]).then(() => chaos2Api.fxReady().catch(() => {}));
 addEventListener("resize", fit);
 fit();
 window.addEventListener("contextmenu", (e) => e.preventDefault());

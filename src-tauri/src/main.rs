@@ -240,6 +240,7 @@ fn main() {
             chaos2::chaos2_fx_start,
             chaos2::chaos2_fx_squash,
             chaos2::chaos2_fx_idle,
+            chaos2::chaos2_fx_ready,
             chaos2::chaos2_melt_frame,
             chaos2::chaos2_popup,
             chaos2::chaos2_popup_close,

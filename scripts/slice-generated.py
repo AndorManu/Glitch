@@ -577,7 +577,52 @@ RODS = {
 }
 
 
-def corridor_clean(f: np.ndarray, tip, base, width: float = 3.0) -> np.ndarray:
+def repair_rod(f: np.ndarray, tip, base) -> np.ndarray:
+    """The thin upper part of the rod shrinks to a dotted line at the app's 1.5 px per art px. Fit a line
+    through the rod pixels that stick out of the body, and draw it solid (2 px, the rod's own colours)
+    wherever the canvas is empty, from the body to the tip."""
+    op = f[:, :, 3] > 0
+    v = f[:, :, :3].astype(int)
+    lum = v[..., 0] * 0.3 + v[..., 1] * 0.59 + v[..., 2] * 0.11
+    glitchy = is_glitchy(v)
+    fur = op & ~glitchy & (lum > 95)
+    ys, xs = np.where(fur)
+    if not len(xs):
+        return f
+    x0, x1 = np.percentile(xs, [1, 99])
+    y0, y1 = np.percentile(ys, [1, 99])
+    yy, xx = np.indices(op.shape)
+    (tx, ty), (bx, by) = tip, base
+    dx, dy = tx - bx, ty - by
+    n2 = max(1, dx * dx + dy * dy)
+    t = np.clip(((xx - bx) * dx + (yy - by) * dy) / n2, 0, 1)
+    dist = np.hypot(xx - (bx + t * dx), yy - (by + t * dy))
+    out_of_body = (xx < x0 - 3) | (xx > x1 + 3) | (yy < y0 - 3) | (yy > y1 + 3)
+    pts = np.argwhere(op & ~glitchy & ~fur & out_of_body & (dist <= 4))
+    if len(pts) < 4:
+        return f
+    c = pts.mean(0)
+    u, sv, vt = np.linalg.svd(pts - c, full_matrices=False)
+    d = vt[0]  # (dy, dx) direction
+    proj = (pts - c) @ d
+    a, b = c + d * proj.min(), c + d * proj.max()
+    # Toward the body: extend down the line until it meets the body box.
+    start = a if a[0] > b[0] else b
+    end = b if a[0] > b[0] else a
+    out = f.copy()
+    n = int(max(abs(end[0] - start[0]), abs(end[1] - start[1])) * 2) + 1
+    dark = np.array([84, 52, 38], np.uint8)
+    for i in range(n + 1):
+        y, x = start + (end - start) * i / n
+        for ox in (0, 1):
+            iy, ix = int(round(y)), int(round(x)) + ox
+            if 0 <= iy < f.shape[0] and 0 <= ix < f.shape[1] and out[iy, ix, 3] == 0 and not (x0 - 1 <= ix <= x1 + 1 and y0 - 1 <= iy <= y1 + 1):
+                out[iy, ix, :3] = dark
+                out[iy, ix, 3] = 255
+    return out
+
+
+def corridor_clean(f: np.ndarray, tip, base, width: float = 3.0, repair: bool = False) -> np.ndarray:
     op = f[:, :, 3] > 0
     v = f[:, :, :3].astype(int)
     glitchy = is_glitchy(v)
@@ -599,7 +644,7 @@ def corridor_clean(f: np.ndarray, tip, base, width: float = 3.0) -> np.ndarray:
     op = out[:, :, 3] > 0
     protect = _dilate(fur | (dist <= width + 1), 2)
     out[op & (lum < 70) & ~protect & ~glitchy] = 0
-    return out
+    return repair_rod(out, tip, base) if repair else out
 
 
 MARK = (1, 2, 3)
@@ -776,7 +821,7 @@ def process(name: str, cfg: dict, report: dict) -> list[np.ndarray]:
     placed = [place(f, ax) for f, ax in zip(frames, anchors)]
     if cfg.get("rod"):
         tips = [t for t, _ in RODS[name]]
-        placed = [corridor_clean(f, t, b) for f, (t, b) in zip(placed, RODS[name])]
+        placed = [corridor_clean(f, t, b, repair=name == "hook_reel") for f, (t, b) in zip(placed, RODS[name])]
         OUT.mkdir(parents=True, exist_ok=True)
         (OUT / f"{name}-rods.json").write_text(json.dumps(tips))
     if cfg.get("cursor_clean"):

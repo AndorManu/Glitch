@@ -559,6 +559,8 @@ export const chaos2Api = {
   fxStart: (kind: FxKind) => invoke<FxStarted>("chaos2_fx_start", { kind }),
   fxSquash: (x: number, y: number) => invoke<void>("chaos2_fx_squash", { x, y }),
   fxIdle: () => invoke<void>("chaos2_fx_idle"),
+  /** The effects overlay is loaded and listening. */
+  fxReady: () => invoke<void>("chaos2_fx_ready"),
   popup: (kind: PopupKind) => invoke<void>("chaos2_popup", { kind }),
   popupClose: () => invoke<void>("chaos2_popup_close"),
   dance: (id: number, kind: DanceKind) => invoke<{ aborted: AbortReason | null; ms: number }>("chaos2_dance", { id, kind }),

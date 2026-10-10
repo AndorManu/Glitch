@@ -259,9 +259,32 @@ fn ensure_fx(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     Some(win)
 }
 
+/// The overlay page has loaded and listens (events sent before that wait in the queue).
+static FX_READY: AtomicBool = AtomicBool::new(false);
+static FX_QUEUE: Mutex<Vec<serde_json::Value>> = Mutex::new(Vec::new());
+
 fn fx_emit(app: &AppHandle, payload: serde_json::Value) {
     if let Some(w) = app.get_webview_window(FX) {
-        let _ = w.emit("chaos2-fx", payload);
+        if FX_READY.load(Ordering::SeqCst) {
+            let _ = w.emit("chaos2-fx", payload);
+        } else {
+            let mut q = FX_QUEUE.lock().unwrap_or_else(|e| e.into_inner());
+            if q.len() < 64 {
+                q.push(payload);
+            }
+        }
+    }
+}
+
+/// The overlay's page is up and listening: hand it what was sent while it loaded.
+#[tauri::command]
+pub fn chaos2_fx_ready(app: AppHandle) {
+    FX_READY.store(true, Ordering::SeqCst);
+    let queued: Vec<_> = std::mem::take(&mut *FX_QUEUE.lock().unwrap_or_else(|e| e.into_inner()));
+    if let Some(w) = app.get_webview_window(FX) {
+        for p in queued {
+            let _ = w.emit("chaos2-fx", p);
+        }
     }
 }
 
