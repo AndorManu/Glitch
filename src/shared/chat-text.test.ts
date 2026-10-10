@@ -19,6 +19,7 @@ describe("askPermission", () => {
   it("keeps acronyms and handles empty titles", () => {
     expect(askPermission("URL check")).toBe("Can I URL check?");
     expect(askPermission("  ")).toBe("Can I go ahead?");
+    expect(askPermission("I can open Spotify, but to find a playlist I need app control")).toBe("I can open Spotify, but to find a playlist I need app control.");
   });
 });
 

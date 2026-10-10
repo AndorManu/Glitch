@@ -105,6 +105,8 @@ export const EMPTY_REPLY = "Hmm… I'm not sure what to say to that.";
 export function askPermission(title: string): string {
   const t = title.trim().replace(/[.?!…]+$/, "");
   if (!t) return "Can I go ahead?";
+  // Already Glitch speaking ("I can open Spotify, but ... I need app control"): not a "Can I ...?" question.
+  if (/^I /.test(t)) return `${t}.`;
   // Keep words like "URL" or "Spotify" intact: only lower a capital that
   // starts an ordinary word.
   const lowered = /^[A-Z][a-z]/.test(t) ? t[0].toLowerCase() + t.slice(1) : t;
