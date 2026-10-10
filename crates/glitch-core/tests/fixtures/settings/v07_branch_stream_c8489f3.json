@@ -1,0 +1,36 @@
+{
+  "model": "qwen3.5:2b",
+  "movement_enabled": false,
+  "onboarding_done": true,
+  "ollama_url": "http://127.0.0.1:11434",
+  "keep_alive": "5m",
+  "memory_enabled": false,
+  "voice": {
+    "enabled": false,
+    "model": "tiny",
+    "language": "de",
+    "speak_replies": true
+  },
+  "chaos_enabled": false,
+  "screen_enabled": false,
+  "notes_trusted": true,
+  "stream": {
+    "enabled": true,
+    "port": 7801,
+    "token": "oldsingletoken",
+    "mode": "walk",
+    "size": 1.5,
+    "position": "left",
+    "react": false,
+    "show_chat": false,
+    "mirror_chat": true,
+    "streamerbot": true,
+    "streamerbot_url": "ws://127.0.0.1:8080/",
+    "twitch_channel": "somebody"
+  },
+  "updates": {
+    "auto_check": false,
+    "snoozed_version": "0.2.0",
+    "snoozed_at": 1790000000
+  }
+}

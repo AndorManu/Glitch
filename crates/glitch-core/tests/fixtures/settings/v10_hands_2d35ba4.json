@@ -1,0 +1,56 @@
+{
+  "model": "qwen3.5:2b",
+  "movement_enabled": false,
+  "onboarding_done": true,
+  "ollama_url": "http://127.0.0.1:11434",
+  "keep_alive": "5m",
+  "memory_enabled": false,
+  "voice": {
+    "enabled": false,
+    "model": "tiny",
+    "language": "de",
+    "speak_replies": true
+  },
+  "chaos_enabled": false,
+  "screen_enabled": false,
+  "notes_trusted": true,
+  "context": {
+    "enabled": true,
+    "music": false,
+    "coding": true,
+    "quiet_fullscreen": true,
+    "video": false,
+    "late_night": true,
+    "night_start": "23:00",
+    "night_end": "06:30",
+    "morning": false,
+    "battery": true,
+    "cpu": false,
+    "focus": true,
+    "focus_suggest": true,
+    "focus_minutes": 50,
+    "break_minutes": 10
+  },
+  "stream_overlay": {
+    "enabled": true,
+    "port": 7802,
+    "view_token": "viewtok",
+    "write_token": "writetok",
+    "mode": "walk",
+    "size": 2.0,
+    "position": "center",
+    "react": false,
+    "show_chat": false,
+    "mirror_chat": true,
+    "streamerbot": true,
+    "streamerbot_url": "ws://127.0.0.1:8081/",
+    "twitch_channel": "chan"
+  },
+  "auto_update": {
+    "auto_check": false,
+    "snoozed_version": "0.3.0",
+    "snoozed_at": 1790000500
+  },
+  "hands_enabled": true,
+  "hands_model": "qwen3:14b"
+}

@@ -81,7 +81,18 @@ impl AppState {
     pub fn new(app: &AppHandle, config_dir: PathBuf) -> Self {
         let settings_path = config_dir.join("settings.json");
         let memory_path = config_dir.join("memory.json");
-        let settings = Settings::load(&settings_path);
+        let (settings, recovery) = Settings::load_with_report(&settings_path);
+        if recovery.unreadable || !recovery.dropped.is_empty() {
+            eprintln!(
+                "glitch: settings.json had problems ({}); kept a copy at {:?}",
+                if recovery.unreadable {
+                    "unreadable, using defaults".to_string()
+                } else {
+                    format!("reset {}", recovery.dropped.join(", "))
+                },
+                recovery.backup
+            );
+        }
         let ollama = Arc::new(OllamaClient::new(&settings.ollama_url, &settings.keep_alive));
         let dry_run = std::env::var_os(DRY_RUN_ENV).is_some_and(|v| v == "1");
         let platform: Arc<dyn Platform> = if dry_run {

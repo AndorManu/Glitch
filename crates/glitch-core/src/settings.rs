@@ -2,12 +2,13 @@
 //! (the Tauri shell decides the folder; this module only needs a path).
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::ai::ollama;
 use crate::context::ContextSettings;
+use crate::safety::SafetySettings;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -50,6 +51,8 @@ pub struct Settings {
     /// "Update me": the local event endpoint, Claude Code buddy, the
     /// notification reader, reminders and the daily briefing.
     pub update_me: UpdateMeSettings,
+    /// Panic button and "Start with Windows" (see `crate::safety`).
+    pub safety: SafetySettings,
 }
 
 /// "Update me" features. Each one has its own switch in Settings → Features.
@@ -233,22 +236,117 @@ impl Default for Settings {
             hands_model: None,
             context: ContextSettings::default(),
             update_me: UpdateMeSettings::default(),
+            safety: SafetySettings::default(),
         }
+    }
+}
+
+/// What loading found wrong with a settings file (nothing to report: the
+/// file was fine or did not exist).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Recovery {
+    /// The original file was copied or moved here before it can be overwritten.
+    pub backup: Option<PathBuf>,
+    /// Fields that could not be read and fell back to their defaults
+    /// ("voice.language"); everything else was kept. Empty when the whole
+    /// file was unreadable.
+    pub dropped: Vec<String>,
+    /// The file was not JSON at all (or not an object): all defaults.
+    pub unreadable: bool,
+}
+
+/// `settings.json` -> `settings.json.bak`, or the first free `.bak2` .. `.bak9`
+/// (an earlier backup of an earlier problem is never overwritten while there
+/// is room; after that the plain `.bak` is replaced).
+fn backup_path(path: &Path) -> PathBuf {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "settings.json".into());
+    let candidate = |n: u32| path.with_file_name(if n == 1 { format!("{name}.bak") } else { format!("{name}.bak{n}") });
+    (1..=9).map(candidate).find(|p| !p.exists()).unwrap_or_else(|| candidate(1))
+}
+
+/// Follow `path` down from `root`.
+fn slot_at<'a>(root: &'a mut serde_json::Value, path: &[String]) -> Option<&'a mut serde_json::Value> {
+    let mut slot = root;
+    for part in path {
+        slot = slot.get_mut(part)?;
+    }
+    Some(slot)
+}
+
+/// Walk the fields of `file` into `root` (a full default settings value),
+/// keeping each one only if the whole thing still parses as [`Settings`]; a
+/// section that fails as a whole is retried field by field.
+fn merge_valid(
+    root: &mut serde_json::Value,
+    path: &mut Vec<String>,
+    file: &serde_json::Value,
+    dropped: &mut Vec<String>,
+) {
+    let Some(file) = file.as_object() else { return };
+    for (key, value) in file {
+        path.push(key.clone());
+        // Unknown keys (newer versions, old experiments) are ignored.
+        if let Some(slot) = slot_at(root, path) {
+            let old = std::mem::replace(slot, value.clone());
+            if serde_json::from_value::<Settings>(root.clone()).is_err() {
+                if let Some(slot) = slot_at(root, path) {
+                    *slot = old.clone();
+                }
+                if old.is_object() && value.is_object() {
+                    merge_valid(root, path, value, dropped);
+                } else {
+                    dropped.push(path.join("."));
+                }
+            }
+        }
+        path.pop();
     }
 }
 
 impl Settings {
     /// Load settings; a missing or unreadable file gives defaults rather than
     /// an error, so a corrupted file can never stop Glitch from starting.
+    /// See [`Settings::load_with_report`] for what was repaired.
     pub fn load(path: &Path) -> Self {
-        match std::fs::read_to_string(path) {
-            Err(_) => Self::default(),
-            Ok(s) => serde_json::from_str(&s).unwrap_or_else(|_| {
-                // Keep the broken file for inspection instead of overwriting it.
-                let _ = std::fs::rename(path, path.with_extension("corrupt.json"));
-                Self::default()
-            }),
+        Self::load_with_report(path).0
+    }
+
+    /// Like [`Settings::load`], and says what had to be repaired:
+    ///
+    /// * missing or empty file: defaults, nothing to report;
+    /// * valid file: used as is (missing fields take their defaults, unknown
+    ///   fields are ignored, a UTF-8 byte-order mark is fine);
+    /// * valid JSON where some field has the wrong type or an impossible value
+    ///   (hand edit, other version): that field falls back to its default and
+    ///   every other field is kept; the original is copied to `settings.json.bak`;
+    /// * not JSON (or not an object): defaults, the file is moved to
+    ///   `settings.json.bak` so nothing is lost.
+    pub fn load_with_report(path: &Path) -> (Self, Recovery) {
+        let Ok(bytes) = std::fs::read(path) else { return (Self::default(), Recovery::default()) };
+        let text = String::from_utf8_lossy(&bytes);
+        let text = text.trim_start_matches('\u{feff}');
+        if text.trim().is_empty() {
+            return (Self::default(), Recovery::default());
         }
+        let fix = |s: Settings| Settings { safety: s.safety.sanitized(), ..s };
+        let value: serde_json::Value = match serde_json::from_str(text) {
+            Ok(v @ serde_json::Value::Object(_)) => v,
+            _ => {
+                let backup = backup_path(path);
+                let kept = std::fs::rename(path, &backup).is_ok().then_some(backup);
+                return (Self::default(), Recovery { backup: kept, dropped: Vec::new(), unreadable: true });
+            }
+        };
+        if let Ok(s) = serde_json::from_value::<Settings>(value.clone()) {
+            return (fix(s), Recovery::default());
+        }
+        let mut root = serde_json::to_value(Self::default()).expect("settings serialize");
+        let mut dropped = Vec::new();
+        merge_valid(&mut root, &mut Vec::new(), &value, &mut dropped);
+        let settings = serde_json::from_value::<Settings>(root).unwrap_or_default();
+        let backup = backup_path(path);
+        let kept = std::fs::copy(path, &backup).is_ok().then_some(backup);
+        (fix(settings), Recovery { backup: kept, dropped, unreadable: false })
     }
 
     /// Write atomically (temp file + rename) so a crash can't leave half a file.
@@ -299,6 +397,8 @@ mod tests {
         let path = dir.path().join("settings.json");
         std::fs::write(&path, "{ not json").unwrap();
         assert_eq!(Settings::load(&path), Settings::default());
+        // Kept for inspection, not deleted.
+        assert_eq!(std::fs::read_to_string(path.with_file_name("settings.json.bak")).unwrap(), "{ not json");
     }
 
     #[test]

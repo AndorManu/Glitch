@@ -1,0 +1,7 @@
+{
+  "model": "qwen3.5:2b",
+  "movement_enabled": false,
+  "onboarding_done": true,
+  "ollama_url": "http://127.0.0.1:11434",
+  "keep_alive": "5m"
+}

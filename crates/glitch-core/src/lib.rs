@@ -14,6 +14,7 @@ pub mod hands;
 pub mod memory;
 pub mod models;
 pub mod platform;
+pub mod safety;
 pub mod settings;
 pub mod stream;
 pub mod tools;

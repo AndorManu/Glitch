@@ -1,0 +1,33 @@
+{
+  "model": "qwen3.5:2b",
+  "movement_enabled": false,
+  "onboarding_done": true,
+  "ollama_url": "http://127.0.0.1:11434",
+  "keep_alive": "5m",
+  "memory_enabled": false,
+  "voice": {
+    "enabled": false,
+    "model": "tiny",
+    "language": "de",
+    "speak_replies": true
+  },
+  "chaos_enabled": false,
+  "screen_enabled": false,
+  "notes_trusted": true,
+  "updates": {
+    "endpoint_enabled": false,
+    "claude_code_enabled": true,
+    "notifications_enabled": true,
+    "notifications_quiet": true,
+    "notifications_blocklist": [
+      "bank"
+    ],
+    "reminders_enabled": false,
+    "briefing_enabled": false,
+    "location": {
+      "name": "Zurich",
+      "latitude": 47.37,
+      "longitude": 8.54
+    }
+  }
+}
