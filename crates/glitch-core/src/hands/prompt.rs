@@ -20,7 +20,7 @@ pub fn desktop_prompt(os_name: &str) -> String {
          anything changed. If changed is false, or there is a \"warning\", NOTHING HAPPENED: do not say it worked. \
          Say what you saw (\"I clicked 7 but nothing changed\") and try another way: mark_screen again, another \
          box, a double click, a key. At most 2 retries, never the exact same call again.\n\
-         5. When done, or when you gave up, answer in one or two short sentences: what worked and what didn't. \
+         5. As soon as what the user asked for worked, STOP: do no extra steps, never type or click anything they did not ask for. Answer in one or two short sentences when done, or when you gave up: what worked and what didn't. \
          Never say something worked unless a result showed it. Plain text, no markdown, no em dashes.\n\n\
          Files: to move or rename a file or folder, call move_file AT ONCE with the names the user said \
          (Desktop, Documents\\Bills...). Do not open File Explorer, do not look for the file on the screen. \

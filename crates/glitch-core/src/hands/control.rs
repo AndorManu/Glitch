@@ -427,6 +427,27 @@ impl Driver {
         }
     }
 
+    /// "Open windows right now: DraftPad, Files Pro." for the desktop prompt,
+    /// so a small model doesn't try to open an app that is already open. App
+    /// names only (not titles), blocked and elevated windows left out.
+    pub fn open_windows_line(&self) -> String {
+        let mut names: Vec<String> = Vec::new();
+        for w in self.windows() {
+            if safety::blocked(&w.app, &w.exe, &w.title).is_none()
+                && !self.hands.elevated(&w)
+                && !names.contains(&w.app)
+            {
+                names.push(w.app.clone());
+            }
+        }
+        names.truncate(12);
+        if names.is_empty() {
+            String::new()
+        } else {
+            format!("Open windows right now: {}. Don't open apps that are already open.", names.join(", "))
+        }
+    }
+
     // ---- preparing (checking a tool call)
 
     pub(super) fn prepare_desk(&self, call: &ToolCall) -> Result<HandsAction, Value> {

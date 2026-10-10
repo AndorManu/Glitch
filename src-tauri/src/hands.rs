@@ -201,7 +201,7 @@ pub(crate) fn request_stop() {
 /// The tray's "Stop Glitch's current task": like the user pressing Esc.
 static STOP_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-fn stop_requested() -> bool {
+pub(crate) fn stop_requested() -> bool {
     STOP_REQUESTED.load(std::sync::atomic::Ordering::SeqCst)
 }
 

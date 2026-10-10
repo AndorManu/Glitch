@@ -75,7 +75,7 @@ const env = {
   GLITCH_DESKTOP_FILE_ROOT: home,
   GLITCH_DEBUG_SAVE_MARKS: marksPng,
   GLITCH_DEBUG_HANDS_LOG: "1",
-  ...(ABORT ? { GLITCH_DEBUG_STOP_AFTER_MS: "700" } : {}),
+  ...(ABORT ? { GLITCH_DEBUG_STOP_AFTER_MS: "1100" } : {}),
 };
 const proc = spawn(exe, [], { env, stdio: ["ignore", "ignore", "pipe"] });
 let log = "";
@@ -171,10 +171,10 @@ try {
   };
 
   if (ABORT) {
-    // Esc (simulated by the debug hook 700 ms into the pointer's trip) stops a click mid-travel.
-    const r = await task(bubble, "click the Save button in DraftPad", "abort", () => "yes");
+    // Esc (simulated by the debug hook 520 ms into the pointer action (just after the ring preview, mid-travel)) stops a click mid-travel.
+    const r = await task(bubble, "drag Photo A.png onto Folder X in DraftPad", "abort", () => "yes");
     await sleep(1500);
-    check("Esc stopped the click: nothing was saved", status() !== "Saved", status());
+    check("Esc stopped the drag: nothing was dropped and the mouse button is not stuck", !/Dropped/.test(status()), status());
     check("Glitch says he stopped because the user took over", /Hands off|stopped|took over/i.test(r.reply), r.reply.slice(0, 160));
     const stopped = /pointer stopped by the user (\d+) ms/.exec(log);
     const escAt = /debug: Esc pressed/.test(log);
@@ -183,10 +183,10 @@ try {
     clearInterval(ticker);
   } else {
     // 1. click, with the review card.
-    let r = await task(bubble, "click the Bold button in DraftPad", "1-click", () => "yes");
+    let r = await task(bubble, "click the Bold button in DraftPad, then tick the Remember me checkbox", "1-click", () => "yes");
     check("1 review: asked before the step (Do this step / Stop / Auto)", r.cards.some((c) => c.labels.includes("Do this step") && c.labels.includes("Auto for this task")), JSON.stringify(r.cards.map((c) => c.labels)));
     check("1 the banner said Glitch is driving", r.banner);
-    check("1 Bold was clicked for real", status() === "Bold on", status());
+    check("1 both clicks happened for real (Bold, then the checkbox)", /Remember on/.test(status()), status());
     await reset();
 
     // 2. drag, choosing "Auto for this task".

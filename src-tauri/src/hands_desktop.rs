@@ -88,6 +88,12 @@ mod win {
 
     type Point = (i32, i32);
 
+    /// The user's own input (Esc, mouse, keys), the panic button or the tray's
+    /// Stop: any of them ends the action.
+    fn stopped() -> bool {
+        base::interrupted() || crate::pause::is_paused() || crate::hands::stop_requested()
+    }
+
     const USER_STOPPED: &str = "the user took over (Esc or their own mouse/keyboard), so I stopped";
 
     // ------------------------------------------------------------ windows
@@ -207,7 +213,7 @@ mod win {
     fn glide_window(h: HWND, from: Edges, to: Edges) -> HandsResult<()> {
         const STEPS: u32 = 12;
         for i in 1..=STEPS {
-            if base::interrupted() {
+            if stopped() {
                 return Err(USER_STOPPED.into());
             }
             let t = pointer::ease(f64::from(i) / f64::from(STEPS));
@@ -304,7 +310,7 @@ mod win {
     fn pause(total: Duration) -> HandsResult<()> {
         let end = Instant::now() + total;
         loop {
-            if base::interrupted() {
+            if stopped() {
                 return Err(USER_STOPPED.into());
             }
             let left = end.saturating_duration_since(Instant::now());
@@ -374,7 +380,7 @@ mod win {
         let t0 = Instant::now();
         let mut sent = 0usize;
         loop {
-            if base::interrupted() {
+            if stopped() {
                 return Err(USER_STOPPED.into());
             }
             let i = ((t0.elapsed().as_millis() as u64 / pointer::STEP_MS) as usize).min(path.len() - 1);
@@ -445,7 +451,7 @@ mod win {
 
     pub fn pointer(app: Option<&AppHandle>, op: &PointerOp, pids: &[u32]) -> HandsResult<String> {
         base::ready_to_act()?;
-        if base::interrupted() {
+        if stopped() {
             return Err(USER_STOPPED.into());
         }
         let spots = op.spots();
@@ -534,7 +540,7 @@ mod win {
                 base::send(&[base::move_to(from.0 + 6, from.1 + 4)]);
                 pause(Duration::from_millis(40))?;
                 for p in pointer::drag_path(from, to) {
-                    if base::interrupted() {
+                    if stopped() {
                         held.release();
                         return Err(USER_STOPPED.into());
                     }

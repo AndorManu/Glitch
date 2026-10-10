@@ -1108,7 +1108,8 @@ impl Agent {
                     Os::MacOs => "macOS",
                     Os::Linux => "Linux",
                 };
-                return format!("{}\n\n{}", hands::prompt::desktop_prompt(os), today_line());
+                let open = self.hands.as_ref().map(|d| d.open_windows_line()).unwrap_or_default();
+                return format!("{}\n\n{}\n{}", hands::prompt::desktop_prompt(os), open, today_line());
             }
             return format!("{}\n\n{}", task_prompt(self.os, self.screen_enabled), today_line());
         }
