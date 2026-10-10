@@ -265,6 +265,7 @@ fn live_wake_mic_idle() {
         }
     }
     let cpu = cpu_time() - cpu0;
+    #[allow(clippy::drop_non_drop)]
     drop(mic);
     eprintln!(
         "[idle] {secs} s armed at {} Hz: {chunks} mic buffers, {samples} samples, {checks} utterances that would go to whisper; CPU {:.0} ms = {:.2}% of one core",

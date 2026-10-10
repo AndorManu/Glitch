@@ -35,7 +35,7 @@ FW, FH = 104, 90
 src = (ROOT / "src/sprites/anim.ts").read_text()
 head, rest = src.split("ANIM_EYES", 1)
 INDEX = {m[0]: int(m[1]) for m in re.findall(r"^  (\w+): (\d+),", head, re.M)}
-EYES = {m[0]: (int(m[1]), int(m[2])) for m in re.findall(r"^  (\w+): \[(\d+), (\d+)\],", rest.split("ANIM_GRIPS")[0], re.M)}
+EYES = {m[0]: (int(m[1]), int(m[2])) for m in re.findall(r"^  (\w+): \[(\d+), (\d+)\],", rest.split("ANIM_HEADS")[0], re.M)}
 GROUPS: "OrderedDict[str, list[str]]" = OrderedDict()
 for n in INDEX:
     GROUPS.setdefault(re.sub(r"\d+$", "", n), []).append(n)

@@ -8,7 +8,8 @@ FW, FH = 104, 90
 src = (ROOT / "src/sprites/anim.ts").read_text()
 head, rest = src.split("ANIM_EYES", 1)
 INDEX = {m[0]: int(m[1]) for m in re.findall(r"^  (\w+): (\d+),", head, re.M)}
-EYES = {m[0]: (int(m[1]), int(m[2])) for m in re.findall(r"^  (\w+): \[(\d+), (\d+)\],", rest.split("ANIM_GRIPS")[0], re.M)}
+EYES = {m[0]: (int(m[1]), int(m[2])) for m in re.findall(r"^  (\w+): \[(\d+), (\d+)\],", rest.split("ANIM_HEADS")[0], re.M)}
+HEADS = {m[0]: (int(m[1]), int(m[2])) for m in re.findall(r"^  (\w+): \[(\d+), (\d+)\],", rest.split("ANIM_HEADS")[1].split("ANIM_GRIPS")[0], re.M)}
 art = Image.open(ROOT / "public/sprites/glitch-anim.png").convert("RGBA")
 COLS = art.width // FW
 args = [a for a in sys.argv[2:] if not a.startswith("--")]
@@ -32,6 +33,9 @@ for i, n in enumerate(args):
     if n in EYES:
         ex, ey = EYES[n]
         dd.rectangle([ex * k - 1, ey * k - 1, ex * k + k, ey * k + k], outline=(0, 255, 255))
+    if n in HEADS:
+        hx, hy = HEADS[n]
+        dd.rectangle([hx * k - 1, hy * k - 1, hx * k + k, hy * k + k], outline=(255, 60, 60))  # red: the hat anchor (ANIM_HEADS)
     out.paste(bg.convert("RGB"), (x0, 20))
     d.text((x0 + 4, 4), n, fill=(255, 255, 0))
 out.save(sys.argv[1])

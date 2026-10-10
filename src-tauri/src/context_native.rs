@@ -14,6 +14,7 @@
 //! the time-of-day reactions and focus mode still work.
 
 /// What to read this poll (switched-off reactions cost nothing).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[derive(Debug, Clone, Copy)]
 pub struct Want {
     pub media: bool,
@@ -295,6 +296,7 @@ mod tests {
     #[ignore]
     fn live_snapshot() {
         init_thread();
+        #[allow(clippy::default_constructed_unit_structs)]
         let mut cpu = CpuMeter::default();
         let want = Want { media: true, battery: true, cpu: true };
         let _ = snapshot(want, &mut cpu);

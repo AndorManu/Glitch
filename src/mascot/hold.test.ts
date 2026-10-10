@@ -7,6 +7,8 @@ import { Creature, type Host, type View } from "./creature";
 import { mulberry32 } from "./glitchfx";
 import type { Vec, World } from "./physics";
 import { CALM } from "./render";
+import { ANIM_BITES, ANIM_FRAME_H, ANIM_FRAME_W } from "../sprites/anim";
+import { ART_SCALE } from "../sprites/glitch-anim";
 
 function fakeClock() {
   let now = 0;
@@ -62,6 +64,40 @@ function setup(world: World, window: Vec) {
   const c = new Creature(host, view, { clock: fc.clock, random: mulberry32(3) } as never);
   return { c, fc, view, poses, setCursor: (p: Vec) => (cursor = p), get win() { return win; } };
 }
+
+describe("bites the real cursor", () => {
+  for (const [label, cx, cy] of [
+    ["cursor just above him", 960, 900],
+    ["cursor up in the air", 1000, 600],
+    ["cursor far away (runs first)", 1500, 880],
+  ] as const) {
+    it(`puts the drawn mouth on the cursor tip (${label})`, async () => {
+      const world: World = { area: { x: 0, y: 0, w: 1920, h: 1040 }, scale: 1, ledges: [] };
+      const t = setup(world, { x: 880, y: 1040 - 160 });
+      await t.c.start({ x: 880, y: 1040 - 160 });
+      await t.fc.run(500);
+      t.setCursor({ x: cx, y: cy });
+      expect(t.c.biteCursor()).toBe(true);
+      const errs: number[] = [];
+      for (let i = 0; i < 200; i++) {
+        await t.fc.run(20);
+        const f = t.c.animator.pose?.frame ?? "";
+        const g = ANIM_BITES[f];
+        // Chomp and shake frames, after the lunge has landed him on it.
+        if (!g || !["bite_cursor2", "bite_cursor3", "bite_cursor4"].includes(f) || t.c.mode !== "held") continue;
+        const p = t.view.placement;
+        const mouth = { x: t.win.x + p.x + (g[0] - ANIM_FRAME_W / 2) * ART_SCALE, y: t.win.y + p.y + (g[1] - ANIM_FRAME_H) * ART_SCALE };
+        errs.push(Math.hypot(mouth.x - cx, mouth.y - cy));
+      }
+      console.info(`${label}: ${errs.length} bite samples, mouth to cursor tip max ${Math.max(...errs).toFixed(2)} px`);
+      expect(errs.length).toBeGreaterThan(5);
+      expect(Math.max(...errs)).toBeLessThanOrEqual(2);
+      await t.fc.run(4000);
+      expect(t.c.mode).toBe("stand"); // let go, landed
+      t.c.dispose();
+    });
+  }
+});
 
 describe("annoyed: clings on to the cursor", () => {
   it("after a few pickups a gentle drop makes him hang on by the drawn grip, then let go", async () => {
