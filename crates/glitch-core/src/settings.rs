@@ -34,6 +34,8 @@ pub struct Settings {
     pub notes_trusted: bool,
     /// Voice commands (push-to-talk). Missing in older files → defaults.
     pub voice: VoiceSettings,
+    /// Games, play and growth + the wardrobe (see play.rs). Missing in older files -> defaults.
+    pub play: crate::play::PlaySettings,
     /// Streaming overlay (OBS browser source). Off by default.
     pub stream_overlay: StreamSettings,
     /// Update checks against GitHub Releases.
@@ -240,6 +242,7 @@ impl Default for Settings {
             screen_enabled: true,
             notes_trusted: false,
             voice: VoiceSettings::default(),
+            play: crate::play::PlaySettings::default(),
             stream_overlay: StreamSettings::default(),
             auto_update: UpdateSettings::default(),
             hands_enabled: false,

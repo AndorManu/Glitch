@@ -19,6 +19,8 @@ mod ledge_watch;
 #[cfg(target_os = "windows")]
 mod notify_win;
 mod os;
+mod play;
+mod play_native;
 mod state;
 mod stream;
 mod update_me;
@@ -49,7 +51,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let wake = voice::tray::menu_item(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Glitch", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&chat, &wander, &chaos, &focus, &wake, &settings, &sep, &quit])?;
+    let fetch = MenuItem::with_id(app, "play_fetch", "Play fetch", true, None::<&str>)?;
+    let hide = MenuItem::with_id(app, "play_hide", "Play hide and seek", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&chat, &fetch, &hide, &wander, &chaos, &focus, &wake, &settings, &sep, &quit])?;
     *state.wander_item.lock().unwrap() = Some(wander);
     *state.chaos_item.lock().unwrap() = Some(chaos);
 
@@ -79,6 +83,8 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                     }
                     let _ = app.emit("settings-changed", &s);
                 }
+                "play_fetch" => play::start_game(app, glitch_core::play::Game::Fetch),
+                "play_hide" => play::start_game(app, glitch_core::play::Game::HideSeek),
                 "focus" => context::tray_toggle(app),
                 voice::tray::MENU_ID => voice::wake::toggle(app),
                 "quit" => {
@@ -112,7 +118,10 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         // Voice push-to-talk hotkey (registered by voice::setup, not here).
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // Glitch's belly: folder picker + "eat this?" (used from Rust only).
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            app.manage(play::PlayState::new(&app.path().app_config_dir()?));
             app.manage(AppState::new(app.handle(), app.path().app_config_dir()?));
             update_me::setup(app.handle(), app.path().app_config_dir()?);
             app.manage(hover::Hitbox::default());
@@ -130,6 +139,7 @@ fn main() {
             // wizard on first run (so the panel can be placed next to it).
             // Dragging Glitch keeps the chat bubble attached (see place_mascot).
             windows::place_mascot(app.handle());
+            play::watch_drops(app.handle());
             chaos::debug_trigger(app.handle());
             context::start(app.handle());
             context::debug_trigger(app.handle());
@@ -178,6 +188,19 @@ fn main() {
             chaos::chaos_note_close,
             chaos::chaos_note_open_now,
             chaos::chaos_debug_log,
+            play::pet_state,
+            play::pet_event,
+            play::update_play_settings,
+            play::ball_open,
+            play::ball_frame,
+            play::playfield_ready,
+            play::playfield_idle,
+            play::ball_hold,
+            play::ball_close,
+            play::growth_greeting,
+            play::belly_list,
+            play::belly_restore,
+            play::belly_choose_folder,
             context::context_status,
             context::focus_start,
             context::update_context_settings,
