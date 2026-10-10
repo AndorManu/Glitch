@@ -44,6 +44,8 @@ impl NativeDesktop {
 #[derive(Clone, Serialize)]
 pub struct Reminder {
     pub message: String,
+    /// A passing remark (a context nudge): the bubble hides again by itself if nobody answers.
+    pub ambient: bool,
 }
 
 impl Desktop for NativeDesktop {
@@ -122,8 +124,8 @@ impl Desktop for NativeDesktop {
             crate::context::hold_while_quiet(&app).await;
             // Pop up the chat with the reminder (window creation must happen
             // off the main thread's event handler, which this is).
-            crate::windows::show_bubble(&app);
-            let _ = app.emit("reminder", Reminder { message });
+            crate::windows::show_bubble_for_message(&app).await;
+            let _ = app.emit("reminder", Reminder { message, ambient: false });
             let _ = app.emit("mood", "happy");
         });
         Ok(())

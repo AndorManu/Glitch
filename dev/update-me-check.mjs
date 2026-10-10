@@ -75,7 +75,29 @@ const page = async (part) => {
   }
   throw new Error(`no ${part} page`);
 };
-const invoke = (p, cmd, args = {}) => p.evaluate(([c, a]) => window.__TAURI_INTERNALS__.invoke(c, a), [cmd, args]);
+// Commands are granted per window (review L4): try the page given, then the others. A command only the
+// panel may call needs the panel open: the mascot's show_panel grant opens it.
+const appPages = () => browser.contexts().flatMap((c) => c.pages()).filter((pg) => /(mascot|bubble|panel)\.html/.test(pg.url()));
+const run = (pg, cmd, args) => pg.evaluate(([c, a]) => window.__TAURI_INTERNALS__.invoke(c, a), [cmd, args]);
+const invoke = async (p, cmd, args = {}) => {
+  let last;
+  for (let round = 0; round < 2; round++) {
+    for (const pg of [p, ...appPages().filter((x) => x !== p)]) {
+      try {
+        return await run(pg, cmd, args);
+      } catch (e) {
+        last = e;
+        if (!/not allowed on window/.test(String(e.message))) throw e;
+      }
+    }
+    const mascotPage = appPages().find((x) => x.url().includes("mascot.html"));
+    if (round === 0 && mascotPage) {
+      await run(mascotPage, "show_panel", { view: "settings" }).catch(() => {});
+      await sleep(1500);
+    }
+  }
+  throw last;
+};
 const speech = (bubble) => bubble.evaluate(() => document.querySelector(".balloon .say .sr")?.textContent ?? "");
 const waitSpeech = async (bubble, re, ms = 15000) => {
   const t0 = Date.now();

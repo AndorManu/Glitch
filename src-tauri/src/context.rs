@@ -93,8 +93,8 @@ fn say(app: &AppHandle, message: String) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         hold_while_quiet(&app).await;
-        windows::show_bubble(&app);
-        let _ = app.emit("reminder", Reminder { message });
+        windows::show_bubble_for_message(&app).await;
+        let _ = app.emit("reminder", Reminder { message, ambient: true });
     });
 }
 

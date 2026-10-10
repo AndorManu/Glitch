@@ -139,7 +139,25 @@ const pendingReminders: string[] = [];
 void listen<Reminder>("reminder", (e) => {
   if (state.busy) pendingReminders.push(e.payload.message);
   else dispatch({ type: "reminder", text: e.payload.message });
+  if (e.payload.ambient) armAmbientHide(e.payload.message.length);
 });
+
+// A nudge he made up himself (late night, focus suggestion...) must not leave the chat open for good:
+// while it is open Glitch stands still. Hide it after a reading time unless you answered or are typing.
+const AMBIENT_BASE_MS = 12_000;
+let ambientTimer: ReturnType<typeof setTimeout> | null = null;
+let touched = false;
+for (const ev of ["pointerdown", "keydown", "pointerenter"]) {
+  document.addEventListener(ev, () => (touched = true), { capture: true });
+}
+function armAmbientHide(chars: number): void {
+  if (ambientTimer) clearTimeout(ambientTimer);
+  touched = false;
+  ambientTimer = setTimeout(() => {
+    ambientTimer = null;
+    if (visible && !touched && !state.busy) hide();
+  }, Math.min(30_000, AMBIENT_BASE_MS + chars * 60));
+}
 
 // Keep the model loaded while the chat is open, so answers start at once.
 const WARM_EVERY_MS = 4 * 60_000;
