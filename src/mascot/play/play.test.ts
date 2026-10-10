@@ -98,6 +98,14 @@ describe("play rules", () => {
     // With the real animation table: present ones are used as they are.
     expect(playAnim("dance")).toBe("dance");
     expect(playAnim("eat")).toBe("eat");
+    // The drawn clips, not the stand-ins.
+    expect(playAnim("idle_tail")).toBe("idle_tail_sit");
+    expect(playAnim("ready")).toBe("look_dirs");
+    expect(playAnim("hide_peek")).toBe("hide_peek");
+    expect(playAnim("bow")).toBe("high_five");
+    expect(playAnim("chubby_idle")).toBe("chubby_idle");
+    // The trot back stays on the walk cycle: fetch_ball's first frames draw a second ball on the floor.
+    expect(playAnim("fetch_ball")).toBe("walk");
   });
 
   it("a thrown ball bounces (squash, sparks), rolls on with friction and comes to rest on the taskbar line", () => {

@@ -163,7 +163,9 @@ const DRAG_THRESHOLD = 4; // CSS px
 /** Looping actions triggered from outside stop on their own after this long. */
 const ACTION_LOOP_MAX_MS = 8000;
 /** CSS px / s. */
-const SPEED: Record<Gait, number> = { walk: 70, run: 180, climb: 82 };
+// Run: 270 (was 180) so a far fetch isn't 10-14 s. The drawn run cycle shows 236 px/s at its keyed timing and the
+// animator speeds it up with the ground speed (x1.14 here, capped at x1.5), so planted feet stay planted.
+const SPEED: Record<Gait, number> = { walk: 70, run: 270, climb: 82 };
 /**
  * The ground speed (CSS px/s) each drawn cycle shows at its keyed timing:
  * stride measured on the frames (dev/feet.py: a planted foot travels ~21 art
