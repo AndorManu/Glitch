@@ -21,6 +21,8 @@ export interface Settings {
   notes_trusted?: boolean;
   /** Voice commands (see the voice section at the end of this file). */
   voice?: VoiceSettings;
+  /** Games, play and growth + wardrobe (see the play section at the end of this file). */
+  play?: PlaySettings;
   /** OBS stream overlay (see the stream section). Missing from old builds: off. */
   stream_overlay?: StreamSettings;
   /** Update checks (see the updates section). */
@@ -276,6 +278,38 @@ export interface VoiceSettings {
   /** "auto" or a language code. */
   language: string;
   speak_replies: boolean;
+  /** Listen for "Hey Glitch" (the mic stays open while armed). Off by default. */
+  wake_word: boolean;
+  /** Read-aloud voice: the system's, or Glitch's own (downloaded on request). */
+  read_aloud_voice: "system" | "glitch";
+}
+
+/** The wake word: the setting, and whether the mic is open for it right now. */
+export interface WakeStatus {
+  enabled: boolean;
+  armed: boolean;
+  /** Why it isn't armed although enabled. */
+  problem: "needs_model" | "voice_off" | "unavailable" | "mic_denied" | "mic_missing" | "mic_busy" | "mic_failed" | null;
+  message: string | null;
+}
+
+/** Glitch's own read-aloud voice (Piper). */
+export interface TtsStatus {
+  /** There is a build for this system (Windows x64). */
+  supported: boolean;
+  installed: boolean;
+  size_mb: number;
+  /** [done, total] bytes while downloading. */
+  download: [number, number] | null;
+  playing: boolean;
+}
+
+export interface TtsDownloadEvent {
+  state: "running" | "done" | "failed" | "cancelled";
+  done: number;
+  total: number;
+  error: string | null;
+  code: string | null;
 }
 
 export interface SpeechModel {
@@ -307,13 +341,16 @@ export interface VoiceStatus {
   download: { model: string; done: number; total: number } | null;
   /** The bubble should offer the model download (the hotkey opened it). */
   offer_pending: boolean;
+  wake: WakeStatus;
+  read_aloud_voice: "system" | "glitch";
+  tts: TtsStatus;
 }
 
 export type VoiceEvent =
   | { phase: "listening"; level: number; hands_free: boolean }
   | { phase: "transcribing" }
   | { phase: "heard"; text: string }
-  | { phase: "idle"; reason: "cancelled" | "nothing_heard" }
+  | { phase: "idle"; reason: "cancelled" | "nothing_heard" | "wake_only" }
   | { phase: "error"; code: string; message: string }
   | { phase: "needs_model"; model: Omit<SpeechModel, "size_mb" | "downloaded"> };
 
@@ -331,6 +368,8 @@ export interface VoicePatch {
   model?: string;
   language?: string;
   speak_replies?: boolean;
+  wake_word?: boolean;
+  read_aloud_voice?: "system" | "glitch";
 }
 
 export const voiceApi = {
@@ -348,6 +387,17 @@ export const voiceApi = {
   cancelDownload: () => invoke<void>("voice_cancel_download"),
   deleteModel: (model: string) => invoke<void>("voice_delete_model", { model }),
   openMicSettings: () => invoke<void>("voice_open_mic_settings"),
+  /** The system voice started/stopped reading aloud (the wake word ignores the mic meanwhile). */
+  speaking: (on: boolean) => invoke<void>("voice_speaking", { on }),
+  /** A message was sent: get Glitch's voice ready (no-op if it isn't used). */
+  ttsPrepare: () => invoke<void>("voice_tts_prepare"),
+  /** Read aloud with Glitch's voice; rejects if it can't (use the system voice then). */
+  ttsSpeak: (text: string) => invoke<void>("voice_tts_speak", { text }),
+  ttsStop: () => invoke<void>("voice_tts_stop"),
+  /** Resolves when finished; progress as "tts-download" events. */
+  ttsDownload: () => invoke<void>("voice_tts_download"),
+  ttsCancelDownload: () => invoke<void>("voice_tts_cancel_download"),
+  ttsDelete: () => invoke<void>("voice_tts_delete"),
 };
 
 // ------------------------------------------------------------------ chaos
@@ -404,6 +454,113 @@ export const chaosApi = {
   noteMove: (x: number, y: number) => invoke<boolean>("chaos_note_move", { x, y }),
   noteClose: () => invoke<void>("chaos_note_close"),
   noteIsOpen: () => invoke<boolean>("chaos_note_open_now"),
+};
+
+// ------------------------------------------------------------------- play
+// Games, play and growth (src-tauri/src/play.rs, crates/glitch-core/src/play.rs
+// and belly.rs). "pet-changed" (PetView) fires when his mood/XP/wardrobe
+// changes, "pet-levelup" (LevelUp) on a new level, "belly-changed" when the
+// eaten-files list changes.
+
+export interface PlaySettings {
+  fetch: boolean;
+  hide_seek: boolean;
+  /** Off by default. */
+  feeding: boolean;
+  mood: boolean;
+  growth: boolean;
+  levels: boolean;
+  /** Ask before each meal (false = "don't ask again"). */
+  feed_confirm: boolean;
+  belly_dir: string | null;
+  hat: string | null;
+  eye: string;
+  seasonal: boolean;
+}
+
+export const PLAY_DEFAULTS: PlaySettings = {
+  fetch: true,
+  hide_seek: true,
+  feeding: false,
+  mood: true,
+  growth: true,
+  levels: true,
+  feed_confirm: true,
+  belly_dir: null,
+  hat: null,
+  eye: "magenta",
+  seasonal: true,
+};
+
+export type PetMood = "bored" | "content" | "happy";
+
+export interface UnlockInfo {
+  id: string;
+  kind: "hat" | "eye";
+  /** 0 = seasonal only. */
+  level: number;
+  unlocked: boolean;
+}
+
+export interface PetView {
+  energy: number;
+  mood: PetMood;
+  mood_on: boolean;
+  level: number;
+  xp: number;
+  level_xp: number;
+  next_level_xp: number | null;
+  /** 0-1: thrown around a lot yesterday. */
+  suspicion: number;
+  chubby: boolean;
+  /** What he wears now. */
+  hat: string | null;
+  eye: string;
+  season_hat: string | null;
+  levels_on: boolean;
+  unlocks: UnlockInfo[];
+}
+
+export interface LevelUp {
+  level: number;
+  unlocked: string[];
+}
+
+export type PetEventKind = "fetch" | "found" | "gave_up" | "pet" | "thrown";
+
+export interface EatenFile {
+  id: number;
+  name: string;
+  original: string;
+  stored: string;
+  size: number;
+  eaten: string;
+}
+
+export interface FeedResult {
+  eaten: string[];
+  refused: string[];
+  declined: boolean;
+}
+
+export type PlayPatch = Partial<Omit<PlaySettings, "belly_dir" | "hat">> & { hat?: string };
+
+export const playApi = {
+  pet: () => invoke<PetView>("pet_state"),
+  event: (kind: PetEventKind) => invoke<PetView>("pet_event", { kind }),
+  /** hat "" = no hat. */
+  updateSettings: (patch: PlayPatch) => invoke<Settings>("update_play_settings", { patch }),
+  /** Bring up the invisible play overlay the fetch ball is drawn on. */
+  ballOpen: () => invoke<boolean>("ball_open"),
+  /** The ball's picture for the overlay; centre/radius in physical px (where the mouse can grab it). */
+  ballFrame: (frame: { x: number; y: number; r: number; pic: unknown }) => invoke<void>("ball_frame", { frame }),
+  /** The ball pops away and the overlay goes. */
+  ballClose: () => invoke<void>("ball_close"),
+  /** Once a day: hello by name + a question about a project (null = the usual greeting). */
+  greeting: () => invoke<string | null>("growth_greeting"),
+  belly: () => invoke<{ dir: string | null; items: EatenFile[] }>("belly_list"),
+  restore: (id: number) => invoke<string>("belly_restore", { id }),
+  chooseBelly: () => invoke<string | null>("belly_choose_folder"),
 };
 
 // ------------------------------------------------------------------ stream

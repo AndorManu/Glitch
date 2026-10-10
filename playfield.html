@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Glitch play</title>
+    <link rel="icon" href="data:," />
+    <style>
+      /* Invisible overlay over the work area (src-tauri/src/play.rs): only the
+         fetch ball, its shadow and sparkles are drawn. Click-through except
+         right over the ball. */
+      html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+      body { user-select: none; -webkit-user-select: none; }
+      canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+      canvas.over { cursor: grab; }
+      canvas.held { cursor: grabbing; }
+    </style>
+  </head>
+  <body>
+    <canvas id="play" aria-hidden="true"></canvas>
+    <script type="module" src="/src/playfield/main.ts"></script>
+  </body>
+</html>

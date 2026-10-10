@@ -27,6 +27,11 @@
     "allow-update-choose",
     "allow-update-pending",
     "allow-update-seen",
+    "allow-voice-speaking",
+    "allow-voice-tts-prepare",
+    "allow-voice-tts-speak",
+    "allow-voice-tts-stop",
+    "allow-growth-greeting",
     "allow-update-status",
     "allow-update-later",
     "allow-update-install"
