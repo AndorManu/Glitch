@@ -21,15 +21,19 @@ pub enum CaptureTarget {
     Window,
     /// A region around the mouse pointer.
     Cursor,
+    /// One specific app's window, wherever it is on screen (even behind
+    /// other windows): `look_at_screen {"target":"app","app":"Spotify"}`.
+    App,
 }
 
 impl CaptureTarget {
-    pub const NAMES: [&'static str; 3] = ["screen", "window", "cursor"];
+    pub const NAMES: [&'static str; 4] = ["screen", "window", "cursor", "app"];
 
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_lowercase().as_str() {
             "screen" | "whole screen" | "full" | "desktop" | "monitor" => Some(Self::Screen),
-            "window" | "active" | "active window" | "app" => Some(Self::Window),
+            "window" | "active" | "active window" => Some(Self::Window),
+            "app" | "application" | "program" => Some(Self::App),
             "cursor" | "mouse" | "pointer" | "region" => Some(Self::Cursor),
             _ => None,
         }
@@ -41,6 +45,7 @@ impl CaptureTarget {
             Self::Screen => "your screen",
             Self::Window => "your window",
             Self::Cursor => "the spot under your mouse",
+            Self::App => "that app",
         }
     }
 }
@@ -51,6 +56,32 @@ pub struct WindowInfo {
     pub title: String,
     /// Friendly app name, e.g. "Notepad", "Microsoft Edge".
     pub app: String,
+}
+
+/// One visible top-level window of another app, for waiting until an app
+/// that was just opened has its window up, and for looking at that app (and
+/// not at whatever else is in front).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AppWindow {
+    /// The OS window handle (opaque; pass it to [`Desktop::capture_window`]).
+    pub id: u64,
+    pub pid: u32,
+    pub title: String,
+    /// The program's file name without ".exe", lower case ("spotify",
+    /// "applicationframehost" for Microsoft Store apps).
+    pub process: String,
+    /// Programs that started this one, nearest first (a launcher stub's name
+    /// shows up here when it spawned the real app).
+    pub ancestors: Vec<String>,
+    /// How long the window's program has been running (None: unknown).
+    pub age: Option<Duration>,
+    pub minimized: bool,
+    /// Answers messages (not hung, not still starting up).
+    pub responsive: bool,
+    /// The window the user is typing in.
+    pub foreground: bool,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// What the system media session is playing (read only when the user asks).
@@ -105,6 +136,23 @@ pub trait Desktop: Send + Sync {
     fn capture(&self, target: CaptureTarget) -> DesktopResult<Capture>;
     /// The window the user was working in (Glitch's own windows skipped).
     fn active_window(&self) -> Option<WindowInfo>;
+    /// Every visible top-level window of other apps, front to back
+    /// (minimized ones included; Glitch's own and hidden/cloaked ones left
+    /// out). Used to wait for a freshly opened app and to find its window.
+    fn app_windows(&self) -> Vec<AppWindow> {
+        Vec::new()
+    }
+    /// `app_windows` really lists windows here (so waiting for one makes sense).
+    fn lists_windows(&self) -> bool {
+        false
+    }
+    /// A screenshot of exactly this window (one from `app_windows`), even
+    /// when other windows are in front of it. Password fields are covered
+    /// like in [`capture`](Self::capture).
+    fn capture_window(&self, id: u64) -> DesktopResult<Capture> {
+        let _ = id;
+        Err("looking at one app's window isn't available on this computer yet".into())
+    }
     fn read_clipboard(&self) -> DesktopResult<ClipboardText>;
     fn write_clipboard(&self, text: &str) -> DesktopResult<()>;
     /// Text selected in the window the user was working in (`None`: nothing).
@@ -170,6 +218,7 @@ pub(crate) mod fake {
     use std::sync::Mutex;
 
     use super::*;
+    use crate::appwait::Clock;
 
     #[derive(Default)]
     pub struct FakeDesktop {
@@ -184,6 +233,30 @@ pub(crate) mod fake {
         pub notes: Option<PathBuf>,
         pub playing: Option<NowPlaying>,
         pub focus: Mutex<Vec<Option<u32>>>,
+        /// Scripted windows: `app_windows` returns those whose time (on
+        /// `clock`) has come.
+        pub scripted: Mutex<Vec<(Duration, AppWindow)>>,
+        pub clock: Option<std::sync::Arc<crate::appwait::ManualClock>>,
+        /// Per window id: the pictures `capture_window` returns in turn
+        /// (a blank loading screen first, the real one later); the last one
+        /// stays. Shade 255 = an empty white screen.
+        pub window_shots: Mutex<std::collections::HashMap<u64, Vec<u8>>>,
+        pub window_captures: Mutex<Vec<u64>>,
+    }
+
+    /// A picture that is `shade` with dark stripes, or completely `shade`
+    /// when it is 255 (an empty loading screen).
+    fn shaded(shade: u8, w: u32, h: u32) -> Vec<u8> {
+        let mut px = vec![shade; (w * h * 4) as usize];
+        if shade != 255 {
+            for y in (0..h).step_by(5) {
+                for x in 0..w {
+                    let i = ((y * w + x) * 4) as usize;
+                    px[i..i + 3].copy_from_slice(&[20, 20, 20]);
+                }
+            }
+        }
+        px
     }
 
     impl Desktop for FakeDesktop {
@@ -200,6 +273,30 @@ pub(crate) mod fake {
         }
         fn active_window(&self) -> Option<WindowInfo> {
             self.window.clone()
+        }
+        fn lists_windows(&self) -> bool {
+            self.clock.is_some()
+        }
+        fn app_windows(&self) -> Vec<AppWindow> {
+            let now = self.clock.as_ref().map(|c| c.elapsed()).unwrap_or_default();
+            self.scripted.lock().unwrap().iter().filter(|(at, _)| *at <= now).map(|(_, w)| w.clone()).collect()
+        }
+        fn capture_window(&self, id: u64) -> DesktopResult<Capture> {
+            self.window_captures.lock().unwrap().push(id);
+            let Some(w) = self.app_windows().into_iter().find(|w| w.id == id) else {
+                return Err("that window has closed".into());
+            };
+            let mut shots = self.window_shots.lock().unwrap();
+            let list = shots.entry(id).or_default();
+            let shade = if list.len() > 1 { list.remove(0) } else { list.first().copied().unwrap_or(90) };
+            let (width, height) = (400u32, 300u32);
+            Ok(Capture {
+                width,
+                height,
+                rgba: shaded(shade, width, height),
+                window: Some(WindowInfo { title: w.title, app: w.process }),
+                redact: vec![],
+            })
         }
         fn read_clipboard(&self) -> DesktopResult<ClipboardText> {
             self.clipboard.lock().unwrap().clone().ok_or_else(|| "the clipboard is empty".into())
