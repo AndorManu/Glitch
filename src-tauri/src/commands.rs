@@ -194,7 +194,9 @@ pub async fn send_message(app: AppHandle, state: State<'_, AppState>, text: Stri
 /// (the model is still loaded right now, so this is cheap), and save the end
 /// of the chat so it survives a restart. Runs in the background.
 fn after_turn(app: &AppHandle, model: &str, result: &Result<Step, AgentError>) {
-    let Ok(Step::Reply { actions, .. }) = result else { return };
+    let Ok(Step::Reply { actions, text }) = result else { return };
+    // The stream overlay shows it too, only if the user allowed that.
+    crate::stream::said(app, text);
     let memory_touched = actions.iter().any(|a| a.starts_with("Remembered") || a.starts_with("Forgot"));
     let (app, model) = (app.clone(), model.to_string());
     tauri::async_runtime::spawn(async move {
@@ -374,6 +376,10 @@ pub struct SettingsPatch {
     onboarding_done: Option<bool>,
     memory_enabled: Option<bool>,
     screen_enabled: Option<bool>,
+    /// "Let Glitch control apps".
+    hands_enabled: Option<bool>,
+    /// "Smarter brain for app control": a model name, or "" for the normal brain.
+    hands_model: Option<String>,
 }
 
 #[tauri::command]
@@ -383,6 +389,11 @@ pub async fn update_settings(
     patch: SettingsPatch,
 ) -> Result<Settings, UiError> {
     if let Some(m) = &patch.model {
+        if !valid_model_name(m) {
+            return Err(UiError::new("bad_model_name", format!("\"{m}\" isn't a valid model name")));
+        }
+    }
+    if let Some(m) = patch.hands_model.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
         if !valid_model_name(m) {
             return Err(UiError::new("bad_model_name", format!("\"{m}\" isn't a valid model name")));
         }
@@ -407,9 +418,22 @@ pub async fn update_settings(
         if let Some(v) = patch.screen_enabled {
             s.screen_enabled = v;
         }
+        if let Some(v) = patch.hands_enabled {
+            s.hands_enabled = v;
+        }
+        if let Some(m) = &patch.hands_model {
+            s.hands_model = Some(m.trim().to_string()).filter(|m| !m.is_empty());
+        }
     });
     if let Some(on) = patch.screen_enabled {
         state.agent.lock().await.set_screen_enabled(on);
+    }
+    if patch.hands_enabled.is_some() || patch.hands_model.is_some() {
+        let mut agent = state.agent.lock().await;
+        if let Some(on) = patch.hands_enabled {
+            agent.set_hands(crate::hands::for_setting(&app, on));
+        }
+        agent.set_hands_model(new.hands_model.clone());
     }
     if let Some(on) = patch.memory_enabled {
         let mut agent = state.agent.lock().await;

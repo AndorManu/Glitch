@@ -36,6 +36,16 @@ pub struct Settings {
     pub voice: VoiceSettings,
     /// Games, play and growth + the wardrobe (see play.rs). Missing in older files -> defaults.
     pub play: crate::play::PlaySettings,
+    /// Streaming overlay (OBS browser source). Off by default.
+    pub stream_overlay: StreamSettings,
+    /// Update checks against GitHub Releases.
+    pub auto_update: UpdateSettings,
+    /// Feature "Let Glitch control apps" (multi-step app tasks: click, type,
+    /// play). Off by default; missing in older files → off.
+    pub hands_enabled: bool,
+    /// "Smarter brain for app control": a bigger model used only for app
+    /// tasks (`None`: the normal brain).
+    pub hands_model: Option<String>,
     /// "He reacts to what you're doing" (music, coding, games, focus...).
     /// Missing in older files -> defaults (all on except focus auto-suggest).
     pub context: ContextSettings,
@@ -92,6 +102,100 @@ impl Default for UpdateMeSettings {
     }
 }
 
+/// The OBS overlay (src-tauri/src/stream/). Missing in older files: off.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StreamSettings {
+    pub enabled: bool,
+    /// Port on 127.0.0.1 for the overlay page and the event webhook.
+    pub port: u16,
+    /// Secret in the OBS URL: only *reads* (page, config, events). Made on
+    /// first start; "New link" replaces it.
+    pub view_token: String,
+    /// Secret for `POST /stream-event` (header only, never in a URL).
+    pub write_token: String,
+    /// "mirror": the desktop Glitch's animation and bubble.
+    /// "walk": a separate stream Glitch walking along the bottom.
+    pub mode: String,
+    /// Size multiplier (1 = 160 px).
+    pub size: f32,
+    /// Where he stands in mirror mode, and where the walker starts: "left", "center", "right".
+    pub position: String,
+    /// React to follows, subs, raids and chat lines.
+    pub react: bool,
+    /// Show chat lines in his bubble (otherwise only follows, subs, raids).
+    pub show_chat: bool,
+    /// Also show what Glitch says in the private desktop chat. Off: chats
+    /// with him stay off stream.
+    pub mirror_chat: bool,
+    /// Listen to Streamer.bot's WebSocket server.
+    pub streamerbot: bool,
+    pub streamerbot_url: String,
+    /// Twitch channel to read chat from anonymously ("" = off).
+    pub twitch_channel: String,
+}
+
+impl Default for StreamSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: 7799,
+            view_token: String::new(),
+            write_token: String::new(),
+            mode: "mirror".into(),
+            size: 1.0,
+            position: "right".into(),
+            react: true,
+            show_chat: true,
+            mirror_chat: false,
+            streamerbot: false,
+            streamerbot_url: crate::stream::streamerbot::DEFAULT_URL.into(),
+            twitch_channel: String::new(),
+        }
+    }
+}
+
+/// Secrets stay out of logs and panic messages.
+impl std::fmt::Debug for StreamSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let redact = |t: &str| if t.is_empty() { "" } else { "<redacted>" };
+        f.debug_struct("StreamSettings")
+            .field("enabled", &self.enabled)
+            .field("port", &self.port)
+            .field("view_token", &redact(&self.view_token))
+            .field("write_token", &redact(&self.write_token))
+            .field("mode", &self.mode)
+            .field("size", &self.size)
+            .field("position", &self.position)
+            .field("react", &self.react)
+            .field("show_chat", &self.show_chat)
+            .field("mirror_chat", &self.mirror_chat)
+            .field("streamerbot", &self.streamerbot)
+            .field("streamerbot_url", &self.streamerbot_url)
+            .field("twitch_channel", &self.twitch_channel)
+            .finish()
+    }
+}
+
+/// Auto-update (tauri-plugin-updater). On by default: a check is one small
+/// HTTPS request to GitHub; nothing installs without the user's click.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdateSettings {
+    /// Check on start and once a day.
+    pub auto_check: bool,
+    /// "Later" on this version: no bubble for it until a day has passed.
+    pub snoozed_version: Option<String>,
+    /// Unix seconds of the "Later" click.
+    pub snoozed_at: u64,
+}
+
+impl Default for UpdateSettings {
+    fn default() -> Self {
+        Self { auto_check: true, snoozed_version: None, snoozed_at: 0 }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VoiceSettings {
@@ -126,6 +230,10 @@ impl Default for Settings {
             notes_trusted: false,
             voice: VoiceSettings::default(),
             play: crate::play::PlaySettings::default(),
+            stream_overlay: StreamSettings::default(),
+            auto_update: UpdateSettings::default(),
+            hands_enabled: false,
+            hands_model: None,
             context: ContextSettings::default(),
             update_me: UpdateMeSettings::default(),
         }
@@ -170,6 +278,7 @@ mod tests {
         assert!(s.chaos_enabled);
         assert!(s.screen_enabled && !s.notes_trusted);
         assert_eq!(s.keep_alive, "2m");
+        assert!(!s.hands_enabled && s.hands_model.is_none(), "app control is off by default");
     }
 
     #[test]
@@ -253,5 +362,37 @@ mod tests {
         };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);
+    }
+
+    #[test]
+    fn stream_and_updates_default_for_old_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, r#"{"model":"qwen3.5:2b"}"#).unwrap();
+        let s = Settings::load(&path);
+        assert!(!s.stream_overlay.enabled, "the overlay is off until turned on");
+        assert_eq!(s.stream_overlay.port, 7799);
+        assert_eq!(s.stream_overlay.mode, "mirror");
+        assert!(!s.stream_overlay.mirror_chat, "private chats stay off stream");
+        assert!(s.stream_overlay.view_token.is_empty() && s.stream_overlay.write_token.is_empty());
+        assert!(s.auto_update.auto_check);
+        let json = r#"{"stream_overlay":{"enabled":true,"twitch_channel":"x"},"auto_update":{"auto_check":false}}"#;
+        std::fs::write(&path, json).unwrap();
+        let s = Settings::load(&path);
+        assert!(s.stream_overlay.enabled && s.stream_overlay.react);
+        assert_eq!(s.stream_overlay.twitch_channel, "x");
+        assert!(!s.auto_update.auto_check);
+        s.save(&path).unwrap();
+        assert_eq!(Settings::load(&path), s);
+    }
+
+    #[test]
+    fn tokens_never_show_in_debug_output() {
+        let mut s = Settings::default();
+        s.stream_overlay.view_token = "viewsecret123".into();
+        s.stream_overlay.write_token = "writesecret456".into();
+        let d = format!("{s:?}");
+        assert!(!d.contains("viewsecret123") && !d.contains("writesecret456"));
+        assert!(d.contains("<redacted>"));
     }
 }

@@ -430,6 +430,57 @@ const scenarios = {
     await page.close();
   },
 
+  // The interaction fixes after the 2026-10-07 report: each case filmed on its own.
+  async fixes() {
+    const page = await open("&movement=0");
+    const S = session(page, "fixes");
+    await S.step(800);
+    const click = async () => {
+      const g = await grab(page);
+      await page.mouse.move(g.x, g.y);
+      await page.clock.runFor(30);
+      await page.mouse.down();
+      await S.step(50);
+      await page.mouse.up();
+    };
+    const away = async (ms = 2500) => {
+      await page.mouse.move(5, 5);
+      await S.step(ms);
+    };
+    const one = async (label, setup, wait, poke, after = 1600) => {
+      await setup();
+      await S.step(wait);
+      const i0 = S.samples.length;
+      await poke();
+      await S.step(after);
+      await ref(S, label, 40);
+      note("fixes", label, { seq: seq(S, i0) });
+      await away();
+    };
+    await one("click-sitting", () => act(page, "sit"), 3000, click);
+    await one("click-asleep", () => act(page, "sleep"), 9000, click, 1900);
+    await one("wave-while-waking", () => act(page, "sleep"), 9000, async () => {
+      const g = await grab(page);
+      await page.mouse.move(g.x, g.y);
+      await S.step(250);
+      await page.mouse.move(5, 5);
+      await act(page, "wave");
+    }, 1900);
+    await one("click-peekEdge", () => act(page, "peekEdge"), 1100, click);
+    await one("wave-peekEdge", () => act(page, "peekEdge"), 1100, () => act(page, "wave"));
+    await one("wave-sitEdge", () => act(page, "sitEdge"), 3500, () => act(page, "wave"), 1900);
+    await one("grabCursor", async () => {}, 10, () => act(page, "grabCursor"), 1900);
+    await ev(page, () => window.__stage.movement(true));
+    await one("build", async () => {}, 10, () => act(page, "build"), 2700);
+    await S.step(6000);
+    const w = await toWall(page, S);
+    await ev(page, () => window.__stage.movement(false));
+    note("fixes", "wall", { surface: w.surface });
+    await one(`click-on-${w.surface}`, async () => {}, 200, click);
+    await S.flush();
+    await page.close();
+  },
+
   async hold() {
     const page = await open("&movement=0");
     const S = session(page, "hold");

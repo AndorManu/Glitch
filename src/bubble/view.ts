@@ -19,7 +19,7 @@ import {
   TRAIL,
   TRAIL_W,
 } from "./shapes";
-import { canSend, type BubbleState, type Speech, type Work } from "./state";
+import { canSend, updateText, type BubbleState, type Speech, type Work } from "./state";
 import { actionChip, breakChunks, centerOn, narrowestFit, tailWithin } from "./text";
 import { Typewriter } from "./typewriter";
 import { micActive, micHint, setupText, type MicState } from "./voice";
@@ -42,6 +42,9 @@ export interface ViewHandlers {
   voiceDismiss(): void;
   voiceCancelDownload(): void;
   openMicSettings(): void;
+  /** New version offer buttons. */
+  updateInstall(): void;
+  updateLater(): void;
   /** A button on an "Update me" speech (Done, Snooze, Tell me...). */
   choose?(id: string, choice: string): void;
 }
@@ -75,6 +78,8 @@ type SpeechShown = {
   confirm: boolean;
   /** Voice setup offer: progress bar, status line, and its button rows. */
   setup?: { bar: HTMLElement; fill: HTMLElement; note: HTMLElement; pct: HTMLElement; offer: HTMLElement; running: HTMLElement };
+  /** New version offer: its two buttons and the "didn't work" line. */
+  appUpdate?: { install: HTMLButtonElement; later: HTMLButtonElement; note: HTMLElement };
 };
 /** While busy: the thought cloud (no text yet) or the reply streaming in. Both carry the step list. */
 type CloudShown = { kind: "cloud"; el: HTMLElement; work: HTMLElement };
@@ -383,7 +388,13 @@ export class BubbleView {
   private buildSpeech(speech: Speech, rev: number): { shown: SpeechShown; typed: HTMLElement; text: string } {
     const balloon = h("div", { class: `balloon ${speech.kind}${speech.kind === "notice" ? ` ${speech.tone}` : ""}` });
     const main =
-      speech.kind === "confirm" ? askPermission(speech.title) : speech.kind === "voice_setup" ? setupText(speech.sizeMb) : speech.text;
+      speech.kind === "confirm"
+        ? askPermission(speech.title)
+        : speech.kind === "voice_setup"
+          ? setupText(speech.sizeMb)
+          : speech.kind === "app_update"
+            ? updateText(speech.version)
+            : speech.text;
 
     // Screen readers get the whole text at once; the eyes get it typed.
     const say = h("p", { class: "say" });
@@ -412,9 +423,9 @@ export class BubbleView {
       const allow = h(
         "button",
         { type: "button", class: "choice yes", onclick: () => allowAccepted(shownAt, performance.now()) && this.on.answer(true) },
-        CONFIRM_CHOICES[0],
+        speech.allow ?? CONFIRM_CHOICES[0],
       );
-      const nope = h("button", { type: "button", class: "choice no", onclick: () => this.on.answer(false) }, CONFIRM_CHOICES[1]);
+      const nope = h("button", { type: "button", class: "choice no", onclick: () => this.on.answer(false) }, speech.deny ?? CONFIRM_CHOICES[1]);
       choices.push(allow, nope);
       const row = h("div", { class: "choices", role: "group", "aria-label": "Allow this?" }, allow, nope);
       // Typing while a button is focused goes to the message box instead.
@@ -458,6 +469,17 @@ export class BubbleView {
       balloon.append(bar, note, offer, running);
     }
 
+    let appUpdate: SpeechShown["appUpdate"];
+    if (speech.kind === "app_update") {
+      const install = h("button", { type: "button", class: "choice yes", onclick: () => this.on.updateInstall() }, "Install");
+      const later = h("button", { type: "button", class: "choice no", onclick: () => this.on.updateLater() }, "Later");
+      const note = h("p", { class: "note", role: "alert" });
+      // Focus lands on "Later": an Enter meant for the chat never installs anything.
+      choices.push(later, install);
+      appUpdate = { install, later, note };
+      balloon.append(note, h("div", { class: "choices", role: "group", "aria-label": "Update Glitch?" }, install, later));
+    }
+
     const tail = svg(TAIL, "tail");
     balloon.append(tail);
     balloon.addEventListener("click", () => this.typer?.finish());
@@ -465,7 +487,7 @@ export class BubbleView {
 
     scroll.addEventListener("scroll", () => this.markOverflow(scroll), { passive: true });
 
-    const shown: SpeechShown = { kind: "speech", rev, el, balloon, tail, choices, confirm: speech.kind === "confirm", setup };
+    const shown: SpeechShown = { kind: "speech", rev, el, balloon, tail, choices, confirm: speech.kind === "confirm", setup, appUpdate };
     this.updateSpeech(shown, speech);
     return { shown, typed, text: main };
   }
@@ -503,6 +525,16 @@ export class BubbleView {
       note.hidden = !text;
       const label = speech.failed ? "Try again" : "Download";
       if (offer.firstElementChild && offer.firstElementChild.textContent !== label) offer.firstElementChild.textContent = label;
+      return;
+    }
+    if (speech.kind === "app_update" && s.appUpdate) {
+      const { install, later, note } = s.appUpdate;
+      install.disabled = later.disabled = speech.installing;
+      const label = speech.installing ? "Installing…" : speech.failed ? "Try again" : "Install";
+      if (install.textContent !== label) install.textContent = label;
+      const text = speech.failed ?? "";
+      if (note.textContent !== text) note.textContent = text;
+      note.hidden = !text;
       return;
     }
     if (speech.kind === "update") {
@@ -575,19 +607,31 @@ function snugWidth(balloon: HTMLElement): void {
   balloon.style.width = best === null ? "" : `${best}px`;
 }
 
+/** Steps listed at once (an app task can take a dozen). */
+const MAX_SHOWN_STEPS = 6;
+
 const STEP_ICON: Record<"running" | "done" | "failed", string> = { running: "", done: "\u2713", failed: "\u00D7" };
 
 /** Draw the live step list ("1. Looking at your screen ✓") and the looking badge. */
 function renderWork(el: HTMLElement, work: Work): void {
-  const key = JSON.stringify([work.steps, work.looking]);
+  const key = JSON.stringify([work.steps, work.looking, work.plan]);
   if (el.dataset.key === key) return;
   el.dataset.key = key;
   const parts: HTMLElement[] = [];
+  if (work.plan.length) {
+    const plan = h("ol", { class: "plan", "aria-label": "My plan" });
+    for (const s of work.plan) plan.append(h("li", {}, s));
+    parts.push(h("div", { class: "plan-box" }, h("span", { class: "plan-title" }, "Plan"), plan));
+  }
   if (work.looking) parts.push(h("div", { class: "looking", role: "status" }, lookingText(work.looking)));
   // While the badge shows, the screenshot step it stands for isn't listed twice.
-  const steps = work.steps.filter((st) => !(work.looking && st.tool === "look_at_screen" && st.state === "running"));
+  const all = work.steps.filter((st) => !(work.looking && st.tool === "look_at_screen" && st.state === "running"));
+  // Long app tasks: the newest steps, and how many came before.
+  const steps = all.slice(-MAX_SHOWN_STEPS);
   if (steps.length) {
     const list = h("ol", { class: "steps", "aria-label": "What I'm doing" });
+    const earlier = all.length - steps.length;
+    if (earlier > 0) list.append(h("li", { class: "step earlier" }, h("span", { class: "label" }, `${earlier} earlier step${earlier === 1 ? "" : "s"}`)));
     for (const st of steps) {
       list.append(h("li", { class: `step ${st.state}` }, h("span", { class: "icon", "aria-hidden": "true" }, STEP_ICON[st.state]), h("span", { class: "label" }, st.label)));
     }

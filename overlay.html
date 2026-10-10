@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="referrer" content="no-referrer" />
+    <link rel="icon" href="data:," />
+    <title>Glitch stream overlay</title>
+    <!-- OBS browser source, served by Glitch on 127.0.0.1 (src-tauri/src/stream/).
+         Transparent page: only Glitch and his speech bubble show on stream. -->
+    <style>
+      html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+      body { user-select: none; }
+      #stage { position: absolute; left: 0; top: 0; will-change: transform; }
+      #stage canvas { position: absolute; left: 0; top: 0; image-rendering: pixelated; }
+      #bubble {
+        --tail-x: 50%;
+        position: absolute; left: 0; top: 0; max-width: min(360px, 80vw);
+        padding: 10px 14px 11px; border-radius: 14px;
+        background: #1c1230; color: #f6eefe; border: 3px solid #c000f0;
+        box-shadow: 0 4px 0 #0c0716, 0 0 0 3px #0c0716;
+        font: 600 20px/1.3 "Segoe UI", system-ui, -apple-system, sans-serif;
+        overflow-wrap: anywhere; white-space: normal;
+      }
+      #bubble b { color: #00e1ff; font-weight: 800; }
+      #bubble::after {
+        content: ""; position: absolute; left: var(--tail-x); bottom: -13px; width: 14px; height: 14px; margin-left: -7px;
+        background: #1c1230; border-right: 3px solid #c000f0; border-bottom: 3px solid #c000f0; transform: rotate(45deg);
+      }
+      #bubble.pop { animation: pop 180ms steps(3, end); }
+      @keyframes pop { from { opacity: 0; scale: 0.85; } to { opacity: 1; scale: 1; } }
+      @media (prefers-reduced-motion: reduce) { #bubble.pop { animation: none; } }
+    </style>
+  </head>
+  <body>
+    <div id="stage"><canvas id="glitch"></canvas><canvas id="clip" hidden></canvas></div>
+    <div id="bubble" hidden></div>
+    <script type="module" src="/src/overlay/main.ts"></script>
+  </body>
+</html>

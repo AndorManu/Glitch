@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "panel",
-  "description": "Setup and Settings: settings, memory, models, voice downloads, reset and quit.",
+  "description": "Setup and Settings: settings, memory, models, voice downloads, reset and quit, stream overlay and update settings.",
   "windows": [
     "panel"
   ],
@@ -38,6 +38,15 @@
     "allow-update-play-settings",
     "allow-belly-list",
     "allow-belly-restore",
-    "allow-belly-choose-folder"
+    "allow-belly-choose-folder",
+    "allow-stream-status",
+    "allow-update-stream-settings",
+    "allow-stream-new-token",
+    "allow-stream-test-event",
+    "allow-stream-copy",
+    "allow-update-status",
+    "allow-update-check",
+    "allow-update-set-auto",
+    "allow-update-install"
   ]
 }

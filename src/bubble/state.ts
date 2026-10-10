@@ -12,12 +12,14 @@ export type Answer = "allowed" | "denied" | "stale";
 export type Speech =
   /** `instant`: the text already streamed in live, so it isn't typed again. */
   | { kind: "reply"; text: string; actions: string[]; instant?: boolean }
-  | { kind: "confirm"; id: string; title: string; detail: string; actions: string[]; answer: Answer | null }
+  | { kind: "confirm"; id: string; title: string; detail: string; actions: string[]; answer: Answer | null; allow?: string; deny?: string }
   | { kind: "error"; text: string; offerSetup: boolean }
   /** Voice: a hint or a microphone problem (optionally with an "Open settings" button). */
   | { kind: "notice"; text: string; tone: "info" | "error"; action: "mic-settings" | null }
   /** Voice: offer to download the speech model, then its progress. */
   | { kind: "voice_setup"; model: string; sizeMb: number; progress: number | null; failed: string | null }
+  /** A new version of Glitch: Install / Later (src-tauri/src/autoupdate.rs). */
+  | { kind: "app_update"; version: string; installing: boolean; failed: string | null }
   /** "Update me": something Glitch says by himself, with optional buttons (Done / Snooze, Tell me...). */
   | { kind: "update"; id: string; text: string; icon: UpdateIcon; choices: UpdateChoice[]; answered: boolean };
 
@@ -36,9 +38,11 @@ export interface Work {
   looking: CaptureTarget | null;
   /** The reply so far, as it streams in (plain text). */
   text: string;
+  /** An app task's plan, shown above the steps. */
+  plan: string[];
 }
 
-export const NO_WORK: Work = { steps: [], looking: null, text: "" };
+export const NO_WORK: Work = { steps: [], looking: null, text: "", plan: [] };
 
 export interface BubbleState {
   /** Waiting for the model: the thought cloud is up and sending is off. */
@@ -75,6 +79,10 @@ export type BubbleEvent =
   | { type: "voice_setup"; model: string; sizeMb: number }
   /** "Clear chat" in Settings: a fresh start (drops anything in flight). */
   | { type: "cleared" }
+  /** A new version is out (and not snoozed): offer it. */
+  | { type: "update_offer"; version: string }
+  /** Installing it started / stopped (`failed`: why it stopped). */
+  | { type: "update_state"; installing: boolean; failed: string | null }
   /** Speech-model download progress (percent), or its end. */
   | { type: "voice_download"; state: "running" | "done" | "failed" | "cancelled"; percent: number | null; failed: string | null; ready: string };
 
@@ -84,6 +92,13 @@ export type Request = { kind: "send"; text: string } | { kind: "confirm"; id: st
 export interface Transition {
   state: BubbleState;
   request: Request | null;
+}
+
+export const UPDATE_FAILED = "The update didn't go through. Try again later?";
+
+/** What Glitch says about a new version. */
+export function updateText(version: string): string {
+  return `Psst! There's a new me: Glitch ${version}. Want me to update myself? I'll be back in a few seconds.`;
 }
 
 /** Reopening the bubble after this long shows just the pill again. */
@@ -108,8 +123,11 @@ function speak(s: BubbleState, speech: Speech | null): BubbleState {
 
 function fromStep(step: Step, streamed: string): Speech {
   if (step.type === "confirm") {
-    const { id, title, detail, actions } = step;
-    return { kind: "confirm", id, title, detail, actions, answer: null };
+    const { id, title, detail, actions, allow, deny } = step;
+    const speech: Speech = { kind: "confirm", id, title, detail, actions, answer: null };
+    if (allow) speech.allow = allow;
+    if (deny) speech.deny = deny;
+    return speech;
   }
   const text = step.text.trim();
   // Already on screen word for word (it streamed in): don't type it again.
@@ -132,6 +150,8 @@ export function applyProgress(w: Work, p: AgentProgress): Work {
       return { ...w, looking: p.active ? p.target : null };
     case "text":
       return { ...w, text: w.text + p.delta };
+    case "plan":
+      return { ...w, plan: p.steps.slice(0, 6) };
   }
 }
 
@@ -196,6 +216,19 @@ export function transition(s: BubbleState, e: BubbleEvent): Transition {
     case "voice_setup":
       if (s.busy) return none(s);
       return none(speak(s, { kind: "voice_setup", model: e.model, sizeMb: e.sizeMb, progress: null, failed: null }));
+    case "update_offer":
+      if (s.busy) return none(s);
+      // Already offering (or installing) this one: keep it as it is.
+      if (s.speech?.kind === "app_update" && s.speech.version === e.version) return none(s);
+      return none(speak(s, { kind: "app_update", version: e.version, installing: false, failed: null }));
+    case "update_state": {
+      const sp = s.speech;
+      if (sp?.kind !== "app_update") return none(s);
+      // Stopped without restarting: it failed (the restart never comes back here).
+      const failed = !e.installing && sp.installing ? (e.failed ?? UPDATE_FAILED) : e.installing ? null : sp.failed;
+      if (sp.installing === e.installing && sp.failed === failed) return none(s);
+      return none({ ...s, speech: { ...sp, installing: e.installing, failed } });
+    }
     case "voice_download": {
       const sp = s.speech;
       if (s.busy || sp?.kind !== "voice_setup") return none(s);

@@ -157,6 +157,9 @@ interface Entry {
   moves: boolean;
 }
 
+/** With movement off: a look around at most this often (sitting a while fills the gaps). */
+export const STILL_LOOK_COOLDOWN_MS = 75_000;
+
 export const BEHAVIOURS: Record<BehaviourName, Entry> = {
   stroll: { weight: 5, cooldown: 4, moves: true },
   run: { weight: 1.2, cooldown: 45, moves: true },
@@ -229,6 +232,8 @@ export class Brain {
       const entry = BEHAVIOURS[name];
       if (entry.weight <= 0 || !this.ready(name, ctx.now)) continue;
       if (entry.moves && !ctx.movement) continue;
+      // Movement off leaves few behaviours: the look around would come every 20 s.
+      if (name === "lookAround" && !ctx.movement && ctx.now - this.lastUsed(name) < STILL_LOOK_COOLDOWN_MS) continue;
       const plan = this.plan(name, ctx);
       if (!plan) continue;
       if (!ctx.movement && planMoves(plan)) continue;
@@ -238,7 +243,14 @@ export class Brain {
       if (ctx.surface.kind === "platform" && (name === "drop" || name === "jump")) weight *= 3;
       options.push({ name, plan, weight });
     }
-    if (options.length === 0) return this.commit(this.idlePlan(ctx), ctx.now);
+    if (options.length === 0) {
+      // Movement off and he looked around not long ago: sit down a while instead (stands up
+      // again after). Not committed: it doesn't push the next look around further away.
+      if (!ctx.movement && isStanding(ctx.surface) && ctx.now - this.lastUsed("lookAround") < STILL_LOOK_COOLDOWN_MS) {
+        return { name: "lookAround", steps: [{ do: "anim", name: "sit", ms: 6000 + this.rand() * 6000 }] };
+      }
+      return this.commit(this.idlePlan(ctx), ctx.now);
+    }
     let roll = this.rand() * options.reduce((t, o) => t + o.weight, 0);
     for (const o of options) {
       roll -= o.weight;
@@ -261,6 +273,9 @@ export class Brain {
   /** Off the wall / ceiling / platform: let go (or step off the platform). */
   private getDown(ctx: BrainContext): Plan {
     if (ctx.surface.kind === "platform") return { name: "drop", steps: [{ do: "unbuild" }] };
+    // On a wall he climbs down (letting go and falling looks like an accident); off the ceiling he still drops.
+    const down = this.plan("climbDown", ctx);
+    if (down) return down;
     return { name: "drop", steps: [{ do: "drop" }] };
   }
 

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "bubble",
-  "description": "The chat bubble: the only window that may chat with the agent and answer its Allow / Nope questions.",
+  "description": "The chat bubble: the only window that may chat with the agent and answer its Allow / Nope questions; offers new versions (Install / Later).",
   "windows": [
     "bubble"
   ],
@@ -27,6 +27,9 @@
     "allow-update-choose",
     "allow-update-pending",
     "allow-update-seen",
-    "allow-growth-greeting"
+    "allow-growth-greeting",
+    "allow-update-status",
+    "allow-update-later",
+    "allow-update-install"
   ]
 }

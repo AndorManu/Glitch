@@ -130,11 +130,20 @@ describe("live progress", () => {
       looking: null,
       text: "Glitch: A shopping list!",
       steps: [{ id: 1, tool: "look_at_screen", label: "Looking at your screen", state: "done" }],
+      plan: [],
     });
     // The final reply matches what streamed in: shown at once, not retyped.
     s = run(s, reply("A shopping list!"));
     expect(s.speech).toEqual({ kind: "reply", text: "A shopping list!", actions: [], instant: true });
     expect(s.work).toEqual(NO_WORK);
+  });
+
+  it("shows an app task's plan, and custom button labels", () => {
+    const w = applyProgress(NO_WORK, { kind: "plan", steps: ["Open Spotify", "Find the playlist", "Press Play"] });
+    expect(w.plan).toEqual(["Open Spotify", "Find the playlist", "Press Play"]);
+    const asked = run(initialState(), { type: "send", text: "x" }, { type: "step", step: { ...confirmStep, allow: "Allow once" } });
+    expect(asked.speech).toMatchObject({ kind: "confirm", allow: "Allow once" });
+    expect(pendingConfirm(run(initialState(), { type: "step", step: confirmStep }))).not.toHaveProperty("allow");
   });
 
   it("a new model round or step clears half-streamed text", () => {

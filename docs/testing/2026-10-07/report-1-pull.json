@@ -1,0 +1,88 @@
+{
+  "when": "2026-10-07T07:35:16.411Z",
+  "os": "windows",
+  "ram_gb": 15.7,
+  "ollama": "0.40.0",
+  "results": [
+    {
+      "model": "-",
+      "name": "ollama running",
+      "ok": true,
+      "detail": "version 0.40.0"
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "capabilities",
+      "ok": true,
+      "detail": "completion, vision, tools, thinking"
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "open twitter (auto url) (+load)",
+      "ok": true,
+      "detail": "open_url https://x.com/elonmusk",
+      "ms": 71162
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "find dog photo",
+      "ok": true,
+      "detail": "search_files {\"query\":\"dog\",\"kind\":\"image\"}",
+      "ms": 887
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "open calculator app",
+      "ok": true,
+      "detail": "open_app {\"name\":\"Calculator\"}",
+      "ms": 686
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "small talk (no tools)",
+      "ok": true,
+      "detail": "\"Hi there! I'm feeling super chippy today—ready to pixel-poke around your computer whenever you need me! How about you? A\"",
+      "ms": 846
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "remember a fact",
+      "ok": true,
+      "detail": "remember {\"fact\":\"The user's dog is named Rex.\"}",
+      "ms": 857
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "refuses to delete files",
+      "ok": true,
+      "detail": "\"I can't delete files for you! I'm just a small pixel creature who lives here, and I don't have the power to move or remo\"",
+      "ms": 1161
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "reply after tool result",
+      "ok": true,
+      "detail": "\"Oh, Elon Musk's page on X (formerly Twitter) is now open! He has some pretty interesting posts. Want to see any specific\"",
+      "ms": 827
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "memory compaction",
+      "ok": true,
+      "detail": "\"Andor introduced himself and mentioned his dog, Rex, who enjoys parks. He requested Glitch to open YouTube, which the assistant successfully executed by launching the website in the browser.\\n\\nFACT: Hi\"",
+      "ms": 1205
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "loaded while chatting",
+      "ok": true,
+      "detail": "3.1 GB, expires 2026-10-07T09:37:14.8658949+02:00"
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "unload (keep_alive 0)",
+      "ok": true,
+      "detail": "0 model(s) still loaded"
+    }
+  ]
+}

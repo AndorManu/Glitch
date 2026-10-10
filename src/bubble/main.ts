@@ -20,6 +20,9 @@ import {
   type VoiceDownloadEvent,
   type VoiceEvent,
   type VoiceStatus,
+  updateApi,
+  type UpdateAvailable,
+  type UpdateStatus,
 } from "../shared/ipc";
 import { browserStore, pickGreeting } from "../shared/greeting";
 import { canSend, dismissSpeech, initialState, transition, type BubbleEvent, type Request } from "./state";
@@ -63,12 +66,35 @@ const view = new BubbleView(root, {
   },
   voiceCancelDownload: () => void voiceApi.cancelDownload().catch(() => {}),
   openMicSettings: () => void voiceApi.openMicSettings().catch(() => {}),
+  updateInstall: () => {
+    dispatch({ type: "update_state", installing: true, failed: null });
+    // On success Glitch restarts; on failure the status event (or this) says why.
+    void updateApi.install().catch((e) => dispatch({ type: "update_state", installing: false, failed: asUiError(e).message }));
+  },
+  updateLater: () => {
+    void updateApi.later().catch(() => {});
+    state = dismissSpeech(state);
+    view.render(state);
+  },
   choose: (id, choice) => void updates.choose(id, choice),
 });
 
 // "Update me": reminders, Claude Code, scripts, the digest, the briefing.
 const updates = new UpdateMe({ dispatch: (e) => dispatch(e), busy: () => state.busy });
 updates.listen();
+
+// A new version of Glitch (src-tauri/src/autoupdate.rs): he offers it here.
+void listen<UpdateAvailable>("update-available", (e) => dispatch({ type: "update_offer", version: e.payload.version }));
+void listen<UpdateStatus>("update-status", (e) =>
+  dispatch({ type: "update_state", installing: e.payload.installing, failed: e.payload.installing ? null : e.payload.error }),
+);
+// Found before this window existed (or while it was hidden).
+void updateApi.status().then(
+  (st) => {
+    if (st?.offer && st.available) dispatch({ type: "update_offer", version: st.available.version });
+  },
+  () => {},
+);
 
 function dispatch(e: BubbleEvent): void {
   const prev = state;

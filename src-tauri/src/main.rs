@@ -1,6 +1,7 @@
 // No console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod autoupdate;
 #[cfg(test)]
 mod capabilities_check;
 mod chaos;
@@ -9,6 +10,9 @@ mod commands;
 mod context;
 mod context_native;
 mod desktop;
+mod hands;
+#[cfg(all(test, target_os = "windows"))]
+mod hands_live;
 mod hover;
 mod layout;
 mod ledge_watch;
@@ -18,6 +22,7 @@ mod os;
 mod play;
 mod play_native;
 mod state;
+mod stream;
 mod update_me;
 mod voice;
 mod windows;
@@ -107,6 +112,8 @@ fn main() {
             let app = app.clone();
             tauri::async_runtime::spawn(async move { commands::open_chat(&app, false) });
         }))
+        // Auto-update (src/autoupdate.rs). No JS permissions: commands only.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // Voice push-to-talk hotkey (registered by voice::setup, not here).
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // Glitch's belly: folder picker + "eat this?" (used from Rust only).
@@ -119,6 +126,8 @@ fn main() {
             app.manage(chaos::ChaosState::default());
             app.manage(context::ContextState::default());
             voice::setup(app.handle());
+            stream::setup(app.handle());
+            autoupdate::setup(app.handle());
             hover::start(app.handle().clone());
             os::configure(app);
             build_tray(app.handle())?;
@@ -205,6 +214,17 @@ fn main() {
             voice::commands::voice_cancel_download,
             voice::commands::voice_delete_model,
             voice::commands::voice_open_mic_settings,
+            stream::stream_status,
+            stream::update_stream_settings,
+            stream::stream_new_token,
+            stream::stream_test_event,
+            stream::stream_copy,
+            stream::stream_mirror,
+            autoupdate::update_status,
+            autoupdate::update_check,
+            autoupdate::update_set_auto,
+            autoupdate::update_later,
+            autoupdate::update_install,
             update_me::update_me_status,
             update_me::update_me_set,
             update_me::claude_connect,
