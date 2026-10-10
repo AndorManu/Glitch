@@ -26,33 +26,38 @@ import {
  * animations.ts (first that exists wins; "idle" at worst).
  */
 export const PLAY_ANIMS: Record<string, readonly string[]> = {
-  /** Trotting back with the ball in his mouth. */
+  /**
+   * Trotting back with the ball in his mouth. The real clip (chase the ball, pick it up, stand with it) is
+   * drawn for the pick-up beat; as a loop while he WALKS its first frames would show a second ball on the floor,
+   * so the trot itself stays on the walk cycle until a carry cycle is drawn.
+   */
   fetch_ball: ["walk"],
-  /** Sitting, tail wagging, waiting for the next throw. */
-  idle_tail: ["sit", "happy", "idle"],
-  /** Watching the ball fly, ready to run. */
-  ready: ["listen", "idle"],
+  /** Sitting, tail wagging, waiting for the next throw (the drawn sitting tail loop). */
+  idle_tail: ["idle_tail_sit", "sit", "happy", "idle"],
+  /** Watching the ball fly, ready to run: the eyes follow (look_dirs). */
+  ready: ["look_dirs", "listen", "idle"],
   /** Batting the ball along. */
   bat: ["happy"],
   /** The end of a game: a little bow. */
-  bow: ["wave", "happy"],
+  bow: ["high_five", "wave", "happy"],
   /** Peeking out from behind an edge (only his head shows). */
-  hide_peek: ["listen", "idle"],
+  hide_peek: ["hide_peek", "listen", "idle"],
   /** After a meal, for the rest of the day. */
-  chubby_idle: ["idle"],
-  eat: ["happy"],
+  chubby_idle: ["chubby_idle", "idle"],
+  eat: ["eat", "happy"],
   /** After eating. */
   burp: ["sneeze", "happy"],
-  celebrate: ["happy"],
-  dance: ["happy"],
-  laugh: ["happy"],
+  celebrate: ["celebrate", "happy"],
+  dance: ["dance", "happy"],
+  laugh: ["laugh", "happy"],
   /** He noticed a file coming his way. */
   sniff: ["listen", "lookAround"],
 };
 
 export function playAnim(name: string, has: (n: string) => boolean = isAnimationName): AnimationName {
-  if (has(name)) return name as AnimationName;
+  // The table first (it names the real clip, or the one that fits the moment better), then the name itself.
   for (const f of PLAY_ANIMS[name] ?? []) if (has(f)) return f as AnimationName;
+  if (has(name)) return name as AnimationName;
   return "idle";
 }
 

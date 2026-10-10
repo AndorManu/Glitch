@@ -309,6 +309,7 @@ fn spawn(app: &AppHandle) -> Result<Listener, MicError> {
             let _ = ready_tx.send(Ok(mic.sample_rate));
             let failure = run(&app2, &stop2, &tap, &rx, &erx);
             tap.close();
+            #[allow(clippy::drop_non_drop)]
             drop(mic);
             if let Some(e) = failure {
                 eprintln!("glitch: wake word stopped: {e}");

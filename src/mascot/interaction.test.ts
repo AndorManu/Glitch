@@ -173,7 +173,7 @@ describe("clicks", () => {
     await t.c.start({ x: 1700, y: 880 });
     t.c.setMovement(false);
     t.c.playAction("sleep");
-    await t.fc.run(9000);
+    await t.fc.run(30_000); // past the jump-scare window (SCARE_AFTER_SLEEP_MS)
     expect(t.c.asleep).toBe(true);
     const t0 = t.fc.now;
     await t.click(); // the press wakes him

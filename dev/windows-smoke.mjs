@@ -22,8 +22,8 @@
 // Without Ollama (e.g. CI) the chat steps check for a clean
 // "ollama_unreachable" error instead.
 //
-// Your own settings.json / memory.json in %APPDATA%\dev.glitch.companion are
-// moved aside for the run (first-run test) and always put back afterwards.
+// The settings.json / memory.json of the test copy (--identifier, never the real
+// dev.glitch.companion) are moved aside for the run and put back afterwards.
 // Needs Node 22+ (global WebSocket). Exits 1 if any check fails.
 
 import { spawn, execFileSync } from "node:child_process";
@@ -69,9 +69,12 @@ function findExe() {
   return candidates[0];
 }
 
+// Only the image name of the copy under test counts: name the test exe differently (e.g.
+// qa-fullqa.exe) and an installed glitch.exe running next to it is neither seen nor touched.
+let imageName = "glitch.exe";
 function glitchRunning() {
   try {
-    return /glitch\.exe/i.test(execFileSync("tasklist", ["/FI", "IMAGENAME eq glitch.exe", "/NH"], { encoding: "utf8" }));
+    return execFileSync("tasklist", ["/FI", `IMAGENAME eq ${imageName}`, "/NH"], { encoding: "utf8" }).toLowerCase().includes(imageName.toLowerCase());
   } catch {
     return false;
   }
@@ -79,7 +82,14 @@ function glitchRunning() {
 
 // ------------------------------------------------------- settings backup
 
-const APPDIR = path.join(process.env.APPDATA ?? "", "dev.glitch.companion");
+// Never the real app's folder: build the copy with its own identifier (see dev/overlay-check.mjs)
+// and pass it with --identifier. Without it this refuses to touch anything.
+const IDENTIFIER = opt("--identifier") ?? "";
+if (!IDENTIFIER || IDENTIFIER === "dev.glitch.companion") {
+  console.error("refusing to move the real app's settings: build a copy with its own identifier and pass --identifier <id> (and --exe)");
+  process.exit(2);
+}
+const APPDIR = path.join(process.env.APPDATA ?? "", IDENTIFIER);
 const OWN_FILES = ["settings.json", "memory.json"];
 const backupDir = path.join(APPDIR, `smoke-backup-${Date.now()}`);
 let backedUp = false;
@@ -225,6 +235,7 @@ async function noBlankPages() {
 
 async function main() {
   const exe = findExe();
+  if (exe) imageName = path.basename(exe);
   if (!exe || !existsSync(exe)) {
     console.error("No glitch.exe found. Build first (npx tauri build --debug --no-bundle) or pass --exe.");
     process.exit(2);
@@ -270,7 +281,7 @@ async function main() {
     panel = await Page.open(t);
     pages.push(panel);
     const s = await panel.ready();
-    const view = await mascot.invoke("panel_view");
+    const view = await panel.invoke("panel_view"); // per-window grants (L4): panel_view belongs to the panel
     record("first run opens the setup panel", (await visible("panel")) === true && view.value === "setup", `${s.href}, view=${view.value}`);
   });
   await alive("setup panel opened");
@@ -316,7 +327,7 @@ async function main() {
 
   // --- clicking Glitch toggles the bubble
   await step("mascot_clicked toggles the bubble", async () => {
-    await mascot.invoke("hide_bubble");
+    await bubble.invoke("hide_bubble");
     const states = [];
     for (let i = 0; i < 3; i++) {
       const r = await mascot.invoke("mascot_clicked");
@@ -331,6 +342,7 @@ async function main() {
   // animation's late hide_bubble doesn't close it again.
   await step("click during close animation reopens", async () => {
     await bubble.invoke("bubble_closing");
+    await sleep(500); // two clicks within 380 ms are a double-click: that starts Fetch instead
     await mascot.invoke("mascot_clicked");
     const reopened = await visible("bubble");
     await bubble.invoke("hide_bubble"); // the interrupted animation finishing
@@ -338,6 +350,7 @@ async function main() {
     await bubble.invoke("bubble_closing");
     await bubble.invoke("hide_bubble"); // a normal close still works
     const closed = (await visible("bubble")) === false;
+    await sleep(500);
     await mascot.invoke("mascot_clicked");
     record("click during close animation reopens", reopened === true && still === true && closed, `reopened=${reopened} stays=${still} normal close=${closed}`);
   });
@@ -386,12 +399,12 @@ async function main() {
     await step("remember a fact", async () => {
       const r = await send("remember that my dog is called Rex");
       const v = r.value ?? {};
-      const mem = await bubble.invoke("get_memory");
+      const mem = await panel.invoke("get_memory");
       const fact = (mem.value?.facts ?? []).find((f) => /rex/i.test(f.text));
       record("remember a fact", r.ok && !!fact && (v.actions ?? []).some((a) => /remembered/i.test(a)), `${JSON.stringify(v.actions)} -> memory: ${JSON.stringify(mem.value?.facts?.map((f) => f.text))}`);
     });
     await step("memory view", async () => {
-      const mem = await mascot.invoke("get_memory");
+      const mem = await panel.invoke("get_memory");
       record("memory view", mem.ok && mem.value.enabled === true, `enabled=${mem.value?.enabled}, ${mem.value?.facts?.length} facts, summary ${JSON.stringify(mem.value?.summary ?? "").slice(0, 60)}`);
     });
   } else if (bubble) {
@@ -405,10 +418,10 @@ async function main() {
   // --- settings panel
   await step("settings panel", async () => {
     const r = await mascot.invoke("show_panel", { view: "settings" });
-    const view = await mascot.invoke("panel_view");
+    const view = await panel.invoke("panel_view");
     const [p, b] = [await visible("panel"), await visible("bubble")];
     record("settings panel opens", r.ok && r.ms < IPC_LIMIT_MS && p === true && b === false && view.value === "settings", `${r.ms} ms, panel=${p} bubble=${b} view=${view.value}`);
-    await mascot.invoke("hide_panel");
+    await panel.invoke("hide_panel");
     record("settings panel hides", (await visible("panel")) === false);
   });
   await alive("settings panel");
@@ -417,7 +430,7 @@ async function main() {
   // --- quit
   await step("quit", async () => {
     const t0 = Date.now();
-    mascot.invoke("quit", {}, 5000).catch(() => {});
+    panel.invoke("quit", {}, 5000).catch(() => {});
     while (exited === null && Date.now() - t0 < 10_000) await sleep(100);
     record("quit exits the app", exited !== null, exited !== null ? `exit code ${exited} after ${Date.now() - t0} ms` : "still running after 10 s");
   });

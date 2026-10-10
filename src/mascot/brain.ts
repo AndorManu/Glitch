@@ -404,7 +404,8 @@ export class Brain {
       case "chaos":
         return standing && kind !== "platform" ? steps({ do: "anim", name: "chaosSpin" }) : null;
       case "malfunction":
-        return steps({ do: "anim", name: "malfunction" });
+        // A front-facing glitch fit: on a wall or the ceiling it would lie sideways and cut to the cling pose.
+        return standing ? steps({ do: "anim", name: "malfunction" }) : null;
       case "lookAround":
         return standing ? steps({ do: "anim", name: "lookAround" }) : null;
       case "sleep":
