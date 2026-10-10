@@ -142,6 +142,13 @@ impl Desktop for NativeDesktop {
     }
 }
 
+/// The screen as it is right now, for chaos mode's melt effect. Lives only in
+/// RAM (not even the debug save hook of [`Desktop::capture`]), Glitch's own
+/// windows are not in it, and the caller drops it as soon as the effect ends.
+pub fn capture_screen_ram() -> DesktopResult<Capture> {
+    imp::capture(CaptureTarget::Screen)
+}
+
 #[cfg(target_os = "windows")]
 pub use imp::friendly_app;
 

@@ -57,6 +57,10 @@ impl Default for Chaos {
 }
 
 impl Chaos {
+    /// A window grab (the old chaos mode) is running.
+    pub fn window_grabbed(&self) -> bool {
+        self.window.is_some()
+    }
     fn now(&self) -> Duration {
         self.born.elapsed()
     }
@@ -97,7 +101,7 @@ fn allowed(app: &AppHandle) -> Result<(), Refusal> {
     Ok(())
 }
 
-fn area_and_scale(app: &AppHandle) -> Option<(ScreenRect, f64)> {
+pub(crate) fn area_and_scale(app: &AppHandle) -> Option<(ScreenRect, f64)> {
     let m = app.get_webview_window(MASCOT)?;
     let a = windows::work_area_of(&m)?;
     Some((ScreenRect { x: a.x, y: a.y, w: a.w, h: a.h }, m.scale_factor().unwrap_or(1.0)))
@@ -284,6 +288,8 @@ pub fn stop_all(app: &AppHandle) {
         c.window = None;
         c.cursor = None;
     }
+    // Chaos mode 2: cursor acts, dances, screen effects, popups; minimised windows come back.
+    crate::chaos2::abort_all(app);
 }
 
 /// The panic button: close his sticky note and paw-print overlay too.
@@ -294,6 +300,7 @@ pub fn close_extras(app: &AppHandle) {
     if let Some(w) = app.get_webview_window(PAWS) {
         let _ = w.hide();
     }
+    crate::chaos2::close_extras(app);
 }
 
 /// Show one of Glitch's extra windows without taking the keyboard focus

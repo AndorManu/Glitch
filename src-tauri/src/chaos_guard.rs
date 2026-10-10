@@ -103,9 +103,41 @@ fn split_audited(src: &str) -> (String, String) {
 
 /// What the audited function may mention (besides plain Rust and the wrappers it needs).
 const AUDITED_ALLOWED: &[&str] = &[
-    "ShowWindow", "SW_SHOWMINNOACTIVE", "SW_SHOWNOACTIVATE", "IsWindow", "is_own", "hwnd", "HWND", "id", "u64", "usize", "as", "let", "if",
-    "else", "pub", "fn", "cmd", "YoinkCmd", "Minimize", "Restore", "bool", "unsafe", "return", "false", "true", "how", "ONLY", "BEGIN", "END",
+    "ShowWindow",
+    "SW_SHOWMINNOACTIVE",
+    "SW_SHOWNOACTIVATE",
+    "IsWindow",
+    "is_own",
+    "hwnd",
+    "HWND",
+    "id",
+    "u64",
+    "usize",
+    "as",
+    "let",
+    "if",
+    "else",
+    "pub",
+    "fn",
+    "cmd",
+    "YoinkCmd",
+    "Minimize",
+    "Restore",
+    "bool",
+    "unsafe",
+    "return",
+    "false",
+    "true",
+    "how",
+    "ONLY",
+    "BEGIN",
+    "END",
     "yoink_show",
+    "windows_sys",
+    "Win32",
+    "UI",
+    "WindowsAndMessaging",
+    "0",
 ];
 
 /// Forbidden identifiers in `src` outside the audited function.
@@ -118,7 +150,12 @@ fn violations(src: &str) -> Vec<(usize, String)> {
 fn chaos_code_never_calls_anything_that_closes_resizes_or_drives_other_windows() {
     for (file, src) in SCANNED {
         let v = violations(src);
-        assert!(v.is_empty(), "{file}:{} uses {}: chaos mode may only move windows (and minimise/restore through the audited function)", v[0].0, v[0].1);
+        assert!(
+            v.is_empty(),
+            "{file}:{} uses {}: chaos mode may only move windows (and minimise/restore through the audited function)",
+            v[0].0,
+            v[0].1
+        );
     }
 }
 
@@ -141,14 +178,21 @@ fn the_only_window_writes_are_a_move_without_resize_the_audited_minimize_and_a_q
     let (_, inside) = split_audited(native);
     let code_lines = inside.lines().filter(|l| !l.trim().is_empty() && !l.trim_start().starts_with("//")).count();
     assert!(code_lines <= 14, "the audited function stays tiny ({code_lines} lines)");
-    assert_eq!(identifiers(&inside).filter(|(_, w)| *w == "ShowWindow").count(), 1, "one ShowWindow call in the audited function");
+    assert_eq!(
+        identifiers(&inside).filter(|(_, w)| *w == "ShowWindow").count(),
+        1,
+        "one ShowWindow call in the audited function"
+    );
     assert!(inside.contains("SW_SHOWMINNOACTIVE") && inside.contains("SW_SHOWNOACTIVATE"));
     for (n, w) in identifiers(&inside) {
         assert!(AUDITED_ALLOWED.contains(&w), "audited function line {n} uses {w}: not on the allowed list");
     }
     // The page-facing commands never take a flag, size or message from the page.
     for (name, cmds) in [("chaos.rs", include_str!("chaos.rs")), ("chaos2.rs", include_str!("chaos2.rs"))] {
-        assert!(!cmds.contains("SetWindowPos") && !cmds.contains("ShowWindow"), "{name} only calls the native wrappers");
+        assert!(
+            !cmds.contains("SetWindowPos") && !cmds.contains("ShowWindow"),
+            "{name} only calls the native wrappers"
+        );
     }
 }
 
@@ -171,7 +215,10 @@ fn only_chaos2_calls_the_audited_function_and_the_page_never_picks_the_window() 
     // The runtime restores only windows it has in its book and minimises only ones it picked itself.
     let rt = include_str!("chaos2.rs");
     assert!(rt.contains("YoinkCmd::Minimize") && rt.contains("YoinkCmd::Restore"));
-    assert!(!rt.contains("fn chaos2_restore") && !rt.contains("fn chaos2_minimize"), "no command lets the page choose a window to minimise or restore");
+    assert!(
+        !rt.contains("fn chaos2_restore") && !rt.contains("fn chaos2_minimize"),
+        "no command lets the page choose a window to minimise or restore"
+    );
 }
 
 #[test]
@@ -183,17 +230,34 @@ fn the_scan_would_catch_a_forbidden_call() {
 
 #[test]
 fn the_audit_allows_exactly_one_function_and_rejects_any_other_use() {
-    let audited = format!("fn a() {{}}\n{BEGIN}\npub fn yoink_show() {{ ShowWindow(h, SW_SHOWMINNOACTIVE); }}\n{END}\nfn b() {{}}\n");
+    let audited = format!(
+        "fn a() {{}}\n{BEGIN}\npub fn yoink_show() {{ ShowWindow(h, SW_SHOWMINNOACTIVE); }}\n{END}\nfn b() {{}}\n"
+    );
     assert!(violations(&audited).is_empty(), "inside the markers it is allowed");
     // The same call anywhere else is a violation.
     let elsewhere = format!("{audited}fn other() {{ ShowWindow(h, SW_SHOWMINNOACTIVE); }}\n");
     assert_eq!(violations(&elsewhere), [(4, "SW_SHOWMINNOACTIVE".to_string())]);
-    for bad in ["SW_MINIMIZE", "SW_RESTORE", "SW_HIDE", "SW_SHOWMAXIMIZED", "SW_FORCEMINIMIZE", "CloseWindow", "SendInput", "mouse_event", "SetForegroundWindow", "MoveWindow", "PostMessageW"] {
+    for bad in [
+        "SW_MINIMIZE",
+        "SW_RESTORE",
+        "SW_HIDE",
+        "SW_SHOWMAXIMIZED",
+        "SW_FORCEMINIMIZE",
+        "CloseWindow",
+        "SendInput",
+        "mouse_event",
+        "SetForegroundWindow",
+        "MoveWindow",
+        "PostMessageW",
+    ] {
         let src = format!("fn other() {{ unsafe {{ {bad}(h, 1) }} }}\n");
         assert_eq!(violations(&src).len(), 1, "{bad} outside the audited function");
         // Not even inside the markers: the inside has its own, much shorter allow-list.
         let inside = format!("{BEGIN}\n{bad}(h, 1);\n{END}\n");
         let (_, body) = split_audited(&inside);
-        assert!(identifiers(&body).any(|(_, w)| w == bad && !AUDITED_ALLOWED.contains(&w)), "{bad} inside the audited function");
+        assert!(
+            identifiers(&body).any(|(_, w)| w == bad && !AUDITED_ALLOWED.contains(&w)),
+            "{bad} inside the audited function"
+        );
     }
 }

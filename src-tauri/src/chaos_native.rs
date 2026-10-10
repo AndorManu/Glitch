@@ -50,7 +50,8 @@ mod imp {
         PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        GetAsyncKeyState, GetLastInputInfo, LASTINPUTINFO, VK_ESCAPE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_XBUTTON1, VK_XBUTTON2,
+        GetAsyncKeyState, GetLastInputInfo, LASTINPUTINFO, VK_ESCAPE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_XBUTTON1,
+        VK_XBUTTON2,
     };
     use windows_sys::Win32::UI::Shell::{
         SHQueryUserNotificationState, QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
@@ -58,8 +59,9 @@ mod imp {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowLongW, GetWindowRect,
         GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
-        SetCursorPos, SetWindowPos, ShowWindow, GWL_EXSTYLE, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOSIZE,
-        SWP_NOZORDER, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+        SetCursorPos, SetWindowPos, ShowWindow, SystemParametersInfoW, GWL_EXSTYLE, SPI_GETCLIENTAREAANIMATION,
+        SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     };
 
     const SKIP_CLASSES: &[&str] = &[
@@ -316,6 +318,14 @@ mod imp {
         (unsafe { GetAsyncKeyState(VK_ESCAPE as i32) } as u16) & 0x8000 != 0
     }
 
+    /// The OS "show animations in Windows" switch is off (Settings > Accessibility > Visual effects).
+    pub fn os_reduce_motion() -> bool {
+        let mut on: BOOL = 1;
+        // SAFETY: out-parameter of the size the action documents (a BOOL).
+        let ok = unsafe { SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, (&mut on as *mut BOOL).cast(), 0) };
+        ok != 0 && on == 0
+    }
+
     /// The window the user is working in.
     pub fn foreground_id() -> Option<u64> {
         let fg = unsafe { GetForegroundWindow() };
@@ -380,12 +390,6 @@ mod imp {
         (unsafe { IsWindow(hwnd) } != 0).then(|| unsafe { IsIconic(hwnd) } != 0)
     }
 
-    /// Is the window maximised (or was, before it was minimised)?
-    pub fn is_maximized(id: u64) -> bool {
-        let hwnd = id as usize as HWND;
-        unsafe { IsWindow(hwnd) } != 0 && unsafe { IsZoomed(hwnd) } != 0
-    }
-
     /// Titles and program names of every visible top-level window (for screen-share detection).
     pub fn visible_titles() -> Vec<String> {
         struct Acc(Vec<String>);
@@ -420,7 +424,11 @@ mod imp {
         if unsafe { IsWindow(hwnd) } == 0 || is_own(hwnd) {
             return false;
         }
-        let how = if cmd == YoinkCmd::Minimize { SW_SHOWMINNOACTIVE } else { SW_SHOWNOACTIVATE };
+        let how = if cmd == YoinkCmd::Minimize {
+            windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWMINNOACTIVE
+        } else {
+            SW_SHOWNOACTIVATE
+        };
         unsafe { ShowWindow(hwnd, how) };
         true
     }
@@ -463,6 +471,9 @@ mod imp {
     pub fn button_down() -> bool {
         false
     }
+    pub fn os_reduce_motion() -> bool {
+        false
+    }
     pub fn esc_down() -> bool {
         false
     }
@@ -480,9 +491,6 @@ mod imp {
     }
     pub fn is_minimized(_id: u64) -> Option<bool> {
         None
-    }
-    pub fn is_maximized(_id: u64) -> bool {
-        false
     }
     pub fn visible_titles() -> Vec<String> {
         Vec::new()

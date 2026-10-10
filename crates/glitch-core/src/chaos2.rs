@@ -257,7 +257,10 @@ pub const MAX_FLASHES_PER_SEC: usize = 3;
 
 /// Do these flash times (ms, ascending) keep to [`MAX_FLASHES_PER_SEC`] in every 1 s window?
 pub fn flash_rate_ok(times_ms: &[u64]) -> bool {
-    times_ms.iter().enumerate().all(|(i, t)| times_ms[i..].iter().take_while(|u| **u < t + 1000).count() <= MAX_FLASHES_PER_SEC)
+    times_ms
+        .iter()
+        .enumerate()
+        .all(|(i, t)| times_ms[i..].iter().take_while(|u| **u < t + 1000).count() <= MAX_FLASHES_PER_SEC)
 }
 
 /// Lets sparks and glitch flashes through only while they stay under the limit.
@@ -407,7 +410,15 @@ pub struct CursorScript {
 }
 
 impl CursorScript {
-    pub fn new(act: CursorAct, level: ChaosLevel, start: (i32, i32), rod: (i32, i32), area: ScreenRect, scale: f64, seed: u64) -> Self {
+    pub fn new(
+        act: CursorAct,
+        level: ChaosLevel,
+        start: (i32, i32),
+        rod: (i32, i32),
+        area: ScreenRect,
+        scale: f64,
+        seed: u64,
+    ) -> Self {
         let (max_ms, max_travel) = match act {
             CursorAct::Hook(_) => {
                 let (d, t) = level.hook_limits();
@@ -479,14 +490,20 @@ impl CursorScript {
                 let height = 70.0 * u * (1.0 - 0.6 * (t / total).clamp(0.0, 1.0));
                 let hop = height * (std::f64::consts::PI * phase).sin();
                 let side = ((t / beat).floor() as i64 % 2 * 2 - 1) as f64;
-                (sx + ux * along + px * side * 14.0 * u * phase - 0.0 * uy, sy + uy * along + py * side * 14.0 * u * phase - hop * 0.6)
+                (
+                    sx + ux * along + px * side * 14.0 * u * phase - 0.0 * uy,
+                    sy + uy * along + py * side * 14.0 * u * phase - hop * 0.6,
+                )
             }
             CursorAct::Jitter => {
                 // A new tiny offset every 50 ms, at most 3 px.
                 let step = (t_ms / 50) as u64;
                 let amp = 3.0 * u.min(2.0);
                 let env = ramp * fade;
-                (sx + (hash01(self.seed, step * 2) * 2.0 - 1.0) * amp * env, sy + (hash01(self.seed, step * 2 + 1) * 2.0 - 1.0) * amp * env)
+                (
+                    sx + (hash01(self.seed, step * 2) * 2.0 - 1.0) * amp * env,
+                    sy + (hash01(self.seed, step * 2 + 1) * 2.0 - 1.0) * amp * env,
+                )
             }
             CursorAct::Hops => {
                 let (mut x, mut y) = (sx, sy);
@@ -542,7 +559,11 @@ impl CursorScript {
         }
         let want = self.target(s.t_ms);
         // Never a big leap (hops are the one act that jumps, by design).
-        let to = if matches!(self.act, CursorAct::Hops) { want } else { step_towards(self.last_set, want, MAX_STEP * self.scale) };
+        let to = if matches!(self.act, CursorAct::Hops) {
+            want
+        } else {
+            step_towards(self.last_set, want, MAX_STEP * self.scale)
+        };
         self.last_set = to;
         Tick::Move(to.0, to.1)
     }
@@ -610,7 +631,15 @@ impl DanceScript {
     pub fn new(kind: DanceKind, home: ScreenRect, area: ScreenRect, scale: f64) -> Self {
         let room_l = (home.x - area.x) as f64;
         let room_r = (area.right() - home.right()) as f64;
-        DanceScript { kind, home, area, scale: scale.max(0.5), dir: if room_r >= room_l { 1.0 } else { -1.0 }, cur: (0.0, 0.0), at_main_end: None }
+        DanceScript {
+            kind,
+            home,
+            area,
+            scale: scale.max(0.5),
+            dir: if room_r >= room_l { 1.0 } else { -1.0 },
+            cur: (0.0, 0.0),
+            at_main_end: None,
+        }
     }
 
     pub fn total_ms(&self) -> u32 {
@@ -638,7 +667,11 @@ impl DanceScript {
         self.cur = match self.kind {
             DanceKind::Wobble => (18.0 * u * (TAU * t / 1.4).sin() * env, 10.0 * u * (TAU * t / 0.9).sin() * env),
             DanceKind::EdgeSlide => {
-                let room = if self.dir > 0.0 { (self.area.right() - self.home.right()) as f64 } else { (self.home.x - self.area.x) as f64 };
+                let room = if self.dir > 0.0 {
+                    (self.area.right() - self.home.right()) as f64
+                } else {
+                    (self.home.x - self.area.x) as f64
+                };
                 let reach = room.clamp(0.0, MAX_WINDOW_TRAVEL * u);
                 // 3.4 s out, a short breather at the edge, 3.4 s back.
                 let p = if t < 3.4 {
@@ -654,7 +687,10 @@ impl DanceScript {
                 let decay = 1.0 - 0.6 * (t / total);
                 let a = QUAKE_AMP * u * decay;
                 let w = TAU * QUAKE_HZ * t;
-                (a * w.sin() * smooth(t / 0.15) * smooth((total - t) / 0.2), 0.5 * a * (w + 1.0).sin() * smooth(t / 0.15) * smooth((total - t) / 0.2))
+                (
+                    a * w.sin() * smooth(t / 0.15) * smooth((total - t) / 0.2),
+                    0.5 * a * (w + 1.0).sin() * smooth(t / 0.15) * smooth((total - t) / 0.2),
+                )
             }
             DanceKind::RunAway => run_away_step(self.cur, self.home, cursor, self.area, u, dt_ms),
         };
@@ -670,7 +706,14 @@ impl DanceScript {
 
 /// One step of "running away": the window slides away from a cursor that comes
 /// near, and drifts back home when it is left alone.
-pub fn run_away_step(cur: (f64, f64), home: ScreenRect, cursor: (i32, i32), area: ScreenRect, scale: f64, dt_ms: u32) -> (f64, f64) {
+pub fn run_away_step(
+    cur: (f64, f64),
+    home: ScreenRect,
+    cursor: (i32, i32),
+    area: ScreenRect,
+    scale: f64,
+    dt_ms: u32,
+) -> (f64, f64) {
     let dt = dt_ms as f64 / 1000.0;
     let frame = ScreenRect { x: home.x + cur.0.round() as i32, y: home.y + cur.1.round() as i32, ..home };
     // Distance from the cursor to the frame (0 inside it).
@@ -748,33 +791,149 @@ pub const SAMPLER_WARMUP_MS: u64 = 30_000;
 /// Programs (executable names without `.exe`, lower case) that are never minimised.
 const BLOCKED_PROCESSES: &[&str] = &[
     // terminals and consoles
-    "windowsterminal", "wt", "cmd", "powershell", "powershell_ise", "pwsh", "conhost", "openconsole", "bash", "wsl", "wslhost", "mintty",
-    "alacritty", "wezterm", "wezterm-gui", "kitty", "hyper", "tabby", "putty", "kitty64",
+    "windowsterminal",
+    "wt",
+    "cmd",
+    "powershell",
+    "powershell_ise",
+    "pwsh",
+    "conhost",
+    "openconsole",
+    "bash",
+    "wsl",
+    "wslhost",
+    "mintty",
+    "alacritty",
+    "wezterm",
+    "wezterm-gui",
+    "kitty",
+    "hyper",
+    "tabby",
+    "putty",
+    "kitty64",
     // password managers and authenticators
-    "1password", "bitwarden", "keepass", "keepassxc", "lastpass", "dashlane", "enpass", "nordpass", "roboform", "protonpass", "authy", "keeper",
-    "winauth", "yubioauthenticator",
+    "1password",
+    "bitwarden",
+    "keepass",
+    "keepassxc",
+    "lastpass",
+    "dashlane",
+    "enpass",
+    "nordpass",
+    "roboform",
+    "protonpass",
+    "authy",
+    "keeper",
+    "winauth",
+    "yubioauthenticator",
     // system and admin tools
-    "taskmgr", "explorer", "mmc", "regedit", "services", "procexp", "procexp64", "procmon", "perfmon", "eventvwr", "msconfig", "taskhostw",
-    "lockapp", "logonui", "consent", "credentialuibroker", "securityhealthsystray", "msmpeng", "mpcmdrun", "systemsettings", "control",
-    "applicationframehost", "searchhost", "startmenuexperiencehost", "shellexperiencehost", "textinputhost", "sihost", "dwm", "winlogon",
-    "wlrmdr", "msiexec", "setup", "installer", "wusa",
+    "taskmgr",
+    "explorer",
+    "mmc",
+    "regedit",
+    "services",
+    "procexp",
+    "procexp64",
+    "procmon",
+    "perfmon",
+    "eventvwr",
+    "msconfig",
+    "taskhostw",
+    "lockapp",
+    "logonui",
+    "consent",
+    "credentialuibroker",
+    "securityhealthsystray",
+    "msmpeng",
+    "mpcmdrun",
+    "systemsettings",
+    "control",
+    "applicationframehost",
+    "searchhost",
+    "startmenuexperiencehost",
+    "shellexperiencehost",
+    "textinputhost",
+    "sihost",
+    "dwm",
+    "winlogon",
+    "wlrmdr",
+    "msiexec",
+    "setup",
+    "installer",
+    "wusa",
     // remote control and screen sharing / recording
-    "mstsc", "teamviewer", "anydesk", "rustdesk", "obs64", "obs32", "obs", "streamlabs", "xsplit", "snippingtool", "screenclippinghost",
+    "mstsc",
+    "teamviewer",
+    "anydesk",
+    "rustdesk",
+    "obs64",
+    "obs32",
+    "obs",
+    "streamlabs",
+    "xsplit",
+    "snippingtool",
+    "screenclippinghost",
     // virtual machines and security tools
-    "vmware", "virtualbox", "vboxsvc", "wireshark",
+    "vmware",
+    "virtualbox",
+    "vboxsvc",
+    "wireshark",
 ];
 
 /// Title words that mean "banking, passwords, sign-in, private browsing": hands off.
 const BLOCKED_TITLE_WORDS: &[&str] = &[
-    "bank", "banking", "paypal", "wallet", "crypto", "bitcoin", "iban", "password", "passwort", "passwords", "sign in", "log in", "login",
-    "sign-in", "log-in", "inprivate", "incognito", "private browsing", "private window", "1password", "bitwarden", "keepass", "credit card",
-    "checkout", "payment", "tax return", "steuer", "vpn", "two-factor", "2fa", "verification code", "recovery key", "seed phrase",
-    "uac", "user account control", "windows security", "administrator", "task manager",
+    "bank",
+    "banking",
+    "paypal",
+    "wallet",
+    "crypto",
+    "bitcoin",
+    "iban",
+    "password",
+    "passwort",
+    "passwords",
+    "sign in",
+    "log in",
+    "login",
+    "sign-in",
+    "log-in",
+    "inprivate",
+    "incognito",
+    "private browsing",
+    "private window",
+    "1password",
+    "bitwarden",
+    "keepass",
+    "credit card",
+    "checkout",
+    "payment",
+    "tax return",
+    "steuer",
+    "vpn",
+    "two-factor",
+    "2fa",
+    "verification code",
+    "recovery key",
+    "seed phrase",
+    "uac",
+    "user account control",
+    "windows security",
+    "administrator",
+    "task manager",
 ];
 
 /// Window classes that are system UI.
-const BLOCKED_CLASSES: &[&str] =
-    &["Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Progman", "WorkerW", "TaskManagerWindow", "#32770", "ConsoleWindowClass", "CASCADIA_HOSTING_WINDOW_CLASS", "Credential Dialog Xaml Host"];
+const BLOCKED_CLASSES: &[&str] = &[
+    "Shell_TrayWnd",
+    "Shell_SecondaryTrayWnd",
+    "Progman",
+    "WorkerW",
+    "TaskManagerWindow",
+    "#32770",
+    "ConsoleWindowClass",
+    "CASCADIA_HOSTING_WINDOW_CLASS",
+    "Credential Dialog Xaml Host",
+];
 
 /// Is this a program (or page) Glitch must never minimise?
 pub fn blocked_app(process: &str, title: &str, class: &str) -> bool {
@@ -794,9 +953,19 @@ pub fn blocked_app(process: &str, title: &str, class: &str) -> bool {
 pub fn screen_share_hint<'a>(titles: impl IntoIterator<Item = &'a str>) -> bool {
     titles.into_iter().any(|t| {
         let t = t.to_lowercase();
-        ["is sharing your screen", "you are sharing", "you're sharing", "you are screen sharing", "screen sharing", "stop sharing", "recording...", "now recording", "obs studio"]
-            .iter()
-            .any(|w| t.contains(w))
+        [
+            "is sharing your screen",
+            "you are sharing",
+            "you're sharing",
+            "you are screen sharing",
+            "screen sharing",
+            "stop sharing",
+            "recording...",
+            "now recording",
+            "obs studio",
+        ]
+        .iter()
+        .any(|w| t.contains(w))
     })
 }
 
@@ -831,7 +1000,13 @@ pub enum YoinkRefusal {
 }
 
 /// May Glitch minimise this window right now?
-pub fn yoink_eligible(w: &YoinkWin, area: ScreenRect, idle_ms: u32, sampler_uptime_ms: u64, level: ChaosLevel) -> Result<(), YoinkRefusal> {
+pub fn yoink_eligible(
+    w: &YoinkWin,
+    area: ScreenRect,
+    idle_ms: u32,
+    sampler_uptime_ms: u64,
+    level: ChaosLevel,
+) -> Result<(), YoinkRefusal> {
     // Unsaved work comes first, always.
     if w.cand.unsaved.is_some() {
         return Err(YoinkRefusal::Unsaved);
@@ -876,8 +1051,16 @@ pub fn yoink_eligible(w: &YoinkWin, area: ScreenRect, idle_ms: u32, sampler_upti
 }
 
 /// Pick the window to minimise: the one that was in front longest ago (or never).
-pub fn pick_yoink(wins: &[YoinkWin], area: ScreenRect, idle_ms: u32, uptime_ms: u64, level: ChaosLevel, pick: f64) -> Option<usize> {
-    let ok: Vec<usize> = (0..wins.len()).filter(|i| yoink_eligible(&wins[*i], area, idle_ms, uptime_ms, level).is_ok()).collect();
+pub fn pick_yoink(
+    wins: &[YoinkWin],
+    area: ScreenRect,
+    idle_ms: u32,
+    uptime_ms: u64,
+    level: ChaosLevel,
+    pick: f64,
+) -> Option<usize> {
+    let ok: Vec<usize> =
+        (0..wins.len()).filter(|i| yoink_eligible(&wins[*i], area, idle_ms, uptime_ms, level).is_ok()).collect();
     if ok.is_empty() {
         return None;
     }
@@ -1186,7 +1369,10 @@ mod tests {
             assert!(fx.cooldown(ChaosLevel::FullVirus) <= fx.cooldown(ChaosLevel::Mischief));
         }
         let yoink = Fx::Yoink.cooldown(ChaosLevel::Mischief).as_secs();
-        assert!((120..=180).contains(&yoink) && Fx::Yoink.cooldown(ChaosLevel::FullVirus).as_secs() >= 120, "minimise: 2-3 min");
+        assert!(
+            (120..=180).contains(&yoink) && Fx::Yoink.cooldown(ChaosLevel::FullVirus).as_secs() >= 120,
+            "minimise: 2-3 min"
+        );
         // Cursor scripts and dances respect the cap too.
         for act in [CursorAct::Hook(HookStyle::Pull), CursorAct::Orbit, CursorAct::Jitter, CursorAct::Hops] {
             for l in [ChaosLevel::Mischief, ChaosLevel::FullVirus] {
@@ -1276,7 +1462,9 @@ mod tests {
                     }
                     if !matches!(act, CursorAct::Hops) {
                         for w in path.windows(2) {
-                            let d = (((w[1].1 .0 - w[0].1 .0) as f64).powi(2) + ((w[1].1 .1 - w[0].1 .1) as f64).powi(2)).sqrt();
+                            let d = (((w[1].1 .0 - w[0].1 .0) as f64).powi(2)
+                                + ((w[1].1 .1 - w[0].1 .1) as f64).powi(2))
+                            .sqrt();
                             assert!(d <= MAX_STEP * scale + 1.5, "{act:?}: leaps {d} px in one tick");
                         }
                     }
@@ -1289,9 +1477,16 @@ mod tests {
     fn the_hook_reaches_at_most_400px_in_full_virus_and_250_in_mischief() {
         let far = |lvl| {
             let s = CursorScript::new(CursorAct::Hook(HookStyle::Pull), lvl, (1500, 900), (100, 100), AREA, 1.0, 1);
-            run(s).iter().map(|(_, p)| (((p.0 - 1500) as f64).powi(2) + ((p.1 - 900) as f64).powi(2)).sqrt()).fold(0.0, f64::max)
+            run(s)
+                .iter()
+                .map(|(_, p)| (((p.0 - 1500) as f64).powi(2) + ((p.1 - 900) as f64).powi(2)).sqrt())
+                .fold(0.0, f64::max)
         };
-        assert!(far(ChaosLevel::FullVirus) <= 401.0 && far(ChaosLevel::FullVirus) > 300.0, "{}", far(ChaosLevel::FullVirus));
+        assert!(
+            far(ChaosLevel::FullVirus) <= 401.0 && far(ChaosLevel::FullVirus) > 300.0,
+            "{}",
+            far(ChaosLevel::FullVirus)
+        );
         assert!(far(ChaosLevel::Mischief) <= 251.0 && far(ChaosLevel::Mischief) > 180.0);
         let s = script(CursorAct::Hook(HookStyle::Pull), ChaosLevel::FullVirus);
         assert!(s.duration_ms() <= 8_000);
@@ -1299,7 +1494,15 @@ mod tests {
 
     #[test]
     fn hook_pull_moves_towards_the_rod() {
-        let s = CursorScript::new(CursorAct::Hook(HookStyle::Pull), ChaosLevel::FullVirus, (900, 700), (500, 300), AREA, 1.0, 1);
+        let s = CursorScript::new(
+            CursorAct::Hook(HookStyle::Pull),
+            ChaosLevel::FullVirus,
+            (900, 700),
+            (500, 300),
+            AREA,
+            1.0,
+            1,
+        );
         let end = s.target(7_000);
         let d0 = (((900 - 500) as f64).powi(2) + ((700 - 300) as f64).powi(2)).sqrt();
         let d1 = (((end.0 - 500) as f64).powi(2) + ((end.1 - 300) as f64).powi(2)).sqrt();
@@ -1409,8 +1612,14 @@ mod tests {
                 let path = dance(kind, scale, |t| (700 + (t as i32 % 1500) / 3, 450));
                 for (t, (dx, dy)) in &path {
                     let f = ScreenRect { x: home().x + dx.round() as i32, y: home().y + dy.round() as i32, ..home() };
-                    assert!(f.x >= AREA.x && f.y >= AREA.y && f.right() <= AREA.right() && f.bottom() <= AREA.bottom(), "{kind:?} {t}: {f:?}");
-                    assert!((dx * dx + dy * dy).sqrt() <= MAX_WINDOW_TRAVEL * scale + 1.0, "{kind:?} {t}: too far ({dx},{dy})");
+                    assert!(
+                        f.x >= AREA.x && f.y >= AREA.y && f.right() <= AREA.right() && f.bottom() <= AREA.bottom(),
+                        "{kind:?} {t}: {f:?}"
+                    );
+                    assert!(
+                        (dx * dx + dy * dy).sqrt() <= MAX_WINDOW_TRAVEL * scale + 1.0,
+                        "{kind:?} {t}: too far ({dx},{dy})"
+                    );
                 }
                 let (_, (ex, ey)) = path.last().unwrap();
                 assert!(ex.abs() < 1.0 && ey.abs() < 1.0, "{kind:?}: carried back home, ends at ({ex},{ey})");
@@ -1433,7 +1642,10 @@ mod tests {
                 turns.push(main[i].0 as u64);
             }
         }
-        assert!(flash_rate_ok(&turns.iter().step_by(2).copied().collect::<Vec<_>>()), "no more than 3 cycles per second: {turns:?}");
+        assert!(
+            flash_rate_ok(&turns.iter().step_by(2).copied().collect::<Vec<_>>()),
+            "no more than 3 cycles per second: {turns:?}"
+        );
         assert_eq!(DanceKind::Quake.main_ms(), 2000);
     }
 
@@ -1510,7 +1722,11 @@ mod tests {
         let chk = |w: &YoinkWin, idle: u32, up: u64, l: ChaosLevel| yoink_eligible(w, AREA, idle, up, l);
         assert_eq!(chk(&ok, 9000, UPTIME, ChaosLevel::Gentle), Err(YoinkRefusal::Level));
         assert_eq!(chk(&ok, 9000, UPTIME, ChaosLevel::Off), Err(YoinkRefusal::Level));
-        assert_eq!(chk(&ok, 1000, UPTIME, ChaosLevel::Mischief), Err(YoinkRefusal::UserActive), "typing / mousing: idle < 4 s");
+        assert_eq!(
+            chk(&ok, 1000, UPTIME, ChaosLevel::Mischief),
+            Err(YoinkRefusal::UserActive),
+            "typing / mousing: idle < 4 s"
+        );
         assert_eq!(chk(&ok, 9000, 5_000, ChaosLevel::Mischief), Err(YoinkRefusal::NotWatchedLongEnough));
         let mut w = ok.clone();
         w.cand.foreground = true;
@@ -1544,7 +1760,24 @@ mod tests {
 
     #[test]
     fn terminals_password_managers_banks_and_admin_tools_are_blocked() {
-        for p in ["WindowsTerminal.exe", "cmd", "powershell", "pwsh", "conhost", "1Password", "Bitwarden", "KeePassXC", "taskmgr", "explorer", "mmc", "regedit", "obs64", "mstsc", "TeamViewer", ""] {
+        for p in [
+            "WindowsTerminal.exe",
+            "cmd",
+            "powershell",
+            "pwsh",
+            "conhost",
+            "1Password",
+            "Bitwarden",
+            "KeePassXC",
+            "taskmgr",
+            "explorer",
+            "mmc",
+            "regedit",
+            "obs64",
+            "mstsc",
+            "TeamViewer",
+            "",
+        ] {
             assert!(blocked_app(p, "Anything", "Chrome_WidgetWin_1"), "{p}");
         }
         for t in [
@@ -1560,7 +1793,12 @@ mod tests {
             assert!(blocked_app("chrome", t, "Chrome_WidgetWin_1"), "{t}");
         }
         assert!(blocked_app("notepad", "x", "#32770"), "system dialog class");
-        for (p, t) in [("notepad", "notes - Notepad"), ("chrome", "Cute cats - Google Chrome"), ("code", "main.rs - Visual Studio Code"), ("spotify", "Spotify")] {
+        for (p, t) in [
+            ("notepad", "notes - Notepad"),
+            ("chrome", "Cute cats - Google Chrome"),
+            ("code", "main.rs - Visual Studio Code"),
+            ("spotify", "Spotify"),
+        ] {
             assert!(!blocked_app(p, t, "Chrome_WidgetWin_1"), "{p} {t}");
         }
     }
@@ -1589,7 +1827,15 @@ mod tests {
     }
 
     fn yoinked(id: u64) -> Yoinked {
-        Yoinked { id, pid: 100 + id as u32, class: "Notepad".into(), title: "t".into(), process: "notepad".into(), at: Duration::ZERO, deadline: Duration::ZERO }
+        Yoinked {
+            id,
+            pid: 100 + id as u32,
+            class: "Notepad".into(),
+            title: "t".into(),
+            process: "notepad".into(),
+            at: Duration::ZERO,
+            deadline: Duration::ZERO,
+        }
     }
 
     #[test]
@@ -1614,7 +1860,9 @@ mod tests {
         assert!(b.has_room(ChaosLevel::FullVirus));
         b.add(yoinked(2), Duration::ZERO, 0.5);
         assert!(!b.has_room(ChaosLevel::FullVirus));
-        assert!(!MinimizeBook::default().has_room(ChaosLevel::Gentle) && !MinimizeBook::default().has_room(ChaosLevel::Off));
+        assert!(
+            !MinimizeBook::default().has_room(ChaosLevel::Gentle) && !MinimizeBook::default().has_room(ChaosLevel::Off)
+        );
     }
 
     #[test]
@@ -1679,7 +1927,9 @@ mod tests {
                     4 => {
                         // Esc / panic / tray Stop / exit: everything back now.
                         for y in book.drain() {
-                            if restore_check(true, wins[y.id as usize] == Win::MinByGlitch, true) == RestoreCheck::Restore {
+                            if restore_check(true, wins[y.id as usize] == Win::MinByGlitch, true)
+                                == RestoreCheck::Restore
+                            {
                                 wins[y.id as usize] = Win::Open;
                                 minimised_since[y.id as usize] = None;
                                 restored_by_glitch.push(y.id);
@@ -1709,8 +1959,15 @@ mod tests {
                 // The invariant: nothing minimised by Glitch outlives 15 s (plus one watcher tick).
                 for (id, since) in minimised_since.iter().enumerate() {
                     if let Some(s) = since {
-                        assert!(now - *s <= YOINK_MAX + Duration::from_secs(1), "seed {seed}: window {id} still minimised after {:?}", now - *s);
-                        assert!(book.contains(id as u64), "seed {seed}: window {id} minimised by Glitch but not tracked");
+                        assert!(
+                            now - *s <= YOINK_MAX + Duration::from_secs(1),
+                            "seed {seed}: window {id} still minimised after {:?}",
+                            now - *s
+                        );
+                        assert!(
+                            book.contains(id as u64),
+                            "seed {seed}: window {id} minimised by Glitch but not tracked"
+                        );
                     }
                 }
                 // He never touched the one the user minimised himself.

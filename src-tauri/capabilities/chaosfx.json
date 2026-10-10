@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "chaosfx",
+  "description": "Chaos mode 2's click-through effects overlay: it can fetch the melt picture once and say it has nothing left to show.",
+  "windows": [
+    "chaosfx"
+  ],
+  "permissions": [
+    "allow-chaos2-fx-idle",
+    "allow-chaos2-melt-frame"
+  ]
+}
