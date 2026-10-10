@@ -8,7 +8,12 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use super::{Hands, HandsResult, Key, Media, MediaStatus, UiElement, WindowRef};
+use super::pointer::{ClickKind, PointerOp};
+use super::winops::{self, Snap, WinGeom, WinState, WindowOp};
+use super::{Hands, HandsResult, Key, MarkShot, Media, MediaStatus, UiElement, WindowRef};
+
+/// The fake monitor's work area (no taskbar).
+pub const WORK: winops::Edges = (0, 0, 1920, 1040);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
@@ -37,6 +42,13 @@ pub struct MockEl {
     pub below_fold: bool,
     pub password: bool,
     pub editable: bool,
+    /// Can be picked up and dropped on a `drop_target` (desktop control).
+    pub draggable: bool,
+    pub drop_target: bool,
+    /// What was dropped on it.
+    pub contents: Vec<String>,
+    /// Place inside the window (x, y, w, h); default: a column of rows.
+    pub at: Option<(i32, i32, i32, i32)>,
 }
 
 pub fn el(role: &'static str, name: &str) -> MockEl {
@@ -48,6 +60,10 @@ pub fn el(role: &'static str, name: &str) -> MockEl {
         below_fold: false,
         password: false,
         editable: matches!(role, "edit" | "document"),
+        draggable: false,
+        drop_target: false,
+        contents: vec![],
+        at: None,
     }
 }
 
@@ -62,6 +78,18 @@ impl MockEl {
     }
     pub fn password(mut self) -> Self {
         self.password = true;
+        self
+    }
+    pub fn draggable(mut self) -> Self {
+        self.draggable = true;
+        self
+    }
+    pub fn drop_target(mut self) -> Self {
+        self.drop_target = true;
+        self
+    }
+    pub fn at(mut self, x: i32, y: i32, w: i32, h: i32) -> Self {
+        self.at = Some((x, y, w, h));
         self
     }
 }
@@ -92,6 +120,15 @@ pub struct MockApp {
     pub title_shows_playing: bool,
     /// Enter in a filled search box (or a search link) shows matching list items.
     pub searchable: bool,
+    /// Where the window is on the screen: left, top, right, bottom.
+    pub rect: (i32, i32, i32, i32),
+    pub maximized: bool,
+    /// Ignores resize and snap (a fixed-size dialog-like app).
+    pub fixed_size: bool,
+    /// The element key that has the keyboard focus.
+    pub focus: Option<u64>,
+    /// An element that does nothing visible when clicked (for "nothing changed" tests).
+    pub inert_click: bool,
 }
 
 impl MockApp {
@@ -115,6 +152,11 @@ impl MockApp {
             dialog_on_type: None,
             title_shows_playing: false,
             searchable: false,
+            rect: (100, 80, 1100, 680),
+            maximized: false,
+            fixed_size: false,
+            focus: None,
+            inert_click: false,
         }
     }
     pub fn already_open(mut self) -> Self {
@@ -138,6 +180,10 @@ pub struct MockState {
     pub interrupt_after: Option<u32>,
     pub actions: u32,
     pub interrupted: bool,
+    /// Where the pointer is (desktop control).
+    pub cursor: (i32, i32),
+    /// (item, target) of every successful drag and drop.
+    pub drops: Vec<(String, String)>,
 }
 
 /// The fake: apps live in a mutex, every call is recorded.
@@ -218,6 +264,31 @@ impl MockHands {
             .filter(|(_, e)| !e.below_fold || a.scrolled)
             .map(|(j, e)| (((si as u64) << 16) | j as u64, e))
             .collect()
+    }
+
+    /// Screen rectangle of the n-th visible element (x, y, w, h).
+    fn element_rect(a: &MockApp, e: &MockEl, n: usize) -> (i32, i32, i32, i32) {
+        let (l, t, ..) = a.rect;
+        match e.at {
+            Some((x, y, w, h)) => (l + x, t + y, w, h),
+            None => (l + 16, t + 40 + n as i32 * 30, 260, 24),
+        }
+    }
+
+    fn snap(a: &mut MockApp, sn: Snap) {
+        if a.fixed_size {
+            return;
+        }
+        match sn {
+            Snap::Maximize => a.maximized = true,
+            Snap::Restore => a.maximized = false,
+            Snap::Left | Snap::Right => {
+                a.maximized = false;
+                if let Some(r) = winops::snap_rect(WORK, sn) {
+                    a.rect = r;
+                }
+            }
+        }
     }
 
     fn count_action(s: &mut MockState) {
@@ -391,10 +462,13 @@ impl Hands for MockHands {
                 name: e.name.clone(),
                 value: e.value.clone(),
                 enabled: true,
-                focused: focused_front && e.editable && n == 0,
+                focused: focused_front
+                    && !dialog
+                    && e.editable
+                    && (a.focus == Some(key) || (a.focus.is_none() && n == 0)),
                 password: e.password,
                 offscreen: false,
-                rect: (10, 10 + n as i32 * 30, 200, 24),
+                rect: Self::element_rect(a, e, n),
                 actionable: e.role != "text",
             })
             .collect())
@@ -472,6 +546,16 @@ impl Hands for MockHands {
             }
             let app = s.apps[i].app;
             s.log.push(format!("press {app} {}", key.label()));
+            let snap = match key {
+                Key::WinLeft => Some(Snap::Left),
+                Key::WinRight => Some(Snap::Right),
+                Key::WinUp => Some(Snap::Maximize),
+                Key::WinDown => Some(Snap::Restore),
+                _ => None,
+            };
+            if let Some(snap) = snap {
+                Self::snap(&mut s.apps[i], snap);
+            }
         } else {
             s.log.push(format!("press {}", key.label()));
             if key == Key::PlayPause {
@@ -523,6 +607,201 @@ impl Hands for MockHands {
             }
         }
         Ok(())
+    }
+
+    fn capture(&self, w: Option<&WindowRef>) -> HandsResult<MarkShot> {
+        let s = self.state.lock().unwrap();
+        let (rect, elements): (winops::Edges, Vec<winops::Edges>) = match w {
+            Some(w) => {
+                let (i, dialog) = Self::index_of(&s, w)?;
+                let a = &s.apps[i];
+                let els = Self::visible_elements(a, dialog)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(n, (_, e))| Self::element_rect(a, e, n))
+                    .collect();
+                (a.rect, els)
+            }
+            None => ((0, 0, 1280, 720), vec![]),
+        };
+        let (width, height) = ((rect.2 - rect.0) as u32, (rect.3 - rect.1) as u32);
+        let mut img = image::RgbaImage::from_pixel(width, height, image::Rgba([236, 236, 236, 255]));
+        for (x, y, ew, eh) in elements {
+            let (x, y) = ((x - rect.0).max(0) as u32, (y - rect.1).max(0) as u32);
+            for yy in y..(y + eh as u32).min(height) {
+                for xx in x..(x + ew as u32).min(width) {
+                    let edge = xx < x + 2 || yy < y + 2 || xx + 2 >= x + ew as u32 || yy + 2 >= y + eh as u32;
+                    img.put_pixel(
+                        xx,
+                        yy,
+                        if edge { image::Rgba([40, 40, 40, 255]) } else { image::Rgba([255, 255, 255, 255]) },
+                    );
+                }
+            }
+        }
+        let capture = crate::desktop::Capture { width, height, rgba: img.into_raw(), window: None, redact: vec![] };
+        Ok(MarkShot { capture, origin: (rect.0, rect.1) })
+    }
+
+    fn window_at(&self, x: i32, y: i32) -> Option<WindowRef> {
+        let order: Vec<WindowRef> = self.windows();
+        let s = self.state.lock().unwrap();
+        order.into_iter().find(|w| {
+            let i = (w.id / 10) as usize;
+            let a = &s.apps[i - 1];
+            !a.minimized && w.id % 10 == 0 && x >= a.rect.0 && y >= a.rect.1 && x < a.rect.2 && y < a.rect.3
+        })
+    }
+
+    fn pointer(&self, op: &PointerOp) -> HandsResult<String> {
+        {
+            let mut s = self.state.lock().unwrap();
+            if s.interrupted {
+                return Err("the user took over".into());
+            }
+            Self::count_action(&mut s);
+        }
+        let hit = |s: &MockState, x: i32, y: i32| -> Option<(usize, u64, MockEl)> {
+            let order: Vec<usize> = s.front.into_iter().chain(0..s.apps.len()).collect();
+            for i in order {
+                let a = &s.apps[i];
+                if !a.open || a.minimized || x < a.rect.0 || y < a.rect.1 || x >= a.rect.2 || y >= a.rect.3 {
+                    continue;
+                }
+                if a.dialog.is_some() {
+                    return None;
+                }
+                for (n, (key, e)) in Self::visible_elements(a, false).into_iter().enumerate() {
+                    let (ex, ey, ew, eh) = Self::element_rect(a, e, n);
+                    if x >= ex && y >= ey && x < ex + ew && y < ey + eh {
+                        return Some((i, key, e.clone()));
+                    }
+                }
+                return None;
+            }
+            None
+        };
+        let mut s = self.state.lock().unwrap();
+        match *op {
+            PointerOp::Move { to } => {
+                s.cursor = to;
+                s.log.push(format!("pointer move {},{}", to.0, to.1));
+                Ok("moved".into())
+            }
+            PointerOp::Click { at, kind } => {
+                s.cursor = at;
+                let Some((i, key, e)) = hit(&s, at.0, at.1) else {
+                    s.log.push("pointer click nothing".into());
+                    return Ok(format!("{kind:?} click"));
+                };
+                let app = s.apps[i].app;
+                s.log.push(format!("pointer {kind:?} {app} {}", e.name));
+                if e.editable {
+                    s.apps[i].focus = Some(key);
+                }
+                if kind != ClickKind::Right && !s.apps[i].inert_click {
+                    let effect =
+                        Self::element_mut(&mut s.apps[i], key).map(|e| e.effect.clone()).unwrap_or(Effect::None);
+                    Self::apply(&mut s, i, effect);
+                }
+                Ok(format!("{kind:?} click"))
+            }
+            PointerOp::Drag { from, to } => {
+                let (Some((fi, fk, fe)), Some((ti, tk, te))) = (hit(&s, from.0, from.1), hit(&s, to.0, to.1)) else {
+                    s.log.push("pointer drag nothing".into());
+                    return Ok("dragged".into());
+                };
+                s.log.push(format!("pointer drag {} onto {}", fe.name, te.name));
+                if fe.draggable && te.drop_target && !s.apps[fi].inert_click {
+                    // The item leaves its list and lands in the target.
+                    let screen = s.apps[fi].screen;
+                    if let Some((_, els)) = s.apps[fi].screens.iter_mut().find(|(n, _)| *n == screen) {
+                        let idx = (fk & 0xffff) as usize;
+                        if idx < els.len() {
+                            els[idx].name = format!("{} (moved)", els[idx].name);
+                            els[idx].draggable = false;
+                        }
+                    }
+                    if let Some(t) = Self::element_mut(&mut s.apps[ti], tk) {
+                        t.contents.push(fe.name.clone());
+                    }
+                    s.drops.push((fe.name.clone(), te.name.clone()));
+                }
+                s.cursor = to;
+                Ok("dragged".into())
+            }
+            PointerOp::Scroll { at, notches } => {
+                s.cursor = at;
+                if let Some((i, ..)) = hit(&s, at.0, at.1) {
+                    s.apps[i].scrolled = notches < 0;
+                    let app = s.apps[i].app;
+                    s.log.push(format!("pointer scroll {app}"));
+                }
+                Ok("wheel".into())
+            }
+        }
+    }
+
+    fn cursor(&self) -> Option<(i32, i32)> {
+        Some(self.state.lock().unwrap().cursor)
+    }
+
+    fn geometry(&self, w: &WindowRef) -> Option<WinGeom> {
+        let s = self.state.lock().unwrap();
+        let (i, _) = Self::index_of(&s, w).ok()?;
+        let a = &s.apps[i];
+        Some(WinGeom {
+            rect: a.rect,
+            state: if a.minimized {
+                WinState::Minimized
+            } else if a.maximized {
+                WinState::Maximized
+            } else {
+                WinState::Normal
+            },
+        })
+    }
+
+    fn work_area(&self, _: &WindowRef) -> winops::Edges {
+        WORK
+    }
+
+    fn window_op(&self, w: &WindowRef, op: WindowOp) -> HandsResult<WinGeom> {
+        {
+            let mut s = self.state.lock().unwrap();
+            let (i, _) = Self::index_of(&s, w)?;
+            Self::count_action(&mut s);
+            let app = s.apps[i].app;
+            s.log.push(format!("window {app} {op:?}"));
+            let a = &mut s.apps[i];
+            match op {
+                WindowOp::Move { x, y } => {
+                    let (ww, hh) = (winops::width(a.rect), winops::height(a.rect));
+                    a.rect = (x, y, x + ww, y + hh);
+                    a.maximized = false;
+                }
+                WindowOp::Resize { w, h } if !a.fixed_size => {
+                    a.rect = (a.rect.0, a.rect.1, a.rect.0 + w, a.rect.1 + h);
+                    a.maximized = false;
+                }
+                WindowOp::Resize { .. } => {}
+                WindowOp::Snap(sn) => Self::snap(a, sn),
+                WindowOp::Minimize => a.minimized = true,
+                WindowOp::Restore => {
+                    a.minimized = false;
+                    a.maximized = false;
+                }
+                WindowOp::Set(g) => {
+                    a.rect = g.rect;
+                    a.maximized = g.state == WinState::Maximized;
+                    a.minimized = g.state == WinState::Minimized;
+                }
+            }
+            if matches!(op, WindowOp::Restore) {
+                s.front = Some(i);
+            }
+        }
+        self.geometry(w).ok_or_else(|| "the window vanished".into())
     }
 
     fn drive(&self, app: Option<&str>) {
@@ -661,4 +940,78 @@ pub fn update_dialog() -> (String, Vec<MockEl>) {
             el("button", "Update").on_click(Effect::Dismiss),
         ],
     )
+}
+
+// ------------------------------------------- desktop control scenarios
+
+/// A file manager: three draggable files, three folders to drop them on
+/// (one of them the recycle bin), a Refresh button.
+pub fn files_app() -> MockApp {
+    MockApp::new(
+        "Files Pro",
+        "filespro",
+        "Files Pro - Downloads",
+        vec![(
+            "main",
+            vec![
+                el("list item", "Photo A.png").draggable().at(16, 40, 220, 26),
+                el("list item", "Photo B.png").draggable().at(16, 72, 220, 26),
+                el("list item", "Notes.txt").draggable().at(16, 104, 220, 26),
+                el("list item", "Folder X").drop_target().at(320, 40, 220, 26),
+                el("list item", "Folder Y").drop_target().at(320, 72, 220, 26),
+                el("list item", "Recycle Bin").drop_target().at(320, 104, 220, 26),
+                el("button", "Refresh").at(16, 160, 110, 28),
+            ],
+        )],
+    )
+    .already_open()
+}
+
+/// A little editor with a Save button that shows "Saved!", a Cancel button
+/// and a Bold toggle.
+pub fn editor_app() -> MockApp {
+    let mut a = MockApp::new(
+        "Draft Editor",
+        "drafteditor",
+        "Draft Editor",
+        vec![
+            (
+                "main",
+                vec![
+                    el("document", "Text area").at(16, 40, 500, 200),
+                    el("button", "Bold").at(16, 260, 90, 28),
+                    el("button", "Save").on_click(Effect::Goto("saved")).at(120, 260, 90, 28),
+                    el("button", "Cancel").at(224, 260, 90, 28),
+                ],
+            ),
+            (
+                "saved",
+                vec![el("text", "Saved!"), el("button", "Done").on_click(Effect::Goto("main")).at(16, 40, 90, 28)],
+            ),
+        ],
+    )
+    .already_open();
+    a.rect = (200, 120, 800, 520);
+    a
+}
+
+impl MockHands {
+    /// (item, target) of every successful drag and drop.
+    pub fn drops(&self) -> Vec<(String, String)> {
+        self.state.lock().unwrap().drops.clone()
+    }
+
+    /// A window's place as the fake desktop has it.
+    pub fn geometry_of(&self, app: &str) -> Option<WinGeom> {
+        let w = self.windows().into_iter().find(|w| w.app == app)?;
+        Hands::geometry(self, &w)
+    }
+
+    /// Move a window without Glitch (the user did it).
+    pub fn set_rect(&self, app: &str, rect: (i32, i32, i32, i32)) {
+        let mut s = self.state.lock().unwrap();
+        if let Some(a) = s.apps.iter_mut().find(|a| a.app == app) {
+            a.rect = rect;
+        }
+    }
 }

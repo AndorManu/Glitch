@@ -251,6 +251,24 @@ const SENSITIVE_WORDS: &[&str] = &[
     "agree",
     "invite",
     "forward",
+    // desktop control: saving, closing and anything that changes the system
+    "save",
+    "save as",
+    "close",
+    "exit",
+    "quit",
+    "remove",
+    "erase",
+    "wipe",
+    "reset",
+    "restart",
+    "shut down",
+    "shutdown",
+    "sign out",
+    "log out",
+    "turn off",
+    "disable",
+    "empty recycle bin",
 ];
 
 fn words(s: &str) -> Vec<String> {
@@ -291,6 +309,33 @@ pub fn blocked(app: &str, exe: &str, title: &str) -> Option<&'static str> {
         );
     }
     None
+}
+
+/// An element that closes the window / quits the app. Closing is never done
+/// with a key or a tool of its own, only by clicking the app's own control,
+/// and always behind its own confirmation card.
+pub fn is_close_control(name: &str) -> bool {
+    let w = words(name);
+    ["close", "close window", "close tab", "exit", "quit", "quit app"].iter().any(|c| w == words(c))
+}
+
+/// Is the task about a web address ("go to this url", "type it in the
+/// address bar")? Only then may Glitch use a browser's address bar.
+pub fn task_about_url(user_said: &str) -> bool {
+    let t = user_said.to_lowercase();
+    ["url", "address bar", "web address", "http://", "https://", "www."].iter().any(|k| t.contains(k))
+}
+
+/// A plain web address (no spaces, no script scheme).
+pub fn looks_like_url(text: &str) -> bool {
+    let t = text.trim().to_lowercase();
+    if t.is_empty() || t.contains(char::is_whitespace) || t.starts_with("javascript:") || t.starts_with("data:") {
+        return false;
+    }
+    t.starts_with("http://")
+        || t.starts_with("https://")
+        || t.starts_with("www.")
+        || (t.contains('.') && !t.contains(':'))
 }
 
 pub fn is_messaging(app: &str, title: &str) -> bool {
@@ -413,8 +458,7 @@ pub fn grounded_in(text: &str, user_said: &str) -> bool {
 /// Never type into this element: a browser address bar, a terminal or console.
 pub fn no_typing_into(exe: &str, role: &str, name: &str) -> Option<&'static str> {
     let n = tokens(name);
-    let field = matches!(role, "edit" | "combo box" | "document");
-    if is_browser(exe) && field && n.iter().any(|w| ["address", "url", "location", "omnibox"].contains(&w.as_str())) {
+    if is_address_bar(exe, role, name) {
         return Some(
             "that is the browser's address bar; Glitch never types there. Use open_url to open a web page instead.",
         );
@@ -423,6 +467,14 @@ pub fn no_typing_into(exe: &str, role: &str, name: &str) -> Option<&'static str>
         return Some("that looks like an address bar, terminal or console; Glitch never types into those.");
     }
     None
+}
+
+/// A browser's address bar (the one field that may be used when the task is
+/// about a web address, with its own confirmation card).
+pub fn is_address_bar(exe: &str, role: &str, name: &str) -> bool {
+    let n = tokens(name);
+    let field = matches!(role, "edit" | "combo box" | "document");
+    is_browser(exe) && field && n.iter().any(|w| ["address", "url", "location", "omnibox"].contains(&w.as_str()))
 }
 
 pub fn is_browser(exe: &str) -> bool {
@@ -499,6 +551,35 @@ mod tests {
             assert!(sensitive_name(w).is_some(), "{w}");
         }
         assert_eq!(sensitive_name("Not now"), None);
+    }
+
+    #[test]
+    fn desktop_control_words_need_their_own_card() {
+        for w in ["Save", "Save as...", "Close", "Exit", "Quit", "Remove", "Shut down", "Turn off", "Restart now"] {
+            assert!(sensitive_name(w).is_some(), "{w}");
+        }
+        for w in ["Savings", "Closet", "Open", "Cancel", "Item A", "Folder X"] {
+            assert_eq!(sensitive_name(w), None, "{w}");
+        }
+        assert!(is_close_control("Close"));
+        assert!(is_close_control("Close window"));
+        assert!(is_close_control("Quit"));
+        assert!(!is_close_control("Close all other tabs"), "only the plain close controls");
+        assert!(!is_close_control("Save"));
+    }
+
+    #[test]
+    fn the_address_bar_is_only_for_url_tasks() {
+        assert!(task_about_url("go to https://example.com and scroll"));
+        assert!(task_about_url("type this url in the address bar"));
+        assert!(!task_about_url("play my playlist"));
+        assert!(is_address_bar("chrome", "edit", "Address and search bar"));
+        assert!(!is_address_bar("notepad", "edit", "Address"));
+        assert!(looks_like_url("https://example.com/a?b=1"));
+        assert!(looks_like_url("example.com"));
+        assert!(!looks_like_url("javascript:alert(1)"));
+        assert!(!looks_like_url("two words.com"));
+        assert!(!looks_like_url("data:text/html,<b>"));
     }
 
     #[test]

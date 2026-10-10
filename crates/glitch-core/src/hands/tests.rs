@@ -51,9 +51,16 @@ fn keys_parse_from_a_whitelist_only() {
     assert_eq!(Key::parse("control-f"), Some(Key::CtrlF));
     assert_eq!(Key::parse("ArrowDown"), Some(Key::Down));
     assert_eq!(Key::parse("play_pause"), Some(Key::PlayPause));
-    for bad in ["alt+f4", "win", "ctrl+a", "delete", "ctrl+w", "f5"] {
+    for bad in ["alt+f4", "win", "delete", "ctrl+shift+delete", "win+r", "ctrl+alt+delete", "f4", "ctrl+n", "win+d"] {
         assert_eq!(Key::parse(bad), None, "{bad}");
     }
+    // Desktop control's shortcuts parse, but are marked as desktop-only.
+    assert_eq!(Key::parse("Alt+Tab"), Some(Key::AltTab));
+    assert_eq!(Key::parse("Win+Left"), Some(Key::WinLeft));
+    assert_eq!(Key::parse("windows+ctrl+right"), Some(Key::DesktopRight));
+    assert_eq!(Key::parse("F5"), Some(Key::F5));
+    assert!(Key::CtrlC.desktop_only() && Key::F5.desktop_only() && !Key::Enter.desktop_only());
+    assert!(!Key::CtrlF.desktop_only() && !Key::PlayPause.desktop_only() && !Key::Mute.desktop_only());
     for (i, n) in Key::NAMES.iter().enumerate() {
         assert_eq!(Key::parse(n).unwrap() as usize, i, "{n}");
         assert_eq!(Key::parse(n).unwrap().label(), *n);

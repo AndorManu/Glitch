@@ -490,7 +490,7 @@ impl Action {
                         lower_first(&act.progress_label())
                     ),
                 },
-                crate::hands::Ask::Sensitive { title, detail } => {
+                crate::hands::Ask::Sensitive { title, detail } | crate::hands::Ask::Review { title, detail } => {
                     Description { title: title.clone(), detail: detail.clone() }
                 }
                 crate::hands::Ask::No => Description { title: act.progress_label(), detail: String::new() },

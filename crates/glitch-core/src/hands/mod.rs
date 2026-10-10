@@ -19,8 +19,15 @@
 //! this?"; sending, buying, deleting and typing text the user didn't say
 //! always get their own confirmation showing exactly what would happen.
 
+pub mod control;
+pub mod fsmove;
+pub mod marks;
 pub mod mock;
+pub mod pointer;
+pub mod prompt;
 pub mod safety;
+pub mod undo;
+pub mod winops;
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -56,6 +63,11 @@ pub const TOOL_NAMES: &[&str] = &[
     MEDIA_CONTROL,
     OPEN_LINK,
 ];
+
+/// Is this one of the app-control or desktop-control tools?
+pub fn is_tool(name: &str) -> bool {
+    TOOL_NAMES.contains(&name) || control::TOOL_NAMES.contains(&name)
+}
 
 /// Elements shown to the model per read (a 4B model reads ~60 lines fine).
 pub const MAX_ELEMENTS: usize = 60;
@@ -137,6 +149,26 @@ pub enum Key {
     VolumeUp,
     VolumeDown,
     Mute,
+    // Desktop control only (Settings > Features > Desktop control). Nothing
+    // here closes an app, deletes, opens system menus or runs commands.
+    AltTab,
+    WinLeft,
+    WinRight,
+    WinUp,
+    WinDown,
+    CtrlC,
+    CtrlV,
+    CtrlX,
+    CtrlA,
+    CtrlZ,
+    CtrlT,
+    CtrlW,
+    CtrlS,
+    AltLeft,
+    AltRight,
+    F5,
+    DesktopLeft,
+    DesktopRight,
 }
 
 impl Key {
@@ -162,11 +194,29 @@ impl Key {
         "volume_up",
         "volume_down",
         "mute",
+        "alt+tab",
+        "win+left",
+        "win+right",
+        "win+up",
+        "win+down",
+        "ctrl+c",
+        "ctrl+v",
+        "ctrl+x",
+        "ctrl+a",
+        "ctrl+z",
+        "ctrl+t",
+        "ctrl+w",
+        "ctrl+s",
+        "alt+left",
+        "alt+right",
+        "f5",
+        "desktop_left",
+        "desktop_right",
     ];
 
     pub fn parse(s: &str) -> Option<Key> {
         let k: String = s.trim().to_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
-        let k = k.replace("control", "ctrl").replace('-', "+").replace("arrow", "");
+        let k = k.replace("control", "ctrl").replace('-', "+").replace("arrow", "").replace("windows", "win");
         Some(match k.as_str() {
             "enter" | "return" => Key::Enter,
             "space" | "spacebar" => Key::Space,
@@ -189,8 +239,48 @@ impl Key {
             "volume_up" | "volumeup" => Key::VolumeUp,
             "volume_down" | "volumedown" => Key::VolumeDown,
             "mute" | "volume_mute" => Key::Mute,
+            "alt+tab" => Key::AltTab,
+            "win+left" => Key::WinLeft,
+            "win+right" => Key::WinRight,
+            "win+up" => Key::WinUp,
+            "win+down" => Key::WinDown,
+            "ctrl+c" => Key::CtrlC,
+            "ctrl+v" => Key::CtrlV,
+            "ctrl+x" => Key::CtrlX,
+            "ctrl+a" => Key::CtrlA,
+            "ctrl+z" => Key::CtrlZ,
+            "ctrl+t" => Key::CtrlT,
+            "ctrl+w" => Key::CtrlW,
+            "ctrl+s" => Key::CtrlS,
+            "alt+left" => Key::AltLeft,
+            "alt+right" => Key::AltRight,
+            "f5" | "refresh" => Key::F5,
+            "desktop_left" | "win+ctrl+left" | "ctrl+win+left" | "previous_desktop" => Key::DesktopLeft,
+            "desktop_right" | "win+ctrl+right" | "ctrl+win+right" | "next_desktop" => Key::DesktopRight,
             _ => return None,
         })
+    }
+
+    /// Only with "Desktop control" on.
+    pub fn desktop_only(self) -> bool {
+        self as usize >= Key::AltTab as usize
+    }
+
+    /// Keys that move or resize the window in front or switch windows /
+    /// desktops: the window's place is saved first so "Undo" can put it back.
+    pub fn changes_windows(self) -> bool {
+        matches!(self, Key::WinLeft | Key::WinRight | Key::WinUp | Key::WinDown)
+    }
+
+    /// Keys that get their own confirmation card, with what they do.
+    pub fn card(self) -> Option<&'static str> {
+        match self {
+            Key::CtrlS => Some("Save this document (Ctrl+S). It writes to the file or opens a Save dialog"),
+            Key::CtrlW => Some("Close the current tab or window (Ctrl+W)"),
+            Key::CtrlV => Some("Paste whatever is on your clipboard here (Ctrl+V)"),
+            Key::CtrlX => Some("Cut the selection out of the document (Ctrl+X)"),
+            _ => None,
+        }
     }
 
     /// Media keys work on whatever is playing; no window needed.
@@ -199,6 +289,12 @@ impl Key {
             self,
             Key::PlayPause | Key::NextTrack | Key::PreviousTrack | Key::VolumeUp | Key::VolumeDown | Key::Mute
         )
+    }
+
+    /// Works on the whole desktop, not on one window: media keys, Alt+Tab,
+    /// virtual desktop switching.
+    pub fn is_global(self) -> bool {
+        self.is_media() || matches!(self, Key::AltTab | Key::DesktopLeft | Key::DesktopRight)
     }
 
     pub fn label(self) -> &'static str {
@@ -296,6 +392,52 @@ pub trait Hands: Send + Sync {
     fn sleep(&self, d: Duration) {
         std::thread::sleep(d)
     }
+
+    // ---- desktop control (Settings > Features > Desktop control). All
+    // have a "not here" default, so apps-only Hands (tests, other OSes)
+    // need nothing.
+
+    /// A screenshot of the window (`None`: the screen the mouse is on) for
+    /// set-of-marks vision, and where its top-left corner is on the screen.
+    /// Never includes Glitch's own windows; stays in RAM.
+    fn capture(&self, _w: Option<&WindowRef>) -> HandsResult<MarkShot> {
+        Err("seeing the screen isn't available here".into())
+    }
+    /// The app window under a screen point (`None`: the desktop, Glitch's
+    /// own windows, or nothing).
+    fn window_at(&self, _x: i32, _y: i32) -> Option<WindowRef> {
+        None
+    }
+    /// Move the real pointer / click / drag / scroll. Shows the ring and paw
+    /// at the target first, moves in small eased steps, checks for the user's
+    /// own input at every step and stops within 100 ms of it.
+    fn pointer(&self, _op: &pointer::PointerOp) -> HandsResult<String> {
+        Err("moving the pointer isn't available here".into())
+    }
+    /// Where the pointer is now.
+    fn cursor(&self) -> Option<(i32, i32)> {
+        None
+    }
+    /// A window's place, for "Undo".
+    fn geometry(&self, _w: &WindowRef) -> Option<winops::WinGeom> {
+        None
+    }
+    /// The monitor work area (no taskbar) the window is on.
+    fn work_area(&self, _w: &WindowRef) -> winops::Edges {
+        (0, 0, 1920, 1040)
+    }
+    /// Move, resize, snap, minimize or restore a window (never close it).
+    /// Returns the new place.
+    fn window_op(&self, _w: &WindowRef, _op: winops::WindowOp) -> HandsResult<winops::WinGeom> {
+        Err("moving windows isn't available here".into())
+    }
+}
+
+/// A screenshot for marks.
+pub struct MarkShot {
+    pub capture: crate::desktop::Capture,
+    /// Screen position of the capture's top-left corner.
+    pub origin: (i32, i32),
 }
 
 /// Hands for platforms without app control.
@@ -347,16 +489,50 @@ impl Hands for NoHands {
 /// A checked, ready-to-run app-control action.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HandsAction {
-    Plan { steps: Vec<String> },
-    WaitFor { target: String, timeout: Duration },
-    Focus { win: WindowRef },
-    Read { win: WindowRef, query: Option<String> },
-    Click { win: WindowRef, el: UiElement, id: u32 },
-    SetText { win: WindowRef, el: UiElement, id: u32, text: String, replace: bool },
-    Press { win: Option<WindowRef>, key: Key },
-    Scroll { win: WindowRef, el: Option<UiElement>, down: bool },
-    Media { cmd: Media },
-    OpenLink { uri: String, app: String },
+    Plan {
+        steps: Vec<String>,
+    },
+    WaitFor {
+        target: String,
+        timeout: Duration,
+    },
+    Focus {
+        win: WindowRef,
+    },
+    Read {
+        win: WindowRef,
+        query: Option<String>,
+    },
+    Click {
+        win: WindowRef,
+        el: UiElement,
+        id: u32,
+    },
+    SetText {
+        win: WindowRef,
+        el: UiElement,
+        id: u32,
+        text: String,
+        replace: bool,
+    },
+    Press {
+        win: Option<WindowRef>,
+        key: Key,
+    },
+    Scroll {
+        win: WindowRef,
+        el: Option<UiElement>,
+        down: bool,
+    },
+    Media {
+        cmd: Media,
+    },
+    OpenLink {
+        uri: String,
+        app: String,
+    },
+    /// Desktop control: marks, pointer, windows, files (see [`control`]).
+    Desktop(control::Desk),
 }
 
 /// Whether an action needs the user first.
@@ -369,6 +545,9 @@ pub enum Ask {
     /// Sends, buys, deletes or types text the user didn't say: its own
     /// confirmation every time, showing exactly what would happen.
     Sensitive { title: String, detail: String },
+    /// Review mode, "Ask before each step": the next step, shown before it
+    /// happens, with "Do this step" / "Auto for this task" / "Stop".
+    Review { title: String, detail: String },
 }
 
 impl HandsAction {
@@ -384,6 +563,7 @@ impl HandsAction {
             HandsAction::Scroll { .. } => UI_SCROLL,
             HandsAction::Media { .. } => MEDIA_CONTROL,
             HandsAction::OpenLink { .. } => OPEN_LINK,
+            HandsAction::Desktop(d) => d.tool_name(),
         }
     }
 
@@ -395,8 +575,13 @@ impl HandsAction {
             | HandsAction::Click { win, .. }
             | HandsAction::SetText { win, .. }
             | HandsAction::Scroll { win, .. } => Some(&win.app),
-            HandsAction::Press { win, .. } => win.as_ref().map(|w| w.app.as_str()),
+            HandsAction::Press { win, key } => match win {
+                Some(w) => Some(w.app.as_str()),
+                None if key.desktop_only() => Some(control::DESKTOP),
+                None => None,
+            },
             HandsAction::OpenLink { app, .. } => Some(app),
+            HandsAction::Desktop(d) => d.app(),
             _ => None,
         }
     }
@@ -409,7 +594,8 @@ impl HandsAction {
             | HandsAction::SetText { .. }
             | HandsAction::Scroll { .. }
             | HandsAction::OpenLink { .. } => true,
-            HandsAction::Press { win, .. } => win.is_some(),
+            HandsAction::Press { win, key } => win.is_some() || key.desktop_only(),
+            HandsAction::Desktop(d) => d.is_control(),
             _ => false,
         }
     }
@@ -437,6 +623,7 @@ impl HandsAction {
                 format!("Media: {}", serde_json::to_value(cmd).unwrap_or_default().as_str().unwrap_or(""))
             }
             HandsAction::OpenLink { uri, .. } => format!("Opening {}", short(uri, 40)),
+            HandsAction::Desktop(d) => d.label(),
         }
     }
 }
@@ -470,6 +657,8 @@ struct Session {
     /// A program that is not in it was started during the task (by Glitch), so
     /// its fresh "Untitled" document is Glitch's own, not the user's work.
     baseline: Option<std::collections::HashSet<(u32, u64)>>,
+    /// Desktop control state of this task (see [`control`]).
+    desk: control::TaskState,
 }
 
 /// The tool layer for app control (cheap to clone; shared session).
@@ -477,6 +666,9 @@ struct Session {
 pub struct Driver {
     hands: Arc<dyn Hands>,
     s: Arc<Mutex<Session>>,
+    /// Desktop control: the switch, the file guard and the undo log (they
+    /// outlive a task).
+    cfg: Arc<Mutex<control::Config>>,
 }
 
 /// A prepared call: what to do, whether to ask, and the retry key.
@@ -487,11 +679,13 @@ pub struct Prepared {
 }
 
 /// What an executed action gives the agent.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Done {
     pub for_model: Value,
     pub summary: String,
     pub ok: bool,
+    /// Pictures for the model (base64 JPEG): the marked screenshot.
+    pub images: Vec<String>,
 }
 
 fn fail(error: impl Into<String>, try_next: &[&str]) -> Value {
@@ -533,7 +727,11 @@ fn seconds_arg(args: &Value) -> Option<f64> {
 
 impl Driver {
     pub fn new(hands: Arc<dyn Hands>) -> Self {
-        Self { hands, s: Arc::new(Mutex::new(Session::default())) }
+        Self {
+            hands,
+            s: Arc::new(Mutex::new(Session::default())),
+            cfg: Arc::new(Mutex::new(control::Config::default())),
+        }
     }
 
     pub fn hands(&self) -> &Arc<dyn Hands> {
@@ -548,8 +746,9 @@ impl Driver {
     pub fn new_task(&self, user_text: &str) {
         self.stop();
         let baseline = self.windows().iter().map(|w| (w.pid, w.started)).collect();
+        let desk = control::TaskState::new(self.desktop_enabled() && control::desktop_trigger(user_text));
         let mut s = self.s.lock().unwrap();
-        *s = Session { user_text: user_text.to_string(), baseline: Some(baseline), ..Session::default() };
+        *s = Session { user_text: user_text.to_string(), baseline: Some(baseline), desk, ..Session::default() };
     }
 
     /// The user allowed controlling this app for the current task.
@@ -784,7 +983,9 @@ impl Driver {
                         "error": "that looks like a password, key or card number; Glitch never types secrets. Ask the user to type it." }));
                 }
                 if let Some(why) = safety::no_typing_into(&win.exe, &el.role, &el.name) {
-                    return Err(json!({ "ok": false, "refused": true, "error": why }));
+                    if !self.address_bar_ok(&win, &el, &text) {
+                        return Err(json!({ "ok": false, "refused": true, "error": why }));
+                    }
                 }
                 // A secret split over several calls is still a secret.
                 let typed = format!("{} {text}", self.s.lock().unwrap().typed);
@@ -797,14 +998,24 @@ impl Driver {
             }
             UI_PRESS => {
                 let k = str_arg(args, &["key", "keys"]).ok_or_else(|| fail("missing \"key\"", &[]))?;
-                let key = Key::parse(k)
-                    .ok_or_else(|| fail(format!("\"{k}\" isn't allowed; use one of {}", Key::NAMES.join(", ")), &[]))?;
-                let win = if key.is_media() {
+                let desk = self.desktop_enabled();
+                let key = Key::parse(k).filter(|k| desk || !k.desktop_only()).ok_or_else(|| {
+                    let allowed: Vec<&str> = Key::NAMES
+                        .iter()
+                        .copied()
+                        .take(if desk { Key::NAMES.len() } else { Key::AltTab as usize })
+                        .collect();
+                    fail(format!("\"{k}\" isn't allowed; use one of {}", allowed.join(", ")), &[])
+                })?;
+                let win = if key.is_global() {
                     None
                 } else {
                     let w = self.window_arg(args)?;
                     self.check_window_to_act(&w)?;
-                    if key == Key::CtrlL && safety::is_browser(&w.exe) {
+                    if key == Key::CtrlL
+                        && safety::is_browser(&w.exe)
+                        && !(desk && safety::task_about_url(&self.s.lock().unwrap().user_text))
+                    {
                         return Err(json!({ "ok": false, "refused": true,
                             "error": "Glitch doesn't use the browser's address bar; use open_url to open a web page." }));
                     }
@@ -835,13 +1046,17 @@ impl Driver {
                 let (uri, app) = check_link(uri)?;
                 HandsAction::OpenLink { uri, app }
             }
+            other if control::TOOL_NAMES.contains(&other) => self.prepare_desk(call)?,
             other => return Err(fail(format!("there is no tool called \"{other}\""), &[])),
         };
-        let ask = self.ask_for(&action);
+        let ask = self.review_gate(&action, self.ask_for(&action));
         Ok(Prepared { action, ask })
     }
 
     fn ask_for(&self, a: &HandsAction) -> Ask {
+        if let Some(ask) = self.ask_desk(a) {
+            return ask;
+        }
         let user_text = self.s.lock().unwrap().user_text.clone();
         match a {
             HandsAction::Click { win, el, .. } => {
@@ -907,13 +1122,21 @@ impl Driver {
                     for_model: json!({"ok": false, "stopped": true, "error": "the user took over (Esc or their own mouse/keyboard). Stop now."}),
                     summary: "Stopped: you took over".into(),
                     ok: false,
+                    ..Default::default()
                 };
             }
             // What was approved must still be what we act on: same window,
             // same process, not elevated, same element, not a password box.
             let fresh = match self.recheck(a) {
                 Ok(a) => a,
-                Err(v) => return Done { for_model: v, summary: "Stopped: the target changed".into(), ok: false },
+                Err(v) => {
+                    return Done {
+                        for_model: v,
+                        summary: "Stopped: the target changed".into(),
+                        ok: false,
+                        ..Default::default()
+                    }
+                }
             };
             if let HandsAction::SetText { text, .. } = &fresh {
                 let mut s = self.s.lock().unwrap();
@@ -964,12 +1187,15 @@ impl Driver {
                 let win = same(&win)?;
                 let el = same_el(&win, &el)?;
                 if let Some(why) = safety::no_typing_into(&win.exe, &el.role, &el.name) {
-                    return Err(json!({"ok": false, "refused": true, "error": why}));
+                    if !self.address_bar_ok(&win, &el, &text) {
+                        return Err(json!({"ok": false, "refused": true, "error": why}));
+                    }
                 }
                 HandsAction::SetText { win, el, id, text, replace }
             }
             HandsAction::Press { win: Some(win), key } => HandsAction::Press { win: Some(same(&win)?), key },
             HandsAction::Scroll { win, el, down } => HandsAction::Scroll { win: same(&win)?, el, down },
+            HandsAction::Desktop(d) => HandsAction::Desktop(self.recheck_desk(d)?),
             other => other,
         })
     }
@@ -978,7 +1204,10 @@ impl Driver {
         let (for_model, summary) = self.run(a);
         let ok = for_model.get("ok").and_then(Value::as_bool).unwrap_or(true);
         let mut for_model = for_model;
-        if !ok && for_model.get("refused").is_none() {
+        // A click that changed nothing counts like a failure: the model is
+        // told honestly, and the same click is given up after 3 tries.
+        let no_effect = ok && for_model.get("no_effect").and_then(Value::as_bool) == Some(true);
+        if (!ok && for_model.get("refused").is_none()) || no_effect {
             let n = {
                 let mut s = self.s.lock().unwrap();
                 let n = s.failures.entry(call_key.to_string()).or_insert(0);
@@ -991,15 +1220,26 @@ impl Driver {
                     json!("this step failed 3 times. Don't try it again: tell the user what worked and what didn't.");
             }
         }
-        Done { for_model, summary, ok }
+        let images = {
+            let mut s = self.s.lock().unwrap();
+            if a.is_control() && ok {
+                s.desk.steps_done += 1;
+            }
+            std::mem::take(&mut s.desk.images)
+        };
+        Done { for_model, summary, ok, images }
     }
 
     fn run(&self, a: &HandsAction) -> (Value, String) {
         match a {
-            HandsAction::Plan { steps } => (
-                json!({"ok": true, "plan": steps, "next": "Now do step 1 with one tool call."}),
-                format!("Planned {} steps", steps.len()),
-            ),
+            HandsAction::Desktop(d) => self.run_desk(d),
+            HandsAction::Plan { steps } => {
+                self.s.lock().unwrap().desk.plan_len = steps.len();
+                (
+                    json!({"ok": true, "plan": steps, "next": "Now do step 1 with one tool call."}),
+                    format!("Planned {} steps", steps.len()),
+                )
+            }
             HandsAction::WaitFor { target, timeout } => self.wait_for(target, *timeout),
             HandsAction::Focus { win } => match self.hands.focus(win) {
                 Ok(w) => {
@@ -1081,6 +1321,7 @@ impl Driver {
                     Err(e) => return (fail(e, &["focus_window"]), "Couldn't bring the window to the front".into()),
                 };
                 let before = self.sig_of(&win);
+                self.remember_geometry_for_key(&win, *key);
                 match self.hands.press(Some(&win), *key) {
                     Ok(()) => {
                         let mut v = json!({"ok": true, "did": format!("pressed {} in {}", key.label(), win.app)});
@@ -1348,6 +1589,7 @@ pub fn retry_key(call: &ToolCall) -> String {
     match call.name.as_str() {
         UI_CLICK | UI_SET_TEXT => format!("{} {}", call.name, id_arg(a).unwrap_or(0)),
         UI_PRESS => format!("{} {} {}", call.name, pick("key"), pick("target")),
+        n if control::TOOL_NAMES.contains(&n) => control::retry_key(call),
         _ => format!("{} {}", call.name, pick("target")),
     }
 }

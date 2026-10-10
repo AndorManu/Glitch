@@ -50,7 +50,7 @@ pub fn prepare(capture: Capture) -> Result<Prepared, String> {
 }
 
 /// Paint over every rectangle (clipped to the image). Returns how many were covered.
-fn cover(img: &mut RgbaImage, rects: &[PixelRect]) -> usize {
+pub(crate) fn cover(img: &mut RgbaImage, rects: &[PixelRect]) -> usize {
     let (iw, ih) = img.dimensions();
     let mut n = 0;
     for r in rects {
