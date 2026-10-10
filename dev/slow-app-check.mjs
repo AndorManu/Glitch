@@ -133,6 +133,7 @@ async function ask(bubble, text, decide, tag) {
     if (started && !busy && !card && bt && seen.cards.length >= 0 && (await bubble.$(".balloon")) && !(await bubble.$(".choices"))) {
       // A finished answer (typed out): give the typewriter a moment.
       await sleep(2500);
+      if (await bubble.$(".choices")) continue; // it was a card after all
       seen.reply = await balloonText(bubble);
       seen.chips = await chips(bubble);
       await bubble.screenshot({ path: join(OUT, `${tag}-4-reply.png`), omitBackground: true });

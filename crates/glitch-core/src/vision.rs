@@ -138,8 +138,12 @@ pub fn mostly_blank(capture: &Capture) -> bool {
     }
     let mut bins = std::collections::HashMap::<u16, u32>::new();
     let mut total = 0u32;
-    for y in (0..h).step_by(STEP) {
-        for x in (0..w).step_by(STEP) {
+    // The inside of the window: a title bar, frame or menu bar around an
+    // empty surface must not count as content.
+    let (x0, x1) = (w / 16, w - w / 16);
+    let (y0, y1) = ((h / 8).min(64), h - h / 16);
+    for y in (y0..y1).step_by(STEP) {
+        for x in (x0..x1).step_by(STEP) {
             let i = (y * w + x) * 4;
             let key = ((capture.rgba[i] >> 4) as u16) << 8
                 | ((capture.rgba[i + 1] >> 4) as u16) << 4
@@ -164,6 +168,19 @@ mod blank_tests {
     fn a_flat_picture_is_blank() {
         assert!(mostly_blank(&flat(255)));
         assert!(mostly_blank(&flat(10)));
+    }
+
+    #[test]
+    fn an_empty_window_with_a_title_bar_is_blank() {
+        let mut c = flat(255);
+        // A dark caption bar across the top 12 px.
+        for y in 0..12 {
+            for x in 0..200 {
+                let i = (y * 200 + x) * 4;
+                c.rgba[i..i + 3].copy_from_slice(&[40, 40, 60]);
+            }
+        }
+        assert!(mostly_blank(&c));
     }
 
     #[test]
