@@ -69,14 +69,9 @@ proc.stderr.on("data", (d) => (log += d));
 // Desktop frames: only the stand-in's region and the banner above it.
 const grabber = spawn("python", ["dev/hands-frames.py", "grab", FRAMES, String(NP.x - 40), "0", String(NP.w + 80), String(NP.y + NP.h + 30)], { stdio: "ignore" });
 
-/** The stand-in's text, read with UI Automation from PowerShell. */
+/** The stand-in's text (WM_GETTEXT on its Edit control, see dev/hands-edit-text.ps1). */
 function notepadText() {
-  const ps = `Add-Type -AssemblyName UIAutomationClient; Add-Type -AssemblyName UIAutomationTypes;
-    $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, ${np.pid});
-    $w = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children, $c);
-    $e = $w.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Edit)));
-    $e.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value`;
-  const r = spawnSync("powershell", ["-NoProfile", "-Command", ps], { encoding: "utf8", timeout: 20000 });
+  const r = spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "dev/hands-edit-text.ps1", "-ProcessId", String(np.pid)], { encoding: "utf8", timeout: 20000 });
   return (r.stdout ?? "").trim();
 }
 
@@ -108,7 +103,7 @@ try {
     }
   }
   const mascot = await page("mascot");
-  await invoke(mascot, "show_bubble");
+  await invoke(mascot, "mascot_clicked");
   const bubble = await page("bubble");
   await bubble.waitForSelector("textarea.input", { timeout: 20000 });
   await sleep(800);

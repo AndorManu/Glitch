@@ -1060,12 +1060,10 @@ impl Agent {
                             };
                             let p = match &task_app {
                                 Some(name) => {
-                                    let d = action.describe();
                                     let card = tools::Description {
                                         title: format!("Open \u{201c}{name}\u{201d} and control it for this"),
                                         detail: format!(
-                                            "{}\nThen I click and type in {name} until this is done. Press Esc or touch your mouse to stop me.",
-                                            d.detail
+                                            "I'll click and type in {name} until this is done. A banner shows while I work; press Esc or touch your mouse to stop me."
                                         ),
                                     };
                                     self.gate.request_described(action, card)
