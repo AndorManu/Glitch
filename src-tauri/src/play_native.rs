@@ -54,6 +54,7 @@ mod imp {
 }
 
 #[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
 mod imp {
     pub fn make_tool_window(_hwnd: isize) {}
     pub fn hide_from_switcher(_hwnd: isize) {}

@@ -255,6 +255,7 @@ pub fn start(app: &AppHandle) {
     let app = app.clone();
     let spawned = std::thread::Builder::new().name("glitch-context".into()).spawn(move || {
         native::init_thread();
+        #[allow(clippy::default_constructed_unit_structs)]
         let mut cpu = native::CpuMeter::default();
         // Let the mascot settle first.
         std::thread::sleep(Duration::from_secs(6));

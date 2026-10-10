@@ -17,6 +17,7 @@ use glitch_core::world::ScreenRect;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[derive(Debug, Clone, Serialize)]
 pub struct LedgeEvent {
     pub id: u64,
@@ -35,6 +36,7 @@ pub struct WatchInfo {
     pub frame: Option<ScreenRect>,
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn emit(app: &AppHandle, e: LedgeEvent) {
     let _ = app.emit_to(crate::windows::MASCOT, "ledge-event", e);
 }

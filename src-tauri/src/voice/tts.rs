@@ -329,6 +329,7 @@ fn play(app: &AppHandle, pb: &Arc<Playback>, mut stdout: std::process::ChildStdo
         }
         std::thread::sleep(Duration::from_millis(30));
     }
+    #[allow(clippy::drop_non_drop)]
     drop(out);
     finish(app, pb);
 }
