@@ -12,8 +12,7 @@ import { mulberry32 } from "../src/mascot/glitchfx";
 import type { Vec } from "../src/mascot/physics";
 import { type BodyRect, Renderer } from "../src/mascot/render";
 import type { Ledge, WorldSnapshot } from "../src/shared/ipc";
-import { loadSprites } from "../src/sprites/load";
-import { RACCOON } from "../src/sprites/raccoon";
+import { loadGlitchSprites } from "../src/sprites/glitch-sprites";
 
 const q = new URLSearchParams(location.search);
 const DEBUG = q.get("debug") === "1";
@@ -83,11 +82,19 @@ const host: Host = {
     winPos = { x, y };
     counts.moves.push(performance.now());
   },
-  world: async (): Promise<WorldSnapshot> => ({ area, scale: 1, ledges: ledges() }),
+  world: async (): Promise<WorldSnapshot> => ({ area, scale: 1, ledges: ledges(), frames: apps.filter((w) => !w.closed).map(({ id, x, y, w, h }) => ({ id, x, y, w, h })) }),
+  // No OS events here: the creature polls the window under him at 30 Hz.
+  watchLedge: async (id) => ({ events: false, frame: id === null ? null : frameOf(id) }),
+  ledgeFrame: async (id) => frameOf(id),
   cursor: () => ({ ...mouse }),
   setHitbox: (r) => (hitbox = r),
   clicked: () => note("click -> mascot_clicked"),
 };
+
+function frameOf(id: number): { x: number; y: number; w: number; h: number } | null {
+  const a = apps.find((w) => w.id === id && !w.closed);
+  return a ? { x: a.x, y: a.y, w: a.w, h: a.h } : null;
+}
 
 function note(s: string): void {
   log.push(`${(performance.now() / 1000).toFixed(1)} ${s}`);
@@ -295,7 +302,7 @@ function frame(): void {
 }
 
 async function main(): Promise<void> {
-  const sprites = await loadSprites(RACCOON);
+  const sprites = await loadGlitchSprites(DPR);
   renderer = new Renderer(mascotCanvas, sprites, { pixelRatio: () => DPR });
   const render = renderer.render.bind(renderer);
   renderer.render = (pose, tick) => {
@@ -315,12 +322,25 @@ async function main(): Promise<void> {
     mood: (m: string) => creature.setMood(m),
     panel: (open: boolean) => creature.setPanelOpen(open),
     movement: (on: boolean) => creature.setMovement(on),
-    moveWin: (id: number, dx: number, dy: number) => {
+    /** Move a window by (dx, dy): at once, or dragged smoothly over `ms` (like a user would). */
+    moveWin: (id: number, dx: number, dy: number, ms = 0) => {
       const a = apps.find((w) => w.id === id);
-      if (a) {
+      if (!a) return;
+      if (ms <= 0) {
         a.x += dx;
         a.y += dy;
+        return;
       }
+      const x0 = a.x;
+      const y0 = a.y;
+      const t0 = performance.now();
+      const step = () => {
+        const t = Math.min(1, (performance.now() - t0) / ms);
+        a.x = Math.round(x0 + dx * t);
+        a.y = Math.round(y0 + dy * t);
+        if (t < 1) setTimeout(step, 16);
+      };
+      step();
     },
     closeWin: (id: number) => {
       const a = apps.find((w) => w.id === id);

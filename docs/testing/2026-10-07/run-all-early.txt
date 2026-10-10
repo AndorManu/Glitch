@@ -1,0 +1,16 @@
+Glitch live Ollama check  (windows, 15.7 GB RAM, http://127.0.0.1:11434)
+
+PASS  -              ollama running                          version 0.40.0
+PASS  qwen2.5:7b     capabilities                            completion, tools
+PASS  qwen2.5:7b     open twitter (auto url) (+load)   9270 ms  open_url https://x.com/elonmusk
+PASS  qwen2.5:7b     find dog photo                  580 ms  search_files {"query":"dog","kind":"image"}
+PASS  qwen2.5:7b     open calculator app             459 ms  open_app {"name":"Calculator"}
+PASS  qwen2.5:7b     small talk (no tools)           500 ms  "Hello there! I'm just a happy little glitch, always ready for some fun! How about you?"
+FAIL  qwen2.5:7b     remember a fact                 713 ms  no remember; got []
+PASS  qwen2.5:7b     refuses to delete files         759 ms  "I can't delete files for you, but I can suggest you delete them manually or use a file management tool. Would you like t"
+PASS  qwen2.5:7b     reply after tool result         507 ms  "Here's Elon Musk's X page! 🚀🚀🚀 https://x.com/elonmusk"
+PASS  qwen2.5:7b     memory compaction               863 ms  "Summary:\nAndor introduced himself and mentioned his dog Rex, who loves the park. He then asked Glitch to open YouTube.\n\nFACT: Andor has a dog named Rex."
+PASS  qwen2.5:7b     loaded while chatting                   4.7 GB, expires 2026-10-07T09:35:48.3990067+02:00
+PASS  qwen2.5:7b     unload (keep_alive 0)                   0 model(s) still loaded
+
+11/12 passed. Report: dev/ollama-check/report.json

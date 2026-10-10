@@ -137,6 +137,14 @@ export class Renderer {
   placement: Placement = { x: VIEW_W / 2, y: FEET_Y, angle: 0 };
   motion: Motion = CALM;
   platform: PlatformFx | null = null;
+  /**
+   * Standing on something: the art's feet are pulled down onto the surface
+   * line (the sheet has a few transparent pixels under the feet), so there
+   * is no gap. `shadow`: also a 1-2 px contact shadow under them (floor,
+   * window tops), so he visibly stands on the edge even when it's dark.
+   */
+  contact = false;
+  shadow = false;
   /** Drawn body's bounding box (window CSS px) at the last render, for the click hitbox. */
   bodyRect: BodyRect | null = null;
   private readonly opaque = new WeakMap<object, [number, number, number, number]>();
@@ -182,7 +190,8 @@ export class Renderer {
     const img = this.sprites.frame(pose.frame);
     const { w, h } = this.artSize(img, dpr);
     const face = this.facingLeft ? -1 : 1;
-    const mir = pose.flip ? -face : face;
+    // Front-facing frames never mirror (the glitch eye stays on its eye); side-on ones turn with him.
+    const mir = this.sprites.mirrorable?.(pose.frame) === false ? 1 : pose.flip ? -face : face;
     // Feet anchor + surface angle + secondary motion: the body's frame (CSS px).
     const base = this.baseMatrix();
     // Then the pose: offset, pivot rotation, mirrored scale. All in CSS px, then x dpr.
@@ -192,14 +201,17 @@ export class Renderer {
     this.bodyRect = this.boundsOf(css, img, w, h);
 
     if (this.platform) this.drawPlatform(this.platform, mul(scale(dpr, dpr), base), rand, dpr);
-    this.drawProps(pose.props, true, dpr, face);
+    if (this.contact && this.shadow && pose.dissolve < 1) this.drawContactShadow(dpr, pose);
+    // Props held by a front-facing frame stay where that frame's paws are.
+    const propFace = this.sprites.mirrorable?.(pose.frame) === false ? 1 : face;
+    this.drawProps(pose.props, true, dpr, propFace);
     if (pose.dissolve < 1) {
       this.drawGhosts(img, m, w, h, dpr);
       if (pose.glitch <= 0 && pose.dissolve <= 0) this.drawSprite(ctx, img, m, w, h);
       else this.drawGlitched(img, m, css, w, h, pose, rand, dpr);
     }
     if (pose.dissolve > 0 && pose.dissolve < 1) this.drawScatter(m, h, pose.dissolve, rand, dpr);
-    this.drawProps(pose.props, false, dpr, face);
+    this.drawProps(pose.props, false, dpr, propFace);
     if (pose.glitch > 0 || pose.fx === "eye") this.drawEyeSparks(img, pose, m, w, h, rand, dpr, mir);
     if (pose.fx) this.drawFx(pose, tick, rand, dpr, face);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -211,7 +223,42 @@ export class Renderer {
     const p = this.placement;
     const mo = this.motion;
     const shear: M = [1, 0, mo.shear, 1, 0, 0];
-    return [translate(p.x, p.y), rotate(p.angle), translate(0, mo.pivotY), shear, scale(mo.sx, mo.sy), translate(0, -mo.pivotY)].reduce(mul);
+    const pad = this.contact ? this.feetPad() : 0;
+    return [translate(p.x, p.y), rotate(p.angle), translate(0, pad), translate(0, mo.pivotY), shear, scale(mo.sx, mo.sy), translate(0, -mo.pivotY)].reduce(mul);
+  }
+
+  /** Transparent CSS px under the feet in the standing frame (same baseline for the whole sheet). */
+  private feetPad(): number {
+    if (this.pad !== null) return this.pad;
+    try {
+      const img = this.sprites.frame("idle0");
+      const { h } = this.artSize(img, this.pixelRatio());
+      const bottom = this.opaqueBox(img)[3];
+      // Never more than a few px: a wrong guess must not sink him into the surface.
+      this.pad = Math.max(0, Math.min(6, (1 - bottom) * h));
+    } catch {
+      this.pad = 0;
+    }
+    return this.pad;
+  }
+  private pad: number | null = null;
+
+  /** A soft 2 px shadow where the feet touch (in the body frame: y = 0 is the surface). */
+  private drawContactShadow(dpr: number, pose: Pose): void {
+    const ctx = this.ctx;
+    const p = this.placement;
+    // Lifted off the surface (hops in a pose): fainter, smaller.
+    const lift = Math.max(0, -pose.dy);
+    const k = Math.max(0, 1 - lift / 30);
+    if (k <= 0) return;
+    ctx.setTransform(...mul(scale(dpr, dpr), [translate(p.x, p.y), rotate(p.angle)].reduce(mul)));
+    const half = 17 * k;
+    ctx.fillStyle = `rgba(20, 8, 32, ${(0.38 * k).toFixed(3)})`;
+    ctx.fillRect(-half, -1, half * 2, 2);
+    ctx.fillStyle = `rgba(20, 8, 32, ${(0.2 * k).toFixed(3)})`;
+    ctx.fillRect(-half - 4, -1, 4, 1);
+    ctx.fillRect(half, -1, 4, 1);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
   }
 
   /** A point in the body's frame (feet origin, +x forward) -> canvas px. */
@@ -272,15 +319,33 @@ export class Renderer {
 
   /** Drawn size in CSS px: the sheet at half size; pixel grids by whole numbers. */
   private artSize(img: FrameImage, dpr: number): { w: number; h: number } {
+    if (this.sprites.scale) {
+      // Fixed on-screen size (crisp whole device px per art px at DPR 2, 4...; nearest-neighbour otherwise).
+      return { w: img.width * this.sprites.scale, h: img.height * this.sprites.scale };
+    }
     if (!this.sprites.pixelated) return { w: ART_W, h: ART_H };
     const s = Math.max(1, Math.floor(Math.min((ART_W * dpr) / img.width, (ART_H * dpr) / img.height)));
     return { w: (img.width * s) / dpr, h: (img.height * s) / dpr };
   }
 
-  private drawSprite(c: CanvasRenderingContext2D, img: CanvasImageSource, m: M, w: number, h: number): void {
-    c.setTransform(...m);
+  private drawSprite(c: CanvasRenderingContext2D, img: FrameImage, m: M, w: number, h: number): void {
     c.imageSmoothingEnabled = !this.sprites.pixelated;
     c.imageSmoothingQuality = "high";
+    // Upright and unscaled (one sheet px = one device px, the display sheets'
+    // design): draw 1:1 at whole device pixels, never resampled.
+    const kx = (m[0] * w) / img.width;
+    const ky = (m[3] * h) / img.height;
+    if (Math.abs(m[1]) < 1e-6 && Math.abs(m[2]) < 1e-6 && Math.abs(Math.abs(kx) - 1) < 1e-3 && Math.abs(ky - 1) < 1e-3) {
+      const x0 = m[4] - (m[0] * w) / 2;
+      const left = Math.round(Math.min(x0, x0 + m[0] * w));
+      const top = Math.round(m[5] - m[3] * h);
+      if (kx < 0) c.setTransform(-1, 0, 0, 1, left + img.width, top);
+      else c.setTransform(1, 0, 0, 1, left, top);
+      c.drawImage(img, 0, 0);
+      c.setTransform(1, 0, 0, 1, 0, 0);
+      return;
+    }
+    c.setTransform(...m);
     c.drawImage(img, -w / 2, -h, w, h);
     c.setTransform(1, 0, 0, 1, 0, 0);
   }
@@ -462,7 +527,8 @@ export class Renderer {
 
   private drawEyeSparks(img: FrameImage, pose: Pose, m: M, w: number, h: number, rand: () => number, dpr: number, mir: number): void {
     const index = RACCOON.frames[pose.frame];
-    const eye = this.sprites.pixelated || index === undefined ? [0.66, 0.5] : [EYE_BY_INDEX[index][0] / img.width, EYE_BY_INDEX[index][1] / img.height];
+    const known = this.sprites.eye?.(pose.frame);
+    const eye = known ?? (this.sprites.pixelated || index === undefined ? [0.66, 0.5] : [EYE_BY_INDEX[index][0] / img.width, EYE_BY_INDEX[index][1] / img.height]);
     const [ex, ey] = apply(m, (eye[0] - 0.5) * w, (eye[1] - 1) * h);
     const n = pose.glitch > 0 ? 2 + Math.round(5 * pose.glitch) : 3;
     const r = (this.placement.angle * Math.PI) / 180;

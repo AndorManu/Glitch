@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BEHAVIOURS, type BehaviourName, Brain, type BrainContext, isBehaviourName, planMoves, type Plan } from "./brain";
+import { BEHAVIOURS, type BehaviourName, Brain, type BrainContext, isBehaviourName, planMoves, type Plan, STILL_LOOK_COOLDOWN_MS } from "./brain";
 import { mulberry32 } from "./glitchfx";
 import { type Body, FLOOR, restCenter, stepAir, type Surface, surfaceRange, type World } from "./physics";
 
@@ -84,9 +84,27 @@ describe("brain", () => {
         const onTop = b.next(ctx({ now: i * 60_000 + 30_000, movement: false, surface: ON_TOP }));
         expect(planMoves(onTop), onTop.name).toBe(false);
       }
-      expect(b.next(ctx({ movement: false, surface: LEFT })).steps).toEqual([{ do: "drop" }]);
+      // Off a wall he climbs down (S1-13: letting go looked like a fall); off the ceiling he drops.
+      const down = b.next(ctx({ movement: false, surface: LEFT }));
+      expect(down.name).toBe("climbDown");
+      expect(down.steps.map((s) => s.do)).toEqual(["walk", "corner"]);
       expect(b.next(ctx({ movement: false, surface: CEILING })).steps).toEqual([{ do: "drop" }]);
       expect(b.next(ctx({ movement: false, surface: PLATFORM })).steps).toEqual([{ do: "unbuild" }]);
+    }
+  });
+
+  it("movement off: a look around at most every STILL_LOOK_COOLDOWN_MS, sitting a while in between (S1-20)", () => {
+    for (let seed = 1; seed <= 10; seed++) {
+      const b = new Brain(mulberry32(seed));
+      const looks: number[] = [];
+      let sits = 0;
+      for (let t = 0; t < 10 * 60_000; t += 15_000) {
+        const p = b.next(ctx({ now: t, movement: false }));
+        if (p.name === "lookAround" && p.steps[0].do === "anim" && p.steps[0].name === "lookAround") looks.push(t);
+        if (p.steps[0].do === "anim" && p.steps[0].name === "sit") sits++;
+      }
+      for (let i = 1; i < looks.length; i++) expect(looks[i] - looks[i - 1]).toBeGreaterThanOrEqual(STILL_LOOK_COOLDOWN_MS);
+      expect(sits).toBeGreaterThan(0);
     }
   });
 
@@ -101,7 +119,7 @@ describe("brain", () => {
     const b = new Brain(mulberry32(8));
     const names = new Set<string>();
     for (let i = 0; i < 50; i++) names.add(b.next(ctx({ now: i * 10_000, surface: LEFT })).name);
-    expect([...names].every((n) => ["climbOn", "climbDown", "drop", "lookBack", "malfunction"].includes(n))).toBe(true);
+    expect([...names].every((n) => ["climbOn", "climbDown", "drop", "lookBack", "malfunction", "copter"].includes(n))).toBe(true);
     expect(b.restMs(ctx({ surface: LEFT }))).toBeLessThan(4000);
     expect(b.restMs(ctx())).toBeGreaterThanOrEqual(5000);
   });

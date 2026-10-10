@@ -36,11 +36,33 @@ pub struct Message {
     /// For `Role::Tool` messages: which tool produced this result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+    /// Base64 JPEG/PNG images for vision models (a screenshot). Never
+    /// serialised: they only live in RAM for the turn that needed them.
+    #[serde(skip)]
+    pub images: Vec<String>,
+    /// Built from something private (the screen, the clipboard): kept in the
+    /// live chat, but never written to disk or folded into memory.
+    #[serde(skip)]
+    pub private: bool,
+    /// Holds (or was written while reading) outside content: anything the
+    /// user did not type (screen, clipboard, selection, window titles, file
+    /// names). It could carry instructions, so while such a message is in the
+    /// chat every side effect waits for the user's OK. Never saved.
+    #[serde(skip)]
+    pub untrusted: bool,
 }
 
 impl Message {
     fn new(role: Role, content: impl Into<String>) -> Self {
-        Self { role, content: content.into(), tool_calls: Vec::new(), tool_name: None }
+        Self {
+            role,
+            content: content.into(),
+            tool_calls: Vec::new(),
+            tool_name: None,
+            images: Vec::new(),
+            private: false,
+            untrusted: false,
+        }
     }
     pub fn system(content: impl Into<String>) -> Self {
         Self::new(Role::System, content)
@@ -63,6 +85,9 @@ pub struct ToolSpec {
     pub description: &'static str,
     pub parameters: Value,
 }
+
+/// Receives the reply's text piece by piece while it streams in.
+pub type OnText<'a> = dyn Fn(&str) + Send + Sync + 'a;
 
 pub struct ChatRequest<'a> {
     pub model: &'a str,
@@ -94,4 +119,25 @@ pub trait AiProvider: Send + Sync {
     /// Send the conversation and get the assistant's next message
     /// (which may contain tool calls instead of / in addition to text).
     async fn chat(&self, request: ChatRequest<'_>) -> Result<Message, AiError>;
+
+    /// Like [`chat`](Self::chat), but calls `on_text` with each piece of the
+    /// reply's text as it is generated (for showing it while it streams in).
+    /// Providers that can't stream just answer at once.
+    async fn chat_streaming(&self, request: ChatRequest<'_>, on_text: &OnText<'_>) -> Result<Message, AiError> {
+        let _ = on_text;
+        self.chat(request).await
+    }
+
+    /// Can this model look at images? `None` = unknown.
+    async fn supports_vision(&self, model: &str) -> Option<bool> {
+        let _ = model;
+        None
+    }
+
+    /// Load the model now and keep it loaded for `keep_alive` (e.g. "10m"),
+    /// so the next message doesn't wait for it. Best effort.
+    async fn warm_up(&self, model: &str, keep_alive: &str) -> Result<(), AiError> {
+        let _ = (model, keep_alive);
+        Ok(())
+    }
 }

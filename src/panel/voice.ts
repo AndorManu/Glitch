@@ -46,6 +46,10 @@ export async function renderVoice(root: HTMLElement): Promise<void> {
     root.replaceChildren(h("p", { class: "hint" }, `Couldn’t load voice settings: ${asUiError(e).message}`));
     return;
   }
+  if (!st) {
+    root.replaceChildren(h("p", { class: "hint" }, unavailableText(null)));
+    return;
+  }
   rerender = () => void renderVoice(root);
   live = null;
   const update = (patch: Parameters<typeof voiceApi.updateSettings>[0]) =>

@@ -56,8 +56,17 @@ fn is_visible(app: &AppHandle, label: &str) -> bool {
 
 /// Tell the mascot whether any chat UI is open (it stops wandering then).
 /// Event name kept from milestone 1: "panel-visibility" = bubble or panel open.
+/// Is the chat bubble or the settings panel open?
+pub fn chat_open(app: &AppHandle) -> bool {
+    is_visible(app, BUBBLE) || is_visible(app, PANEL)
+}
+
 fn emit_chat_visibility(app: &AppHandle) {
-    let open = is_visible(app, BUBBLE) || is_visible(app, PANEL);
+    let open = chat_open(app);
+    if open {
+        // Chaos stops the moment the chat opens.
+        crate::chaos::stop_all(app);
+    }
     let _ = app.emit("panel-visibility", open);
 }
 
@@ -141,6 +150,17 @@ pub fn place_bubble(app: &AppHandle) -> Option<BubbleLayout> {
 }
 
 pub fn show_bubble(app: &AppHandle) {
+    show_bubble_with(app, true);
+}
+
+/// For things Glitch says by himself ("Claude Code is done", a reminder):
+/// the bubble appears without taking the keyboard away from what the user
+/// is typing in.
+pub fn show_bubble_unfocused(app: &AppHandle) {
+    show_bubble_with(app, false);
+}
+
+fn show_bubble_with(app: &AppHandle, focus: bool) {
     let bubble = match app.get_webview_window(BUBBLE) {
         Some(b) => b,
         None => match create_bubble(app) {
@@ -155,12 +175,17 @@ pub fn show_bubble(app: &AppHandle) {
     let _ = bubble.show();
     // Some window managers ignore positions set before the first show.
     place_bubble(app);
-    let _ = bubble.set_focus();
+    if focus {
+        let _ = bubble.set_focus();
+    }
+    note_bubble_shown();
+    // Also tells a page that is mid close-animation to stop and stay open.
     let _ = bubble.emit("bubble-shown", ());
     emit_chat_visibility(app);
 }
 
 pub fn hide_bubble(app: &AppHandle) {
+    *CLOSE.lock().unwrap() = CloseState::default();
     if let Some(b) = app.get_webview_window(BUBBLE) {
         let _ = b.hide();
         let _ = b.emit("bubble-hidden", ());
@@ -168,8 +193,63 @@ pub fn hide_bubble(app: &AppHandle) {
     emit_chat_visibility(app);
 }
 
+// ------------------------------------------------- bubble close animation
+//
+// The bubble page plays a short close animation before it asks Rust to hide
+// the window. A click on Glitch during that animation must REOPEN the
+// bubble (the user sees it going away), not hide it. So the page calls
+// `bubble_closing` when the animation starts; until the window is really
+// hidden (or shown again) toggling treats it as already hidden. And a
+// late `hide_bubble` from an animation that was interrupted by reopening
+// must not close the freshly reopened bubble.
+
+#[derive(Default)]
+struct CloseState {
+    /// The page started its close animation and hasn't hidden yet.
+    closing: bool,
+    /// The bubble was reopened while closing: the page's pending hide is stale.
+    reopened_while_closing: bool,
+}
+
+static CLOSE: std::sync::Mutex<CloseState> =
+    std::sync::Mutex::new(CloseState { closing: false, reopened_while_closing: false });
+
+/// The page started its close animation.
+pub fn bubble_closing() {
+    let mut s = CLOSE.lock().unwrap();
+    s.closing = true;
+    s.reopened_while_closing = false;
+}
+
+/// `hide_bubble` from the bubble page (end of its close animation, Esc).
+/// Ignored if the bubble was reopened during the animation.
+pub fn hide_bubble_from_page(app: &AppHandle) {
+    let stale = {
+        let mut s = CLOSE.lock().unwrap();
+        let stale = s.reopened_while_closing;
+        *s = CloseState::default();
+        stale
+    };
+    if !stale {
+        hide_bubble(app);
+    }
+}
+
+fn bubble_open_for_toggle(app: &AppHandle) -> bool {
+    is_visible(app, BUBBLE) && !CLOSE.lock().unwrap().closing
+}
+
+/// Reset the close tracking when the bubble is (re)shown.
+fn note_bubble_shown() {
+    let mut s = CLOSE.lock().unwrap();
+    if s.closing {
+        s.closing = false;
+        s.reopened_while_closing = true;
+    }
+}
+
 pub fn toggle_bubble(app: &AppHandle) {
-    if is_visible(app, BUBBLE) {
+    if bubble_open_for_toggle(app) {
         hide_bubble(app);
     } else {
         show_bubble(app);

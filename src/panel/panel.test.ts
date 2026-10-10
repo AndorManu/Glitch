@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { memorySummary } from "./memory";
-import type { SetupStatus } from "../shared/ipc";
+import type { Settings, SetupStatus } from "../shared/ipc";
 import { GLITCH } from "../sprites/glitch";
 import { checkGrid } from "../sprites/load";
 import { squareCrop } from "./avatar";
+import { settingsKey } from "./ui";
 import { chooseLabel, formatGb, modelOptions, ollamaSummary, prettyModelName, progressText, sameModel } from "./setup";
 
 function status(installed: SetupStatus["installed"], model: string | null = null): SetupStatus {
@@ -89,6 +90,22 @@ describe("sprite art", () => {
   it("checkGrid reports typos clearly", () => {
     expect(() => checkGrid({ kind: "grid", palette: {}, frames: { a: ["..", "."] } })).toThrow(/row 1 has 1 pixels/);
     expect(() => checkGrid({ kind: "grid", palette: {}, frames: { a: [".x"] } })).toThrow(/unknown colour "x"/);
+  });
+});
+
+describe("settings redraws", () => {
+  const s = status([]).settings;
+  it("ignores changes the page doesn't draw itself", () => {
+    const memoryOff: Settings = { ...s, memory_enabled: false };
+    const keepLonger: Settings = { ...s, keep_alive: "5m" };
+    expect(settingsKey(memoryOff)).toBe(settingsKey(s));
+    expect(settingsKey(keepLonger)).toBe(settingsKey(s));
+  });
+  it("notices model, movement and onboarding changes", () => {
+    expect(settingsKey({ ...s, model: "qwen3:4b" })).not.toBe(settingsKey(s));
+    expect(settingsKey({ ...s, movement_enabled: false })).not.toBe(settingsKey(s));
+    expect(settingsKey({ ...s, onboarding_done: true })).not.toBe(settingsKey(s));
+    expect(settingsKey({ ...s, screen_enabled: false })).not.toBe(settingsKey(s));
   });
 });
 

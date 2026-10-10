@@ -21,6 +21,14 @@ export interface SheetSpriteSource {
   frameHeight: number;
   /** Frame name -> index in the sheet (0 = top-left). */
   frames: Record<string, number>;
+  /** Hard-edged pixel art: drawn without smoothing. */
+  pixelated?: boolean;
+  /** CSS px per sheet px (default: the 2x sheet drawn at half size). */
+  scale?: number;
+  /** Glitch eye per frame, in sheet px inside the frame (for eye sparks). */
+  eyes?: Record<string, [number, number]>;
+  /** Whether a frame may be mirrored when he faces left (default: all may). */
+  mirrorable?: (name: string) => boolean;
 }
 
 export type SpriteSource = GridSpriteSource | SheetSpriteSource;
@@ -34,5 +42,13 @@ export interface SpriteSet {
   height: number;
   /** True for hard-edged pixel grids (scale by whole numbers, no smoothing). */
   pixelated: boolean;
+  /** CSS px per frame px, if the art has a fixed on-screen size. */
+  scale?: number;
   frame(name: string): FrameImage;
+  /** The glitch eye in frame `name` as fractions of the frame size, if known. */
+  eye?(name: string): [number, number] | null;
+  /** False for frames that must never be mirrored (front-facing: the glitch eye would swap sides). */
+  mirrorable?(name: string): boolean;
+  /** Whether `name` is a real frame (not the fallback). */
+  has?(name: string): boolean;
 }

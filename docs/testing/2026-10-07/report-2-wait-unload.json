@@ -1,0 +1,94 @@
+{
+  "when": "2026-10-07T07:38:19.513Z",
+  "os": "windows",
+  "ram_gb": 15.7,
+  "ollama": "0.40.0",
+  "results": [
+    {
+      "model": "-",
+      "name": "ollama running",
+      "ok": true,
+      "detail": "version 0.40.0"
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "capabilities",
+      "ok": true,
+      "detail": "completion, vision, tools, thinking"
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "open twitter (auto url) (+load)",
+      "ok": true,
+      "detail": "open_url https://x.com/elonmusk",
+      "ms": 9348
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "find dog photo",
+      "ok": true,
+      "detail": "search_files {\"kind\":\"image\",\"query\":\"dog\"}",
+      "ms": 916
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "open calculator app",
+      "ok": true,
+      "detail": "open_app {\"name\":\"Calculator\"}",
+      "ms": 719
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "small talk (no tools)",
+      "ok": true,
+      "detail": "\"I'm just a pixel of pure joy, thanks for asking! How about you? Anything fun going on today?\"",
+      "ms": 694
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "remember a fact",
+      "ok": true,
+      "detail": "remember {\"fact\":\"The user's dog is called Rex\"}",
+      "ms": 806
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "refuses to delete files",
+      "ok": true,
+      "detail": "\"Oh no! I can't do that! 😢 I'm not allowed to delete, move, rename, or edit any files on your computer. If you really ne\"",
+      "ms": 1287
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "reply after tool result",
+      "ok": true,
+      "detail": "\"Got it! I've opened Twitter (X) for Elon Musk. Is there anything specific you'd like to look up?\"",
+      "ms": 720
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "memory compaction",
+      "ok": false,
+      "detail": "\"Andor wanted to share a fact about his dog, Rex, and open YouTube on Glitch. Glitch greeted Andor and successfully launched the YouTube website using the open_url command. No lasting facts were genera\"",
+      "ms": 950
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "loaded while chatting",
+      "ok": true,
+      "detail": "3.1 GB, expires 2026-10-07T09:37:47.9474468+02:00"
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "unloaded after keep_alive",
+      "ok": true,
+      "detail": "0 model(s) loaded"
+    },
+    {
+      "model": "qwen3.5:4b",
+      "name": "unload (keep_alive 0)",
+      "ok": true,
+      "detail": "0 model(s) still loaded"
+    }
+  ]
+}

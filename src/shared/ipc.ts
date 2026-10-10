@@ -5,12 +5,30 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 export interface Settings {
   model: string | null;
   movement_enabled: boolean;
+  /** Chaos mode (window mischief, cursor play, paw prints, notes). Missing from old builds: on. */
+  chaos_enabled?: boolean;
   onboarding_done: boolean;
   ollama_url: string;
   keep_alive: string;
   memory_enabled: boolean;
+  /** "Let Glitch see the screen" (look_at_screen). Missing from old builds: on. */
+  screen_enabled?: boolean;
+  /** Feature "Let Glitch control apps" (click, type, play in other apps). Off by default. */
+  hands_enabled?: boolean;
+  /** "Smarter brain for app control": a bigger model only for app tasks (null: the normal brain). */
+  hands_model?: string | null;
+  /** The user allowed notes once; later notes don't ask. */
+  notes_trusted?: boolean;
   /** Voice commands (see the voice section at the end of this file). */
   voice?: VoiceSettings;
+  /** OBS stream overlay (see the stream section). Missing from old builds: off. */
+  stream_overlay?: StreamSettings;
+  /** Update checks (see the updates section). */
+  auto_update?: UpdateSettings;
+  /** "He reacts to what you're doing" (see ./context.ts). Missing from old builds: defaults. */
+  context?: import("./context").ContextSettings;
+  /** "Update me" features (missing from old builds: defaults). */
+  update_me?: UpdateMeSettings;
 }
 
 export interface MemoryFact {
@@ -58,7 +76,7 @@ export interface SetupStatus {
 
 export type Step =
   | { type: "reply"; text: string; actions: string[] }
-  | { type: "confirm"; id: string; title: string; detail: string; actions: string[] };
+  | { type: "confirm"; id: string; title: string; detail: string; actions: string[]; allow?: string; deny?: string };
 
 export interface UiError {
   code: string;
@@ -71,7 +89,30 @@ export interface PullProgress {
   total: number | null;
 }
 
-export type Mood = "thinking" | "happy" | "asking" | "idle" | "listening";
+/** "looking": Glitch is taking a screenshot right now (mapped by the mascot's animator). */
+export type Mood = "thinking" | "happy" | "asking" | "idle" | "listening" | "talking" | "looking";
+
+/** What `look_at_screen` captured. */
+export type CaptureTarget = "screen" | "window" | "cursor";
+
+/**
+ * Sent as "agent-progress" while Glitch works on a message (see Progress in
+ * crates/glitch-core/src/agent.rs): new model rounds, tool steps, the
+ * "looking at your screen" moment, and the reply text as it streams in.
+ */
+export type AgentProgress =
+  | { kind: "thinking" }
+  | { kind: "step"; id: number; tool: string; label: string }
+  | { kind: "step_done"; id: number; ok: boolean }
+  | { kind: "looking"; active: boolean; target: CaptureTarget }
+  | { kind: "text"; delta: string }
+  /** An app task's plan (2 to 6 short steps). */
+  | { kind: "plan"; steps: string[] };
+
+/** Sent as "reminder" when a timer Glitch set rings. */
+export interface Reminder {
+  message: string;
+}
 
 export type PanelView = "setup" | "settings";
 
@@ -104,6 +145,31 @@ export interface WorldSnapshot {
   scale: number;
   /** Window tops to stand on (empty on Linux or if unavailable). */
   ledges: Ledge[];
+  /** Whole frames of the windows those ledges belong to (missing from older builds / fakes). */
+  frames?: WindowFrame[];
+}
+
+/** Another app's window frame, physical px (`id` matches its ledges). */
+export interface WindowFrame {
+  id: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Sent as "ledge-event" while Glitch stands on another app's window. */
+export interface LedgeEvent {
+  id: number;
+  /** move: it is now at `frame`; grab: the user took hold of it; gone: closed/hidden/minimised; front: another window came to the front. */
+  kind: "move" | "grab" | "gone" | "front";
+  frame: ScreenRect | null;
+}
+
+export interface LedgeWatchInfo {
+  /** true: "ledge-event" events arrive; false: poll ledgeFrame. */
+  events: boolean;
+  frame: ScreenRect | null;
 }
 
 /** Window-local CSS px. */
@@ -128,6 +194,18 @@ export function asUiError(e: unknown): UiError {
   return { code: "unknown", message: String(e) };
 }
 
+/**
+ * Window-to-window event (no Rust involved): the panel's "Clear chat"
+ * finished, so the bubble drops what it was showing.
+ */
+export const CHAT_CLEARED_EVENT = "chat-cleared";
+
+/**
+ * Window-to-window event (no Rust involved): the bubble started showing a
+ * reply of N characters; the mascot moves his mouth for a while (payload: N).
+ */
+export const MASCOT_TALK_EVENT = "mascot-talk";
+
 export const api = {
   setupStatus: () => invoke<SetupStatus>("setup_status"),
   startOllama: () => invoke<void>("start_ollama"),
@@ -140,13 +218,20 @@ export const api = {
   sendMessage: (text: string) => invoke<Step>("send_message", { text }),
   confirmAction: (id: string, approved: boolean) => invoke<Step>("confirm_action", { id, approved }),
   resetChat: () => invoke<void>("reset_chat"),
+  /** The chat is open: load the model and keep it loaded (call again every few minutes). */
+  warmModel: () => invoke<void>("warm_model"),
+  /** The chat closed: back to the short keep-alive. */
+  coolModel: () => invoke<void>("cool_model"),
   getSettings: () => invoke<Settings>("get_settings"),
-  updateSettings: (patch: Partial<Pick<Settings, "model" | "movement_enabled" | "onboarding_done" | "memory_enabled">>) =>
+  updateSettings: (patch: Partial<Pick<Settings, "model" | "movement_enabled" | "chaos_enabled" | "onboarding_done" | "memory_enabled" | "screen_enabled" | "hands_enabled">> & { hands_model?: string }) =>
     invoke<Settings>("update_settings", { patch }),
   /** Click on Glitch: toggles the chat bubble (or opens setup on first run). */
   mascotClicked: () => invoke<void>("mascot_clicked"),
   showBubble: () => invoke<void>("show_bubble"),
   hideBubble: () => invoke<void>("hide_bubble"),
+  /** Call when a close animation starts (before `hideBubble`): a click on
+   *  Glitch meanwhile reopens the bubble, and "bubble-shown" fires. */
+  bubbleClosing: () => invoke<void>("bubble_closing"),
   /** Report the bubble's content height in CSS px; returns where the tail goes. */
   resizeBubble: (height: number) => invoke<BubbleLayout | null>("resize_bubble", { height }),
   /** Open the panel on "setup" or "settings" (default: by setup state). */
@@ -171,6 +256,10 @@ export const api = {
    * Rust emits "mascot-hover" (boolean) when the cursor enters/leaves it.
    */
   setHitbox: (rect: LocalRect | null) => invoke<void>("set_hitbox", { rect }),
+  /** Watch the window Glitch stands on (null: stop). Events arrive as "ledge-event". */
+  ledgeWatch: (id: number | null) => invoke<LedgeWatchInfo>("ledge_watch", { id }),
+  /** Where that window is now (null: gone). For platforms without events. */
+  ledgeFrame: (id: number) => invoke<ScreenRect | null>("ledge_frame", { id }),
 };
 
 // ------------------------------------------------------------------ voice
@@ -257,4 +346,254 @@ export const voiceApi = {
   cancelDownload: () => invoke<void>("voice_cancel_download"),
   deleteModel: (model: string) => invoke<void>("voice_delete_model", { model }),
   openMicSettings: () => invoke<void>("voice_open_mic_settings"),
+};
+
+// ------------------------------------------------------------------ chaos
+// Chaos mode (src-tauri/src/chaos.rs). Everything that touches other apps'
+// windows or the cursor is checked again in Rust: chaos + movement on, chat
+// closed, user not busy, rate limits, travel limits, on-screen clamping.
+
+export type ChaosRefusal = "disabled" | "cooling_down" | "user_active" | "fullscreen" | "not_found" | "ineligible" | "in_use" | "busy";
+
+export interface ChaosStatus {
+  /** Other apps' windows / the cursor can be touched on this OS (Windows). */
+  available: boolean;
+  enabled: boolean;
+  /** Why not right now (null = go ahead). */
+  blocked: ChaosRefusal | null;
+  /** ms since the last keyboard/mouse input (0 if unknown). */
+  idle_ms: number;
+  window_ready: boolean;
+  cursor_ready: boolean;
+}
+
+export interface ChaosWindow {
+  /** Same id as the window's ledges. */
+  id: number;
+  /** Visible frame, physical px. */
+  frame: ScreenRect;
+}
+
+/** Physical screen px; `angle` in degrees. */
+export interface PawStamp {
+  x: number;
+  y: number;
+  angle: number;
+  left: boolean;
+}
+
+export const chaosApi = {
+  status: () => invoke<ChaosStatus>("chaos_status"),
+  /** Windows Glitch may drag right now (empty when not allowed). */
+  windows: () => invoke<ChaosWindow[]>("chaos_windows"),
+  /** Start a grab: resolves to the frame, rejects with a ChaosRefusal. */
+  grabWindow: (id: number) => invoke<ScreenRect>("chaos_grab_window", { id }),
+  /** Move it by (dx, dy) from where it was grabbed: the applied offset, or null = let go. */
+  dragWindow: (dx: number, dy: number) => invoke<[number, number] | null>("chaos_drag_window", { dx, dy }),
+  releaseWindow: () => invoke<void>("chaos_release_window"),
+  grabCursor: () => invoke<[number, number] | null>("chaos_grab_cursor"),
+  /** false = let go (the user pulled, time up). */
+  dragCursor: (x: number, y: number) => invoke<boolean>("chaos_drag_cursor", { x, y }),
+  releaseCursor: () => invoke<void>("chaos_release_cursor"),
+  paws: (paws: PawStamp[]) => invoke<void>("chaos_paws", { paws }),
+  pawsIdle: () => invoke<void>("chaos_paws_idle"),
+  /** Open the sticky note with line `line` at (x, y) physical px: its size in physical px. */
+  noteOpen: (line: number, x: number, y: number) => invoke<{ w: number; h: number } | null>("chaos_note_open", { line, x, y }),
+  noteMove: (x: number, y: number) => invoke<boolean>("chaos_note_move", { x, y }),
+  noteClose: () => invoke<void>("chaos_note_close"),
+  noteIsOpen: () => invoke<boolean>("chaos_note_open_now"),
+};
+
+// ------------------------------------------------------------------ stream
+// The OBS stream overlay (src-tauri/src/stream/). "stream-status" events
+// carry StreamStatus whenever the server or a connection changes.
+
+export interface StreamSettings {
+  enabled: boolean;
+  port: number;
+  /** Secrets: never shown, copied with streamApi.copy. */
+  view_token: string;
+  write_token: string;
+  mode: "mirror" | "walk";
+  size: number;
+  position: "left" | "center" | "right";
+  react: boolean;
+  show_chat: boolean;
+  mirror_chat: boolean;
+  streamerbot: boolean;
+  streamerbot_url: string;
+  twitch_channel: string;
+}
+
+export interface SourceStatus {
+  state: "off" | "connecting" | "connected" | "error";
+  detail: string;
+}
+
+export interface StreamStatus {
+  enabled: boolean;
+  running: boolean;
+  error: string | null;
+  /** OBS browser-source URL (read-only token). Empty while off. */
+  url: string;
+  /** Where bots POST events (the write token goes in a header). */
+  webhook: string;
+  viewers: number;
+  streamerbot: SourceStatus;
+  twitch: SourceStatus;
+  /** The overlay settings, tokens blanked. */
+  settings: StreamSettings;
+}
+
+export type StreamPatch = Partial<Omit<StreamSettings, "view_token" | "write_token">>;
+export type StreamEventKind = "follow" | "sub" | "raid" | "chat";
+
+export const streamApi = {
+  status: () => invoke<StreamStatus>("stream_status"),
+  update: (patch: StreamPatch) => invoke<Settings>("update_stream_settings", { patch }),
+  /** New view and write tokens: the old OBS URL and bot token stop working. */
+  newToken: () => invoke<StreamStatus>("stream_new_token"),
+  test: (kind: StreamEventKind) => invoke<void>("stream_test_event", { kind }),
+  copy: (what: "url" | "write_token") => invoke<void>("stream_copy", { what }),
+};
+
+// ----------------------------------------------------------------- updates
+// Auto-update (src-tauri/src/autoupdate.rs). "update-status" events carry
+// UpdateStatus; "update-available" (UpdateAvailable) asks the bubble to offer it.
+
+export interface UpdateSettings {
+  auto_check: boolean;
+  snoozed_version: string | null;
+  snoozed_at: number;
+}
+
+export interface UpdateAvailable {
+  version: string;
+  notes: string;
+}
+
+export interface UpdateStatus {
+  current: string;
+  auto_check: boolean;
+  checking: boolean;
+  available: UpdateAvailable | null;
+  /** Offer it in the bubble now (not snoozed with "Later"). */
+  offer: boolean;
+  installing: boolean;
+  /** Download percent while installing (null: size unknown). */
+  progress: number | null;
+  /** Unix seconds (0 = never). */
+  last_check: number;
+  error: string | null;
+}
+
+export const updateApi = {
+  status: () => invoke<UpdateStatus>("update_status"),
+  check: () => invoke<UpdateStatus>("update_check"),
+  setAuto: (on: boolean) => invoke<UpdateStatus>("update_set_auto", { on }),
+  later: () => invoke<void>("update_later"),
+  /** Downloads, verifies the signature, installs and restarts Glitch. */
+  install: () => invoke<void>("update_install"),
+};
+
+// -------------------------------------------------------------- update me
+// "Update me" (src-tauri/src/update_me.rs): the local event endpoint, the
+// Claude Code buddy, the notification digest, saved reminders and the daily
+// briefing. The mascot gets "mascot-update" (UpdateAct), the bubble gets
+// "glitch-update" (UpdateSpeech). Outside text is only ever shown.
+
+export interface UpdateLocation {
+  name: string;
+  latitude: number;
+  longitude: number;
+}
+
+export interface UpdateMeSettings {
+  endpoint_enabled: boolean;
+  claude_code_enabled: boolean;
+  notifications_enabled: boolean;
+  notifications_quiet: boolean;
+  notifications_blocklist: string[];
+  reminders_enabled: boolean;
+  briefing_enabled: boolean;
+  location: UpdateLocation | null;
+}
+
+export interface ClaudeCodeStatus {
+  path: string;
+  file_exists: boolean;
+  connected: boolean;
+  outdated: boolean;
+  problem: string | null;
+  /** Exactly what "Connect" adds (pretty JSON). */
+  preview: string;
+  command: string;
+}
+
+export interface DigestGroup {
+  app: string;
+  count: number;
+}
+
+export interface ReminderView {
+  id: number;
+  text: string;
+  /** "today 17:00", "tomorrow 09:00", "Fri 9 Oct 12:00" */
+  when: string;
+}
+
+export type NotificationAccess = "allowed" | "denied" | "unspecified" | "unavailable";
+
+export interface UpdateMeStatus {
+  os: "windows" | "macos" | "linux";
+  settings: UpdateMeSettings;
+  endpoint_port: number | null;
+  endpoint_file: string;
+  claude: ClaudeCodeStatus | null;
+  claude_error: string | null;
+  notifications_access: NotificationAccess;
+  digest: DigestGroup[];
+  reminders: ReminderView[];
+}
+
+export type UpdateMePatch = Partial<Omit<UpdateMeSettings, "location">> & { location?: UpdateLocation; clear_location?: boolean };
+
+export interface UpdateChoice {
+  id: string;
+  label: string;
+}
+
+export type UpdateIcon = "reminder" | "claude" | "event" | "digest" | "briefing";
+
+/** Something Glitch tells the user by himself ("glitch-update"). */
+export interface UpdateSpeech {
+  id: string;
+  text: string;
+  icon: UpdateIcon;
+  choices: UpdateChoice[];
+}
+
+/** The mascot's little act for an update ("mascot-update"). */
+export interface UpdateAct {
+  /** "run", "knock_screen", "hold_sign" (mapped to animations with fallbacks). */
+  steps: string[];
+  sign: string | null;
+  sign_ms: number;
+}
+
+export const updateMeApi = {
+  status: () => invoke<UpdateMeStatus>("update_me_status"),
+  set: (patch: UpdateMePatch) => invoke<UpdateMeStatus>("update_me_set", { patch }),
+  claudeConnect: () => invoke<UpdateMeStatus>("claude_connect"),
+  claudeDisconnect: () => invoke<UpdateMeStatus>("claude_disconnect"),
+  deleteReminder: (id: number) => invoke<UpdateMeStatus>("reminder_delete", { id }),
+  /** An update the bubble may have missed while closed. */
+  pending: () => invoke<UpdateSpeech | null>("update_pending"),
+  seen: (id: string) => invoke<void>("update_seen", { id }),
+  choose: (id: string, choice: string) => invoke<UpdateSpeech | null>("update_choose", { id, choice }),
+  /** The daily briefing, once per day (null otherwise). */
+  briefing: () => invoke<string | null>("briefing_today"),
+  searchLocation: (query: string) => invoke<UpdateLocation[]>("location_search", { query }),
+  /** Sends a test event through the real endpoint. */
+  test: () => invoke<void>("update_me_test"),
 };

@@ -5,11 +5,19 @@
 
 pub mod agent;
 pub mod ai;
+pub mod autoupdate;
+pub mod chaos;
 pub mod confirm;
+pub mod context;
+pub mod desktop;
+pub mod hands;
 pub mod memory;
 pub mod models;
 pub mod platform;
 pub mod settings;
+pub mod stream;
 pub mod tools;
+pub mod update_me;
+pub mod vision;
 pub mod voice;
 pub mod world;

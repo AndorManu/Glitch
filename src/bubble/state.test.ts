@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { WELCOME } from "../shared/chat-text";
-import { canSend, COLLAPSE_AFTER_MS, initialState, pendingConfirm, transition, type BubbleState } from "./state";
+import { CLEARED, WELCOME } from "../shared/chat-text";
+import { applyProgress, canSend, COLLAPSE_AFTER_MS, initialState, NO_WORK, pendingConfirm, transition, type BubbleState } from "./state";
 
 const confirmStep = { type: "confirm" as const, id: "c1", title: "Open the app “Spotify”", detail: "/usr/bin/spotify", actions: [] };
 
@@ -13,6 +13,29 @@ describe("bubble state", () => {
     const s = initialState();
     expect(s.speech).toEqual({ kind: "reply", text: WELCOME, actions: [] });
     expect(s.busy).toBe(false);
+  });
+
+  it("starts fresh after Clear chat, even mid-thought or mid-question", () => {
+    const busy = run(initialState(), { type: "send", text: "hi" });
+    const s = run(busy, { type: "cleared" });
+    expect(s.busy).toBe(false);
+    expect(s.speech).toEqual({ kind: "reply", text: CLEARED, actions: [] });
+    expect(s.rev).toBeGreaterThan(busy.rev);
+    const asking = run(initialState(), { type: "step", step: confirmStep }, { type: "cleared" });
+    expect(pendingConfirm(asking)).toBeNull();
+    expect(canSend(asking, "x")).toBe(true);
+  });
+
+  it("Clear chat keeps a running speech-model download on screen", () => {
+    const downloading = run(
+      initialState(),
+      { type: "voice_setup", model: "base", sizeMb: 142 },
+      { type: "voice_download", state: "running", percent: 40, failed: null, ready: "Ready" },
+      { type: "cleared" },
+    );
+    expect(downloading.speech).toMatchObject({ kind: "voice_setup", progress: 40 });
+    const done = run(downloading, { type: "voice_download", state: "done", percent: 100, failed: null, ready: "Ready" });
+    expect(done.speech).toEqual({ kind: "reply", text: "Ready", actions: [] });
   });
 
   it("sends trimmed text once and thinks", () => {
@@ -80,5 +103,69 @@ describe("bubble state", () => {
     expect(run(initialState(), { type: "step", step: confirmStep }, { type: "seen" }, later).speech?.kind).toBe("confirm");
     // Still thinking: stays.
     expect(run(seen, { type: "send", text: "x" }, later).busy).toBe(true);
+  });
+});
+
+describe("live progress", () => {
+  const reply = (text: string) => ({ type: "step" as const, step: { type: "reply" as const, text, actions: [] } });
+
+  it("lists steps, the looking badge and streamed text while busy", () => {
+    let s = run(initialState(), { type: "send", text: "what's on my screen?" });
+    s = run(
+      s,
+      { type: "progress", p: { kind: "step", id: 1, tool: "look_at_screen", label: "Looking at your screen" } },
+      { type: "progress", p: { kind: "looking", active: true, target: "screen" } },
+    );
+    expect(s.work.looking).toBe("screen");
+    expect(s.work.steps).toEqual([{ id: 1, tool: "look_at_screen", label: "Looking at your screen", state: "running" }]);
+    s = run(
+      s,
+      { type: "progress", p: { kind: "looking", active: false, target: "screen" } },
+      { type: "progress", p: { kind: "step_done", id: 1, ok: true } },
+      { type: "progress", p: { kind: "thinking" } },
+      { type: "progress", p: { kind: "text", delta: "Glitch: A shopping " } },
+      { type: "progress", p: { kind: "text", delta: "list!" } },
+    );
+    expect(s.work).toEqual({
+      looking: null,
+      text: "Glitch: A shopping list!",
+      steps: [{ id: 1, tool: "look_at_screen", label: "Looking at your screen", state: "done" }],
+      plan: [],
+    });
+    // The final reply matches what streamed in: shown at once, not retyped.
+    s = run(s, reply("A shopping list!"));
+    expect(s.speech).toEqual({ kind: "reply", text: "A shopping list!", actions: [], instant: true });
+    expect(s.work).toEqual(NO_WORK);
+  });
+
+  it("shows an app task's plan, and custom button labels", () => {
+    const w = applyProgress(NO_WORK, { kind: "plan", steps: ["Open Spotify", "Find the playlist", "Press Play"] });
+    expect(w.plan).toEqual(["Open Spotify", "Find the playlist", "Press Play"]);
+    const asked = run(initialState(), { type: "send", text: "x" }, { type: "step", step: { ...confirmStep, allow: "Allow once" } });
+    expect(asked.speech).toMatchObject({ kind: "confirm", allow: "Allow once" });
+    expect(pendingConfirm(run(initialState(), { type: "step", step: confirmStep }))).not.toHaveProperty("allow");
+  });
+
+  it("a new model round or step clears half-streamed text", () => {
+    let w = applyProgress(NO_WORK, { kind: "text", delta: "Let me look" });
+    w = applyProgress(w, { kind: "step", id: 2, tool: "calculate", label: "Calculating" });
+    expect(w.text).toBe("");
+    w = applyProgress(applyProgress(w, { kind: "text", delta: "x" }), { kind: "thinking" });
+    expect(w.text).toBe("");
+    expect(applyProgress(w, { kind: "step_done", id: 2, ok: false }).steps[0].state).toBe("failed");
+  });
+
+  it("ignores progress when idle and types replies that didn't stream", () => {
+    const idle = initialState();
+    expect(transition(idle, { type: "progress", p: { kind: "text", delta: "x" } }).state).toBe(idle);
+    const s = run(idle, { type: "send", text: "hi" }, reply("Hey!"));
+    expect(s.speech).toEqual({ kind: "reply", text: "Hey!", actions: [] });
+  });
+
+  it("reminders speak up when Glitch isn't busy", () => {
+    const s = run(initialState(), { type: "reminder", text: "Drink water" });
+    expect(s.speech).toMatchObject({ kind: "reply", text: "⏰ Drink water" });
+    const busy = run(initialState(), { type: "send", text: "hi" });
+    expect(transition(busy, { type: "reminder", text: "x" }).state).toBe(busy);
   });
 });

@@ -13,7 +13,7 @@
 //! * `capture`: microphone (cpal), Windows + macOS
 //! * `session`: one command from mic to text (tested with a fake mic)
 //! * `stt`: whisper model loading/unloading and transcription
-//! * `download`: speech-model download (resume, size + SHA-1 check)
+//! * `download`: speech-model download (resume, size + SHA-256 check)
 //! * `hotkey`: the global push-to-talk shortcut
 //! * `commands`: what the bubble and the settings panel can call
 
@@ -21,6 +21,8 @@ pub mod capture;
 pub mod commands;
 pub mod download;
 pub mod hotkey;
+#[cfg(test)]
+mod live_check;
 pub mod session;
 pub mod stt;
 

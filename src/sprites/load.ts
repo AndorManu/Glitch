@@ -60,12 +60,17 @@ async function fromSheet(src: SheetSpriteSource): Promise<SpriteSet> {
     c.getContext("2d")!.drawImage(img, sx, sy, src.frameWidth, src.frameHeight, 0, 0, src.frameWidth, src.frameHeight);
     cache.set(name, c);
   }
-  return spriteSet(src.frameWidth, src.frameHeight, false, cache);
+  const set = spriteSet(src.frameWidth, src.frameHeight, !!src.pixelated, cache);
+  if (src.scale) set.scale = src.scale;
+  if (src.mirrorable) set.mirrorable = src.mirrorable;
+  const eyes = src.eyes;
+  if (eyes) set.eye = (name) => (eyes[name] ? [eyes[name][0] / src.frameWidth, eyes[name][1] / src.frameHeight] : null);
+  return set;
 }
 
 function spriteSet(width: number, height: number, pixelated: boolean, cache: Map<string, FrameImage>): SpriteSet {
   const fallback = cache.values().next().value!;
-  return { width, height, pixelated, frame: (name) => cache.get(name) ?? fallback };
+  return { width, height, pixelated, frame: (name) => cache.get(name) ?? fallback, has: (name) => cache.has(name) };
 }
 
 export async function loadSprites(src: SpriteSource): Promise<SpriteSet> {
