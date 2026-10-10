@@ -538,6 +538,12 @@ button.danger-text.armed:hover:not(:disabled) { background: var(--danger); }
 .feature-line.ok { color: var(--ok); }
 .feature-line.error { color: var(--danger); }
 .feature-sub { display: block; margin-top: 12px; }
+/* Features > Safety (src/panel/features/safety.ts) */
+.safety-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.safety-row .text-input { flex: 1; min-width: 0; }
+.safety-row button { flex: none; }
+.safety-feature .voice-field .safety-row { margin-top: 0; }
+.safety-feature { padding-bottom: 14px; margin-bottom: 14px; border-bottom: 2px dashed var(--line-soft); }
 .feature-tests { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .feature-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .feature-more { margin-top: 12px; }

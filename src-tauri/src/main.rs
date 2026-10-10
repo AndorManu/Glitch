@@ -25,6 +25,8 @@ mod os;
 mod pause;
 mod state;
 mod stream;
+#[cfg(all(test, target_os = "windows"))]
+mod unsaved_live;
 mod update_me;
 mod voice;
 mod windows;

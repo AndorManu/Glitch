@@ -152,26 +152,29 @@ async function render(root: HTMLElement): Promise<void> {
 
   clear(
     root,
-    h("p", { class: "voice-label feature-sub" }, "Panic button"),
+    h("h4", { class: "fx-title" }, "Panic button"),
     h("p", { class: "hint" }, PAUSE_HINT),
-    h("div", { class: "row" }, pauseNow, h("span", { class: "spacer" })),
+    h("div", { class: "safety-row" }, pauseNow),
     line(
       st.paused
         ? { text: "Paused: Glitch is hidden and everything is off.", tone: "error" }
         : { text: "Glitch is active.", tone: "muted" },
     ),
-    h("label", { class: "voice-field" }, h("span", { class: "voice-label" }, "Panic shortcut"), input),
-    h("div", { class: "row" }, reset, h("span", { class: "spacer" })),
+    h("label", { class: "voice-field" }, h("span", { class: "voice-label" }, "Panic shortcut"), h("span", { class: "safety-row" }, input, reset)),
     line(hotkeyLine(st.hotkey)),
     note,
-    toggleSwitch("Start with Windows", AUTOSTART_HINT, st.start_with_windows, (on) => {
-      note.hidden = true;
-      void safetyApi.setAutostart(on).then(redraw, (err) => {
-        fail(err);
-        redraw();
-      });
-    }),
-    line(autostartLine(st)),
+    h(
+      "section",
+      { class: "fx-block" },
+      toggleSwitch("Start with Windows", AUTOSTART_HINT, st.start_with_windows, (on) => {
+        note.hidden = true;
+        void safetyApi.setAutostart(on).then(redraw, (err) => {
+          fail(err);
+          redraw();
+        });
+      }),
+      line(autostartLine(st)),
+    ),
   );
   // Not switchable where it isn't implemented.
   if (!st.autostart_supported) root.querySelector<HTMLInputElement>('input[role="switch"]')?.setAttribute("disabled", "");
