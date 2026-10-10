@@ -131,6 +131,8 @@ export type AgentProgress =
 /** Sent as "reminder" when a timer Glitch set rings. */
 export interface Reminder {
   message: string;
+  /** A passing remark (a context nudge, not a timer): the bubble hides by itself if nobody answers. */
+  ambient?: boolean;
 }
 
 export type PanelView = "setup" | "settings";

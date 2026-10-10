@@ -52,7 +52,8 @@ for (const [alias, target] of Object.entries(ALIASES)) {
   // A drawn cycle frame of the same name (e.g. sleep0, think1) wins over the alias.
   if (alias in ANIM_INDEX || !(target in ANIM_INDEX)) continue;
   frames[alias] = ANIM_INDEX[target];
-  eyes[alias] = ANIM_EYES[target];
+  // Back views (turn_to_back3-5...) have no glitch eye: the alias gets none either.
+  if (ANIM_EYES[target]) eyes[alias] = ANIM_EYES[target];
 }
 
 /** The art-grid sheet (1 px per art px): frame names and eye positions in art px. */

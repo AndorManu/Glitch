@@ -374,10 +374,14 @@ def _dilate(m: np.ndarray, r: int) -> np.ndarray:
     return out
 
 
+def _erode(m: np.ndarray, r: int) -> np.ndarray:
+    return ~_dilate(~m, r)
+
+
 OUTLINE_RGB = np.array([12, 10, 24], np.uint8)
 
 
-def clean_cursor(frames: list[np.ndarray]) -> tuple[list[np.ndarray], list[list[int]]]:
+def clean_cursor(frames: list[np.ndarray], mode: str = "grip") -> tuple[list[np.ndarray], list[list[int]]]:
     """cling_cursor is drawn holding a big white cursor arrow (tip up, shaft
     down to his paws). The app shows the real cursor instead, so the drawn
     arrow goes: its white body is the largest near-white component; it and
@@ -398,10 +402,19 @@ def clean_cursor(frames: list[np.ndarray]) -> tuple[list[np.ndarray], list[list[
             out.append(a)
             grips.append([a.shape[1] // 2, 30])
             continue
-        arrow = comps[0]
+        arrow = comps[0].copy()
+        # The arrow can come out in pieces where his paws cover it (not the eye highlights: those are tiny).
+        for c in comps[1:]:
+            if c.sum() >= 8 and (_dilate(c, 6) & comps[0]).any():
+                arrow |= c
         ys, xs = np.where(arrow)
-        gy = int(ys.max())
-        gx = int(round(xs[ys == gy].mean()))
+        if mode == "bite":
+            # The arrow points up-left into his mouth: its tip is the anchor.
+            k = int(np.argmin(xs + ys))
+            gx, gy = int(xs[k]), int(ys[k])
+        else:
+            gy = int(ys.max())
+            gx = int(round(xs[ys == gy].mean()))
         R = _dilate(arrow, 2) & op
         body = _components(op & ~R)
         B = body[0] if body else np.zeros_like(op)
@@ -412,11 +425,15 @@ def clean_cursor(frames: list[np.ndarray]) -> tuple[list[np.ndarray], list[list[
             right = B[y, x + 1 : min(w, x + 5)].any()
             below = B[y + 1 : min(h, y + 4), x].any()
             inside[y, x] = left and right and below
+        if mode == "bite":
+            # The arrow lies across his chest and paws: whatever the body closes round
+            # (a closing of his silhouette, ~16 px gaps) is him, not background.
+            inside |= R & _erode(_dilate(B, 8), 8)
         a[R & ~inside] = 0
         # Repaint the inside from neighbouring non-arrow pixels, fur first.
         todo = inside.copy()
         known = (a[:, :, 3] > 0) & ~inside
-        for _ in range(12):
+        for _ in range(24):
             if not todo.any():
                 break
             nxt = a.copy()
@@ -448,6 +465,10 @@ def clean_cursor(frames: list[np.ndarray]) -> tuple[list[np.ndarray], list[list[
                 a[c] = 0
         out.append(a)
         grips.append([gx, gy])
+    if mode == "bite":
+        # Biting: frames stay as drawn (he lunges); the mouth point per frame is the anchor.
+        _review(frames, out, grips, "bite-clean.png")
+        return out, grips
     # Same grip point in every frame: he hangs steadily from the cursor tip.
     tx = int(round(np.median([g[0] for g in grips])))
     ty = min(g[1] for g in grips)  # shift up only: nothing is cut off at the bottom
@@ -466,18 +487,82 @@ def clean_cursor(frames: list[np.ndarray]) -> tuple[list[np.ndarray], list[list[
             b[dy:] = 0
         steady.append(b)
         g[0], g[1] = tx, ty
-    # Before / after, for review.
+    _review(frames, steady, grips, "cling-clean.png")
+    return steady, grips
+
+
+def tail_sets(frames: list[np.ndarray], sets: dict, report: dict) -> None:
+    """The moving tail of a loop on other drawn bodies (art/frames files): one
+    derived sheet per body, so blinks, breaths and ear flicks keep the tail
+    going. `sets` = {sheet name: {"body": frame file stem, "rects": ..., "drop": ...}}."""
+    for name, c in sets.items():
+        body = np.array(Image.open(OUT / f"{c['body']}.png").convert("RGBA"))
+        out = tail_composite([body, *frames], {**c, "base": 0, "drop": [0, *[d + 1 for d in c.get("drop", ())]]})
+        for i, f in enumerate(out):
+            Image.fromarray(f, "RGBA").save(OUT / f"{name}-{i}.png")
+        contact(out, DEV / f"slices-{name}.png")
+        report[name] = {"frames": len(out), "body": c["body"]}
+        print(name, json.dumps(report[name]))
+
+
+def tail_composite(frames: list[np.ndarray], cfg: dict) -> list[np.ndarray]:
+    """A stable body with only the tail moving.
+
+    The generated idle loops redraw the whole character every frame, so the
+    body jitters. Keep the body of frame `base` and take only the tail region
+    (`rects`, canvas art px [x0, y0, x1, y1]) from each frame, aligned to the
+    base body by the best whole-pixel shift. The tail goes behind the body:
+    pasted only where the base body is not. Frames in `drop` are left out.
+    """
+    if cfg.get("body"):
+        # The body from another drawn frame (art/frames/<body>.png), the tail from every frame here.
+        body_img = np.array(Image.open(OUT / f"{cfg['body']}.png").convert("RGBA"))
+        return tail_composite([body_img, *frames], {"rects": cfg["rects"], "base": 0, "drop": [0, *[d + 1 for d in cfg.get("drop", ())]]})
+    base = frames[cfg.get("base", 0)]
+    H, W = base.shape[:2]
+    R = np.zeros((H, W), bool)
+    for x0, y0, x1, y1 in cfg["rects"]:
+        R[y0:y1, x0:x1] = True
+    body = (base[:, :, 3] > 0) & ~R
+    out = []
+    for i, f in enumerate(frames):
+        if i in cfg.get("drop", ()):
+            continue
+        best, bs = (0, 0), -1.0
+        for dy in range(-4, 5):
+            for dx in range(-4, 5):
+                g = np.roll(np.roll(f, dy, 0), dx, 1)
+                m = (g[:, :, 3] > 0) & ~R
+                iou = (m & body).sum() / max(1, (m | body).sum())
+                if iou > bs:
+                    best, bs = (dx, dy), iou
+        g = np.roll(np.roll(f, best[1], 0), best[0], 1)
+        t = (g[:, :, 3] > 0) & R
+        # Only the tail itself (and glitch bits): big pieces, not slivers of its body.
+        keep = np.zeros_like(t)
+        for comp in _components(t):
+            if comp.sum() >= 24:
+                keep |= comp
+        o = base.copy()
+        o[R & ~body] = 0
+        paste = keep & ~body
+        o[paste] = g[paste]
+        out.append(o)
+    return out
+
+
+def _review(before, after, points, file):
+    """Before / after strip with the anchor point marked (red square)."""
     z = 3
-    H, W = frames[0].shape[:2]
-    sheet = Image.new("RGBA", (W * z * len(frames), H * z * 2), (46, 107, 88, 255))
-    for i, (bf, af) in enumerate(zip(frames, steady)):
+    H, W = before[0].shape[:2]
+    sheet = Image.new("RGBA", (W * z * len(before), H * z * 2), (46, 107, 88, 255))
+    d = ImageDraw.Draw(sheet)
+    for i, (bf, af, (px_, py_)) in enumerate(zip(before, after, points)):
         for row, im in enumerate((bf, af)):
             sheet.alpha_composite(Image.fromarray(im, "RGBA").resize((W * z, H * z), Image.NEAREST), (i * W * z, row * H * z))
-        d = ImageDraw.Draw(sheet)
-        d.rectangle([i * W * z + tx * z, H * z + ty * z, i * W * z + tx * z + z - 1, H * z + ty * z + z - 1], outline=(255, 60, 60, 255))
+        d.rectangle([i * W * z + px_ * z - 1, H * z + py_ * z - 1, i * W * z + px_ * z + z, H * z + py_ * z + z], outline=(255, 40, 40, 255))
     DEV.mkdir(parents=True, exist_ok=True)
-    sheet.save(DEV / "cling-clean.png")
-    return steady, grips
+    sheet.save(DEV / file)
 
 
 #: Rod tip and a point on the rod near his paw (art px in the final canvas, read off
@@ -685,6 +770,9 @@ def process(name: str, cfg: dict, report: dict) -> list[np.ndarray]:
         # (its centre is the turn's pivot), keeping the first frame where body_x put it.
         heads = [head_x(f) for f in frames]
         anchors = [anchors[0] + (hx - heads[0]) for hx in heads]
+    # Single frames nudged sideways (px, + = right) where the drawing runs off the canvas.
+    for i, dx in cfg.get("frame_shift", {}).items():
+        anchors[i] -= dx
     placed = [place(f, ax) for f, ax in zip(frames, anchors)]
     if cfg.get("rod"):
         tips = [t for t, _ in RODS[name]]
@@ -692,12 +780,16 @@ def process(name: str, cfg: dict, report: dict) -> list[np.ndarray]:
         OUT.mkdir(parents=True, exist_ok=True)
         (OUT / f"{name}-rods.json").write_text(json.dumps(tips))
     if cfg.get("cursor_clean"):
-        placed, grips = clean_cursor(placed)
+        placed, grips = clean_cursor(placed, cfg["cursor_clean"] if isinstance(cfg["cursor_clean"], str) else "grip")
         OUT.mkdir(parents=True, exist_ok=True)
         (OUT / f"{name}-grips.json").write_text(json.dumps(grips))
     clipped = [i for i, (f, p) in enumerate(zip(frames, placed)) if (p[:, :, 3] > 0).sum() < (f[:, :, 3] > 0).sum()]
     if clipped:
         print(f"  WARNING {name}: frames {clipped} clipped by the canvas")
+    if cfg.get("tail_sets"):
+        tail_sets(placed, cfg["tail_sets"], report)
+    if cfg.get("tail_composite"):
+        placed = tail_composite(placed, cfg["tail_composite"])
     report[name] = {
         "frames": len(placed),
         "block_px": round(pitch, 2),
@@ -754,6 +846,8 @@ for _name in ["struggle", "cling_cursor", "annoyed", "bite_cursor"]:
 # These are drawn bigger: cell set so the head is as big as in idle0 (measured in the lineup).
 for _name, _cell in {"struggle": 4.7, "bite_cursor": 4.6, "cling_cursor": 5.2, "annoyed": 3.8, "fall_flail": 5.7, "hang_ledge": 5.3, "glide": 4.9, "slide_down": 4.9, "sit_edge_swing": 4.75, "wall_jump": 4.9, "pull_up": 4.2}.items():
     SHEETS[_name]["cell"] = _cell
+# wall_jump4's long tail ran off the right edge (visual QA S1-6).
+SHEETS["wall_jump"]["frame_shift"] = {4: -4}
 # The stretch is 8 side-on frames, three pairs touching (auto-splitting can't tell).
 SHEETS["stretch"].update({"n": 8, "target": 54})
 SHEETS["sit_idle_look"]["target"] = 47
@@ -762,6 +856,8 @@ SHEETS["climb"] = {"cell": 4.9, "rotate": -1, "shift": 6}
 
 # The drawn cursor arrow comes out of cling_cursor (the real cursor is there); grip points saved.
 SHEETS["cling_cursor"]["cursor_clean"] = True
+# And out of bite_cursor (he bites the real cursor): the mouth point per frame saved.
+SHEETS["bite_cursor"]["cursor_clean"] = "bite"
 # Arms crossed, standing: as tall as idle0.
 SHEETS["annoyed"] = {"n": None, "ref": 0, "target": 55, "tolerance": 0}
 # Chaos mode 2 (the hook act, the fake-virus giggle, the swarm).
@@ -773,12 +869,64 @@ for _name in ["hook_cast", "hook_reel"]:
 # The fishing line hangs far below him: cut it at his feet (it goes on over the edge).
 SHEETS["fish"]["trim_line"] = 0  # down to his feet: frames stay on one baseline
 
+# The living idle (round 4): 12-frame base loops, the tail always moving.
+SHEETS["idle_tail"] = {"n": 12, "ref": 0, "target": 55, "tolerance": 0}
+SHEETS["idle_tail_sit"] = {"n": 12, "ref": 0, "target": 47, "tolerance": 0}
+# Their bodies are redrawn (jitter) every frame: a stable body, only the tail moving.
+SHEETS["idle_tail"]["tail_composite"] = {"base": 0, "rects": [[0, 0, 29, 90], [29, 70, 35, 90]]}
+SHEETS["idle_tail_sit"]["tail_composite"] = {"base": 0, "rects": [[0, 0, 30, 90], [30, 72, 33, 90]], "drop": [8, 9]}
+# And the tail on the original idle / sit drawings (the bodies the blinks, breaths and
+# ear flicks are drawn on), so the base loop is his own body with a tail that never
+# stops: idle_tail (idle0), idle_tail_in (idle1, breathing in), idle_tail_ear (idle2),
+# idle_tail_blink_a/b/c (idle4-6); idle_tail_sit (sit0), idle_tail_sit_blink (sit1).
+_IDLE_R = [[0, 0, 28, 90], [28, 70, 34, 90]]
+_SIT_R = [[0, 64, 26, 90], [26, 69, 30, 90], [30, 74, 33, 90]]
+SHEETS["idle_tail"]["tail_sets"] = {
+    "idle_tail_in": {"body": "idle-1", "rects": _IDLE_R},
+    "idle_tail_ear": {"body": "idle-2", "rects": _IDLE_R},
+    "idle_tail_blink_a": {"body": "idle-4", "rects": _IDLE_R},
+    "idle_tail_blink_b": {"body": "idle-5", "rects": _IDLE_R},
+    "idle_tail_blink_c": {"body": "idle-6", "rects": _IDLE_R},
+}
+SHEETS["idle_tail"]["tail_composite"] = {"body": "idle-0", "rects": _IDLE_R}
+SHEETS["idle_tail_sit"]["tail_sets"] = {"idle_tail_sit_blink": {"body": "sit-1", "rects": _SIT_R, "drop": [8, 9]}}
+SHEETS["idle_tail_sit"]["tail_composite"] = {"body": "sit-0", "rects": _SIT_R, "drop": [8, 9]}
+#: Derived sheets (written by tail_sets above): packed, never sliced from a source.
+DERIVED = ["idle_tail_in", "idle_tail_ear", "idle_tail_blink_a", "idle_tail_blink_b", "idle_tail_blink_c", "idle_tail_sit_blink"]
+for _name in DERIVED:
+    SHEETS[_name] = {"derived": True}
+# Fun fidgets for the feature agents (round 4), wired under their file names.
+for _name in ["dance_beat", "celebrate_focus", "hold_sign", "sweat_fan", "worried_battery", "glasses_type",
+              "knock_screen", "hide_peek", "watch_tv", "fetch_ball"]:
+    SHEETS[_name] = {"cell": 3.8, "n": None}
+SHEETS["fetch_ball"]["side"] = True
+# Standing front views: frame 0 as tall as idle0; sitting ones as tall as sit.
+for _name in ["dance_beat", "celebrate_focus", "sweat_fan", "worried_battery"]:
+    SHEETS[_name] = {"n": None, "ref": 0, "target": 55, "tolerance": 0}
+SHEETS["knock_screen"] = {"n": 6, "ref": 0, "target": 64, "tolerance": 0}  # right up against the glass: a bit bigger
+SHEETS["watch_tv"] = {"n": None, "ref": 0, "target": 47, "tolerance": 0}
+SHEETS["hide_peek"]["cell"] = 6.2  # drawn big: head as big as idle0
+SHEETS["glasses_type"]["cell"] = 4.9  # sitting: eye height like sit0
+SHEETS["hold_sign"]["cell"] = 4.6  # the sign makes him look tall: sized by the head
+SHEETS["chubby_idle"] = {"n": None, "ref": 0, "target": 55, "tolerance": 0}
+SHEETS["streamer"] = {"n": 8, "ref": 0, "target": 55, "tolerance": 0}
+# Interaction sheets (round 4b): standing, frame 0 as tall as idle0.
+for _name, _n in {"look_dirs": 8, "petted": 8, "high_five": 6, "happy_spin": 6, "jump_scare": 6}.items():
+    SHEETS[_name] = {"n": _n, "ref": 0, "target": 55, "tolerance": 0}
+# Gaze directions and the spin turn his head / body round: never mirrored as a whole.
+SHEETS["look_dirs"]["keep_facing"] = True
+SHEETS["happy_spin"].update({"keep_facing": True, "anchor": "head"})
+# A hat catalogue (one hat per frame; the hats sit on top, so not measured by height).
+SHEETS["hats"] = {"n": 8, "cell": 4.7}
+
 
 def main():
     only = sys.argv[1:]
     report = {}
     for name, cfg in SHEETS.items():
         if only and name not in only:
+            continue
+        if cfg.get("derived"):
             continue
         if not (GEN / f"{name}.png").exists():
             print("missing", name)

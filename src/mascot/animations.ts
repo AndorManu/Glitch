@@ -7,7 +7,8 @@
 // sx/sy scale around the feet (or `pivot`). glitch 0..1 drives render.ts.
 
 import type { GridPropName } from "./props";
-import { bridge, clip, edges, familyOf, glanceFrames, has, pickVariant, toFront, toSide } from "./transitions";
+import { bridge, clip, edges, familyOf, framesOf, glanceFrames, has, pickVariant, toFront, toSide } from "./transitions";
+import { IDLE_TAIL_SYNC, SIT_TAIL_SYNC } from "../sprites/anim";
 
 /** Animations that are a way of moving along: walking hands over to these without stopping first. */
 const GAITS = ["walk", "run", "climb", "carryCursor", "dragWindow", "pushWindow", "cling"];
@@ -83,12 +84,15 @@ export const MAX_FPS = 20;
 export const MIN_KEY_MS = Math.ceil(1000 / MAX_FPS);
 /**
  * Average repaints (and timer wakeups) per second allowed while resting.
- * Raised from 1.5 to 2.5 for the drawn idle life (blinks every 2.5-6 s, ear
- * twitches, one or two drawn fidgets per loop: sneeze, scratch, groom,
- * sitting down and standing up again...): still a tiny cost, one 160x160
- * canvas drawImage per repaint.
+ * Raised from 1.5 to 2.5 for the drawn idle life (blinks, ear twitches,
+ * fidgets), then to 10 for the living idle: his tail never stops (the
+ * idle_tail loops at ~8.7 fps, TAIL_MS). Still tiny: each repaint is one
+ * drawImage of a cached sheet cell into a 160x160 canvas (no decoding, no
+ * layout).
  */
-export const IDLE_BUDGET = 2.5;
+export const IDLE_BUDGET = 10;
+/** One tail frame of the living idle (~8.7 fps). */
+export const TAIL_MS = 115;
 /** Walk keys: 12 fps drawn frames (the window itself moves at 30 Hz, see creature.ts). */
 const WALK_MS = 83;
 /** Run keys: ~14 fps. */
@@ -157,8 +161,65 @@ function walkCycle(rand: () => number, _lean = 0, extra?: Extra): Keyframe[] {
 
 // ------------------------------------------------------------------- moods
 
+/**
+ * The tail never stops: `ms` worth of keys of the tail loop drawn on `body`
+ * (idle_tail = idle0's body, idle_tail_in = breathing in, idle_tail_blink_b =
+ * eyes shut...), carrying on from where the tail was (mem.tailPhase).
+ */
+function tail(mem: Memory, body: string, ms: number, o: Omit<Keyframe, "frame" | "ms"> = {}): Keyframe[] {
+  const n = framesOf(body).length;
+  const keys: Keyframe[] = [];
+  let t = 0;
+  while (t < ms - 1) {
+    const d = Math.min(TAIL_MS, ms - t);
+    const phase = ((mem.tailPhase as number) ?? 0) % n;
+    keys.push(k(`${body}${phase}`, d, o));
+    mem.tailPhase = phase + 1;
+    t += d;
+  }
+  return keys;
+}
+
+/**
+ * Run the tail on until it is at `sync` (the loop frame whose tail matches the
+ * plain idle0 / sit0 drawing): the drawn fidgets start and end on those, so
+ * leaving the loop there (and coming back in there) the tail never jumps.
+ */
+function tailTo(mem: Memory, body: string, sync: number): Keyframe[] {
+  const n = framesOf(body).length;
+  const keys: Keyframe[] = [];
+  while (n && (((mem.tailPhase as number) ?? 0) % n) !== sync % n) keys.push(...tail(mem, body, TAIL_MS));
+  return keys;
+}
+
+/** The living sit: the tail curling around his feet, tapping, blinks every 2-6 s, a look around. */
+function sitTailLoop(rand: () => number, mem: Memory): Keyframe[] {
+  const keys: Keyframe[] = [];
+  // Sat down on sit0's drawing: the tail carries on from there.
+  if (!String(mem.lastTail ?? "").startsWith("idle_tail_sit")) mem.tailPhase = SIT_TAIL_SYNC;
+  const until = 5000 + rand() * 4000;
+  let t = 0;
+  let nextBlink = 1200 + rand() * 3000;
+  while (t < until) {
+    const step = tail(mem, "idle_tail_sit", TAIL_MS);
+    if (t >= nextBlink && has("idle_tail_sit_blink")) {
+      step.push(...tail(mem, "idle_tail_sit_blink", 180));
+      nextBlink = t + 2000 + rand() * 4000;
+    }
+    keys.push(...step);
+    t += sum(step);
+  }
+  if (has("sit_idle_look") && rand() < 0.4) {
+    keys.push(...tailTo(mem, "idle_tail_sit", SIT_TAIL_SYNC), ...clip("sit_idle_look", 160, { ease: 2, hold: 600 }));
+    mem.tailPhase = SIT_TAIL_SYNC;
+  } else keys.push(...tailTo(mem, "idle_tail_sit", SIT_TAIL_SYNC)); // ready for the stand-up (drawn from sit0)
+  mem.lastTail = "idle_tail_sit";
+  return keys;
+}
+
 /** A calm sit in the sit family (sit0-7, sit_idle_look when drawn): blinks, looks around. */
-function sitLoop(rand: () => number = Math.random): Keyframe[] {
+function sitLoop(rand: () => number = Math.random, mem: Memory = {}): Keyframe[] {
+  if (has("idle_tail_sit")) return sitTailLoop(rand, mem);
   const keys = [k("sit0", 1800 + rand() * 1200), k("sit1", 160), k("sit0", 1200)];
   if (has("sit_idle_look")) keys.push(...clip("sit_idle_look", 160, { ease: 2, hold: 600 }));
   else keys.push(k("sit3", 1500), k("sit4", 800), k("sit5", 1200));
@@ -175,6 +236,8 @@ const sheetFidget = (name: string, ms: number, o: { ease?: number; hold?: number
 export interface Fidget {
   id: string;
   weight: number;
+  /** A small one: played every 4-8 s in the living idle (MICROS there), never as its big fidget. */
+  micro?: boolean;
   /** Idle loops (8-25 s each) before it may come again. */
   cooldown: number;
   make: (rand: () => number, mem: Memory) => Keyframe[] | null;
@@ -190,12 +253,12 @@ function sitBreak(rand: () => number, mem: Memory): Keyframe[] | null {
   const u = pickVariant(up, rand, last["sit>front"]);
   last["front>sit"] = d.id;
   last["sit>front"] = u.id;
-  return [...d.keys(rand, mem), ...sitLoop(rand), ...u.keys(rand, mem), k("idle0", 200)];
+  return [...d.keys(rand, mem), ...sitLoop(rand, mem), ...(rand() < 0.5 ? sitLoop(rand, mem) : []), ...u.keys(rand, mem), k("idle0", 200)];
 }
 
 export const FIDGETS: Fidget[] = [
-  { id: "tail", weight: 2, cooldown: 1, make: (r) => [k("idle1", 1800 + r() * 1500)] },
-  { id: "eye", weight: 1, cooldown: 1, make: () => [k("idle0", 60, { glitch: 0.2, fx: "eye" }), k("idle0", 120, { fx: "eye" }), k("idle0", 60, { glitch: 0.35, fx: "eye" })] },
+  { id: "tail", weight: 2, cooldown: 1, micro: true, make: (r) => [k("idle1", 1800 + r() * 1500)] },
+  { id: "eye", weight: 1, cooldown: 1, micro: true, make: () => [k("idle0", 60, { glitch: 0.2, fx: "eye" }), k("idle0", 120, { fx: "eye" }), k("idle0", 60, { glitch: 0.35, fx: "eye" })] },
   {
     id: "sneeze",
     weight: 1.5,
@@ -219,11 +282,14 @@ export const FIDGETS: Fidget[] = [
   { id: "shake_off", weight: 1, cooldown: 3, make: () => (has("shake_off") ? sheetFidget("shake_off", 80) : null) },
   { id: "hop", weight: 1.5, cooldown: 2, make: (r) => (has("hop_idle") ? sheetFidget("hop_idle", 85, { ease: 1 }) : hop("idle0", 6 + r() * 4)) },
   { id: "look_back", weight: 2, cooldown: 2, make: () => (has("look_back") ? sheetFidget("look_back", 120, { hold: 700 }) : null) },
+  { id: "knock_screen", weight: 0.5, cooldown: 6, make: () => (has("knock_screen") ? [...clip("knock_screen", 110, { ease: 1, hold: 400 }), k("idle0", 200)] : null) },
+  { id: "happy_spin", weight: 0.5, cooldown: 5, make: () => (has("happy_spin") ? sheetFidget("happy_spin", 90, { ease: 1 }) : null) },
   { id: "tail_chase", weight: 0.3, cooldown: 8, make: () => (has("tail_chase") ? [...clip("tail_chase", 85, { ease: 1 }), ...clip("tail_chase", 85, { ease: 0 }), k("idle0", 200)] : null) },
   {
     id: "glance",
     weight: 2,
     cooldown: 1,
+    micro: true,
     // Turns his head to the side (the first half of the turn), looks, turns back.
     make: (r, mem) => {
       if (!has("turn_front_to_side")) return [k("idle1", 1400 + r() * 900)];
@@ -237,11 +303,11 @@ export const FIDGETS: Fidget[] = [
  * One idle fidget, weighted, never the same one twice in a row, each with a
  * cooldown in idle loops (per animator, in `mem`).
  */
-function fidget(rand: () => number, mem: Memory = {}): Keyframe[] {
+function fidget(rand: () => number, mem: Memory = {}, big = false): Keyframe[] {
   const loop = ((mem.idleLoop as number) ?? 0) + 1;
   mem.idleLoop = loop;
   const used = ((mem.fidgetUsed as Record<string, number>) ??= {});
-  const ok = FIDGETS.filter((f) => f.id !== mem.lastFidget && loop - (used[f.id] ?? -99) > f.cooldown);
+  const ok = FIDGETS.filter((f) => f.id !== mem.lastFidget && loop - (used[f.id] ?? -99) > f.cooldown && !(big && f.micro));
   let total = ok.reduce((t, f) => t + f.weight, 0);
   while (ok.length) {
     let r = rand() * total;
@@ -258,12 +324,104 @@ function fidget(rand: () => number, mem: Memory = {}): Keyframe[] {
   return [k("idle1", 1800)];
 }
 
+/** Small things he does every 4-8 s in the living idle (never the same twice running). */
+const MICROS: { id: string; weight: number; make: (rand: () => number, mem: Memory) => Keyframe[] }[] = [
+  // Ear flick: flick, back, flick (idle2's ear, the tail going on).
+  { id: "ear", weight: 3, make: (_r, mem) => [...tail(mem, "idle_tail_ear", 120), ...tail(mem, "idle_tail", 90), ...tail(mem, "idle_tail_ear", 110)] },
+  // A look somewhere (up, up-left, up-right, to the sides), then back to you.
+  {
+    id: "look",
+    weight: 2,
+    make: (r) => {
+      if (!has("look_dirs")) return [];
+      const dir = [0, 1, 2, 6, 7][Math.floor(r() * 5)];
+      return [k(`look_dirs${dir}`, 700 + r() * 600), k("idle0", 120)];
+    },
+  },
+  // The glitch eye flickers.
+  { id: "eye", weight: 1.5, make: (_r, mem) => tail(mem, "idle_tail", 3 * TAIL_MS).map((key, i) => ({ ...key, glitch: [0.2, 0, 0.35][i] ?? 0, fx: "eye" as const })) },
+  // A deeper breath in, held.
+  { id: "breath", weight: 1.5, make: (r, mem) => tail(mem, "idle_tail_in", 1100 + r() * 700) },
+  // Head turned to the side for a moment (the first half of the turn).
+  {
+    id: "glance",
+    weight: 1.5,
+    make: (r, mem) => {
+      if (!has("turn_front_to_side")) return [];
+      const half = glanceFrames(mem).slice(0, 3);
+      return [...half, k(half[half.length - 1].frame, 700 + r() * 600), ...[...half].reverse()];
+    },
+  },
+];
+
+function micro(rand: () => number, mem: Memory): Keyframe[] {
+  const ok = MICROS.filter((m) => m.id !== mem.lastMicro);
+  let r = rand() * ok.reduce((t, m) => t + m.weight, 0);
+  const m = ok.find((x) => (r -= x.weight) <= 0) ?? ok[ok.length - 1];
+  mem.lastMicro = m.id;
+  return m.make(rand, mem);
+}
+
 /**
- * Idle: mostly the still front pose (held with one long timer), a breath
- * every 4.5-7 s, sometimes a fidget, then a glitch burst. One loop lasts
- * 8-25 s, so bursts come at random intervals.
+ * The living idle: the tail always swaying (idle_tail, drawn on idle0's own
+ * body), breathing (idle_tail_in), a blink every 2-6 s, a micro-fidget every
+ * 4-8 s (ear flick, a look, eye flicker, deep breath, glance), and each loop
+ * of 15-40 s ends in a bigger fidget (sneeze, scratch, sit a while, stretch,
+ * hop...), never the same twice running, sometimes with a glitch burst.
+ */
+function livingIdleKeys(rand: () => number, mem: Memory): Keyframe[] {
+  const keys: Keyframe[] = [];
+  // Coming back from a drawn fidget (ends on idle0) or another animation: the tail carries on from idle0's.
+  if (mem.lastTail !== "idle_tail") mem.tailPhase = IDLE_TAIL_SYNC;
+  mem.lastTail = "idle_tail";
+  const until = 15000 + rand() * 25000;
+  let t = 0;
+  let nextBlink = 1500 + rand() * 3500;
+  let nextMicro = 4000 + rand() * 4000;
+  // Breathing: out (rest) 2.2-3.4 s, in 1.1-1.5 s.
+  let breathIn = false;
+  let breathEnd = 2200 + rand() * 1200;
+  while (t < until) {
+    let step: Keyframe[];
+    if (t >= nextBlink) {
+      // Blink: half, shut, half (idle4-6's eyelids), sometimes twice.
+      step = [...tail(mem, "idle_tail_blink_a", 60), ...tail(mem, "idle_tail_blink_b", 90), ...tail(mem, "idle_tail_blink_c", 60)];
+      if (rand() < 0.15) step.push(...tail(mem, "idle_tail", 140), ...tail(mem, "idle_tail_blink_a", 60), ...tail(mem, "idle_tail_blink_b", 80), ...tail(mem, "idle_tail_blink_c", 60));
+      nextBlink = t + sum(step) + 2000 + rand() * 4000;
+    } else if (t >= nextMicro) {
+      step = micro(rand, mem);
+      if (step.length && !step[0].frame.startsWith("idle_tail")) {
+        // A look / glance drawn on its own frames: leave the tail loop where its tail matches idle0's, come back there.
+        step = [...tailTo(mem, "idle_tail", IDLE_TAIL_SYNC), ...step];
+        mem.tailPhase = IDLE_TAIL_SYNC;
+      }
+      nextMicro = t + sum(step) + 4000 + rand() * 4000;
+      nextBlink = Math.max(nextBlink, t + sum(step) + 600);
+    } else {
+      if (t >= breathEnd) {
+        breathIn = !breathIn;
+        breathEnd = t + (breathIn ? 1100 + rand() * 400 : 2200 + rand() * 1200);
+      }
+      step = tail(mem, breathIn ? "idle_tail_in" : "idle_tail", TAIL_MS);
+    }
+    if (!step.length) step = tail(mem, "idle_tail", TAIL_MS);
+    keys.push(...step);
+    t += sum(step);
+  }
+  keys.push(...tailTo(mem, "idle_tail", IDLE_TAIL_SYNC), ...fidget(rand, mem, true));
+  if (rand() < 0.7) keys.push(...burst(rand, { frame: keys[keys.length - 1].frame }));
+  // The next loop picks the tail up from idle0's (where the fidget ended).
+  mem.lastTail = null;
+  return keys;
+}
+
+/**
+ * Idle: the living idle when its sheets are there; else the still front pose
+ * (held with one long timer), a breath every 4.5-7 s, sometimes a fidget,
+ * then a glitch burst. One loop lasts 8-25 s, so bursts come at random intervals.
  */
 function idleKeys(rand: () => number, mem: Memory = {}): Keyframe[] {
+  if (has("idle_tail") && has("idle_tail_in") && has("idle_tail_blink_b") && has("idle_tail_ear")) return livingIdleKeys(rand, mem);
   // One loop: 7-16 s of breathing with blinks every 2.5-6 s and ear twitches,
   // one or two fidgets (weighted, cooldowns, never the same twice running),
   // and now and then a glitch burst. Varied enough that no two minutes look alike.
@@ -475,14 +633,23 @@ function dangleKeys(rand: () => number): Keyframe[] {
   return cycle("dangle", [0, 1, 2, 3, 4, 5, 6, 7], 120);
 }
 
-function glitchOutKeys(): Keyframe[] {
+/**
+ * The teleport frames are front-facing: rotated onto a wall or the ceiling they would lie sideways
+ * and then cut to the side-on cling pose. `mem.onWall` (set by the creature) swaps them for the
+ * climbing pose, so a glitch-out or -in there stays in one family.
+ */
+function teleFrame(mem: Memory, i: number): string {
+  return mem.onWall ? "climb0" : `teleport${Math.min(7, i)}`;
+}
+
+function glitchOutKeys(_rand?: () => number, mem: Memory = {}): Keyframe[] {
   // Teleport out: the drawn teleport frames, glitch ramping up, then dissolve into a line.
   const keys: Keyframe[] = [];
   const n = 12;
   for (let i = 0; i < n; i++) {
     const t = i / (n - 1);
     keys.push(
-      k(`teleport${Math.min(7, Math.floor(i * 0.75))}`, MIN_KEY_MS, {
+      k(teleFrame(mem, Math.floor(i * 0.75)), MIN_KEY_MS, {
         glitch: 0.3 + 0.7 * t,
         dissolve: Math.max(0, (t - 0.3) / 0.7),
         sx: 1 + 0.35 * t * t,
@@ -495,10 +662,11 @@ function glitchOutKeys(): Keyframe[] {
   return keys;
 }
 
-function glitchInKeys(): Keyframe[] {
+function glitchInKeys(rand?: () => number, mem: Memory = {}): Keyframe[] {
   // The same, backwards, then a little landing squash.
-  const keys = glitchOutKeys().reverse();
-  return [...keys, k("idle0", 80, { sx: 1.06, sy: 0.94, glitch: 0.15 }), k("idle0", 100, { fx: "eye" })];
+  const keys = glitchOutKeys(rand, mem).reverse();
+  const rest = mem.onWall ? "climb0" : "idle0";
+  return [...keys, k(rest, 80, { sx: 1.06, sy: 0.94, glitch: 0.15 }), k(rest, 100, { fx: "eye" })];
 }
 
 function chaosSpinKeys(rand: () => number): Keyframe[] {
@@ -882,9 +1050,38 @@ export type AnimationName =
   | "grumpy"
   | "sulk"
   | "calmDown"
+  | "biteCursor"
+  | "smugBite"
   | "point"
   | "typing"
-  | "sit";
+  | "sit"
+  // Round 4: every new sheet under its file name (the feature agents play these).
+  | "idle_tail"
+  | "idle_tail_sit"
+  | "dance_beat"
+  | "hold_sign"
+  | "sweat_fan"
+  | "glasses_type"
+  | "watch_tv"
+  | "fetch_ball"
+  | "chubby_idle"
+  | "hats"
+  | "petted"
+  | "celebrate_focus"
+  | "worried_battery"
+  | "knock_screen"
+  | "hide_peek"
+  | "streamer"
+  | "look_dirs"
+  | "high_five"
+  | "happy_spin"
+  | "jump_scare"
+  // Context reactions (src/mascot/context.ts REACT_FALLBACKS).
+  | "stretch"
+  | "hide"
+  | "guard"
+  | "suggest"
+  | "yawn_stay";
 
 export const ANIMATIONS: Record<AnimationName, Animation> = {
   // moods
@@ -953,6 +1150,25 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
     // Back turned; now and then a look back over his shoulder (the turn's 3/4 frame).
     keys: (r) => (has("turn_to_back") ? [k("turn_to_back5", 1400 + r() * 900), k("turn_to_back4", 140), k("turn_to_back3", 700), k("turn_to_back4", 140)] : [k("idle0", 1500)]),
   },
+  // Biting the real cursor (creature.ts biteCursor; timings match BITE_*):
+  // lunge 240, mouth open 150, chomp 200, shake 3 x (95 + 95), let go 400.
+  biteCursor: {
+    keys: [
+      k("bite_cursor0", 240),
+      k("bite_cursor1", 150),
+      k("bite_cursor2", 200, { fx: "eye" }),
+      k("bite_cursor3", 95),
+      k("bite_cursor4", 95),
+      k("bite_cursor3", 95),
+      k("bite_cursor4", 95),
+      k("bite_cursor3", 95),
+      k("bite_cursor4", 95),
+      k("bite_cursor5", 400),
+    ],
+    bridge: false,
+  },
+  // After the bite: pleased with himself (the smug let-go frame), then a glance away.
+  smugBite: { keys: [k("bite_cursor5", 700), k("idle0", 200)], once: true },
   calmDown: {
     keys: () => [...(has("turn_to_back") ? clip("turn_to_back", 100, { ease: 1, reverse: true }) : []), ...(has("hop_idle") ? clip("hop_idle", 85, { ease: 1 }) : []), k("idle0", 200)],
     once: true,
@@ -961,6 +1177,59 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   point: { keys: () => [...cycle("point", [0, 1, 2], 90), k("point3", 140), k("point4", 500, { fx: "sparkle" }), k("point5", 300), k("point6", 200), k("point7", 250)], once: true },
   typing: { keys: () => cycle("typing", [0, 1, 2, 3, 4, 5, 6, 7], 220) },
   sit: { keys: fidgetSit },
+  // Round 4 sheets, each under its file name.
+  // The living idle's base loops on their own: the tail swaying on idle0 / sit0.
+  idle_tail: { keys: (_r, mem) => tail(mem, "idle_tail", 12 * TAIL_MS) },
+  idle_tail_sit: { keys: (_r, mem) => tail(mem, "idle_tail_sit", 10 * TAIL_MS) },
+  // Bobbing to the music (another agent plays it while music is on; set animator.rate to match the beat).
+  dance_beat: { keys: () => clip("dance_beat", 120, { ease: 0 }) },
+  // A focus session done: a happy little celebration.
+  celebrate_focus: { keys: () => [...clip("celebrate_focus", 100, { ease: 1, hold: 500 }), k("idle0", 200)], once: true },
+  // Holding up a blank sign (the text is drawn on it by whoever plays this): a gentle sway while it's up.
+  hold_sign: { keys: () => [...clip("hold_sign", 140, { ease: 0 })] },
+  // Hot (CPU / weather): fanning himself.
+  sweat_fan: { keys: () => clip("sweat_fan", 110, { ease: 0 }) },
+  // Low battery: worried, holding the battery.
+  worried_battery: { keys: () => [...clip("worried_battery", 130, { ease: 1, hold: 700 }), k("idle0", 200)], once: true },
+  // Sitting at a tiny laptop with nerdy glasses, typing.
+  glasses_type: { keys: () => clip("glasses_type", 120, { ease: 0 }) },
+  // Knocking on the inside of the screen, right up against the glass.
+  knock_screen: { keys: () => [...clip("knock_screen", 110, { ease: 1, hold: 400 }), k("idle0", 200)], once: true },
+  // Peeking out from behind an edge (play it with him at a window / screen edge).
+  hide_peek: { keys: () => [...clip("hide_peek", 140, { ease: 1, hold: 600 }), k("idle0", 200)], once: true },
+  // Watching something above-left of him (a video), sitting with his back half turned.
+  watch_tv: { keys: (r) => clip("watch_tv", 220 + r() * 80, { ease: 0 }) },
+  // Chasing the little glitch ball (side-on; the mover runs him along).
+  fetch_ball: { keys: () => clip("fetch_ball", 85, { ease: 0 }) },
+  // Full belly: patting it, content.
+  chubby_idle: { keys: () => clip("chubby_idle", 160, { ease: 0 }) },
+  // Stream reactions with a headset: waves at chat, hype, claps, thumbs up.
+  streamer: { keys: () => [...clip("streamer", 130, { ease: 1, hold: 500 }), k("idle0", 200)], once: true },
+  // The hat catalogue, one hat at a time (a preview; the hats themselves are overlays, see ANIM_HEADS).
+  hats: { keys: () => clip("hats", 1500, { ease: 0 }) },
+  // Being petted: bliss, hearts, tail wag (loops while the hand keeps going).
+  petted: { keys: () => clip("petted", 140, { ease: 0 }) },
+  // Looking around in all eight directions (the gaze frames creature.ts holds to follow the cursor).
+  look_dirs: { keys: () => [...clip("look_dirs", 300, { ease: 0 }), k("idle0", 200)], once: true },
+  // A high five.
+  high_five: { keys: () => [...clip("high_five", 100, { ease: 1, hold: 400 }), k("idle0", 200)], once: true },
+  // A happy spin (one frame is from behind, mid-spin).
+  happy_spin: { keys: () => [...clip("happy_spin", 90, { ease: 1 }), k("idle0", 200)], once: true },
+  // Startled jump (a sudden click, woken with a jolt): starts at once.
+  jump_scare: { keys: () => [...clip("jump_scare", 90, { ease: 0, hold: 300 }), k("idle0", 200)], once: true, bridge: false },
+  // Context reactions (src/mascot/context.ts asks for these names).
+  // Good morning: the side-on stretch (turns side-on, stretches, turns back).
+  stretch: { keys: (r, mem) => FIDGETS.find((f) => f.id === "stretch")!.make(r, mem) ?? [...WAKE.slice(-4)], once: true },
+  // Fullscreen / a game: sitting quietly, looking off to the side now and then.
+  hide: {
+    keys: (r, mem) => [...sitLoop(r, mem), ...(has("sit_idle_look") ? clip("sit_idle_look", 220, { ease: 2, hold: 1400 }) : [])],
+  },
+  // Focus mode: a calm sentinel, sitting with the tail curled round his feet.
+  guard: { keys: (r, mem) => (has("idle_tail_sit") ? tail(mem, "idle_tail_sit", 10 * TAIL_MS) : sitLoop(r, mem)) },
+  // A suggestion: "there, try that".
+  suggest: { keys: () => [...cycle("point", [0, 1, 2], 90), k("point3", 140), k("point4", 600, { fx: "sparkle" }), k("point5", 300), k("point6", 200), k("point7", 250)], once: true },
+  // Late at night: a big yawn, but he stays up (yawn goes on to sleep).
+  yawn_stay: { keys: [k("wake7", 250), k("wake6", 250), k("wake4", 1000), k("wake3", 350), k("wake6", 250), k("wake7", 300), k("idle0", 200)], once: true },
   // actions
   startled: { keys: startledKeys, once: true },
   laugh: { keys: laughKeys, once: true },
@@ -985,7 +1254,7 @@ export const ANIMATIONS: Record<AnimationName, Animation> = {
   },
   glitchOut: { keys: glitchOutKeys, once: true, next: "gone" },
   // Invisible for a moment (the window can move now), then glitch back in.
-  gone: { keys: [k("idle0", 900, { dissolve: 1 })], once: true, next: "glitchIn" },
+  gone: { keys: (_r, mem) => [k(mem.onWall ? "climb0" : "idle0", 900, { dissolve: 1 })], once: true, next: "glitchIn" },
   glitchIn: { keys: glitchInKeys, once: true },
   chaosSpin: { keys: chaosSpinKeys, once: true },
   // Dozing off sitting up (the end of the drawn sit-down: eyes closing), sat into and stood out of through the clips.

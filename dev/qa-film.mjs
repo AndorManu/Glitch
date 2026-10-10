@@ -191,7 +191,7 @@ async function open(query = "") {
   await page.clock.pauseAt(now + 200);
   await page.clock.runFor(800);
   await page.evaluate(PAGE_QA);
-  await page.mouse.move(5, 5);
+  await page.mouse.move(640, 400); // parked mid-screen: a corner would hover him when he climbs there, and a hovered pet never acts
   return page;
 }
 
@@ -371,7 +371,7 @@ const scenarios = {
       await S.step(50);
     }
     await page.mouse.up();
-    await page.mouse.move(5, 5);
+    await page.mouse.move(640, 400); // parked mid-screen: a corner would hover him when he climbs there, and a hovered pet never acts
     await S.step(4000);
     await S.flush();
     await page.close();
@@ -392,7 +392,7 @@ const scenarios = {
       await page.clock.runFor(16);
     }
     await page.mouse.up();
-    await page.mouse.move(5, 5);
+    await page.mouse.move(640, 400); // parked mid-screen: a corner would hover him when he climbs there, and a hovered pet never acts
     await S.step(7000);
     await S.flush();
     await page.close();
@@ -426,7 +426,7 @@ const scenarios = {
     await S.step(7000);
     await page.mouse.move(...Object.values(await grab(page))); // hover wakes
     await S.step(3000);
-    await page.mouse.move(5, 5);
+    await page.mouse.move(640, 400); // parked mid-screen: a corner would hover him when he climbs there, and a hovered pet never acts
     await S.step(2000);
     await S.flush();
     await page.close();
